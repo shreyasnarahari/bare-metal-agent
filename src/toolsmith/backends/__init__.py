@@ -6,6 +6,7 @@ from .llama_cpp import (
     LlamaCppResponseError,
     LlamaCppTimeoutError,
 )
+from .llama_cpp_server import LlamaCppServer, LlamaCppServerError
 
 __all__ = [
     "CompletionTruncatedError",
@@ -13,5 +14,7 @@ __all__ = [
     "LlamaCppConnectionError",
     "LlamaCppError",
     "LlamaCppResponseError",
+    "LlamaCppServer",
+    "LlamaCppServerError",
     "LlamaCppTimeoutError",
 ]

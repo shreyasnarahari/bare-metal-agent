@@ -78,6 +78,7 @@ class LlamaCppClient:
         max_tokens: int = 128,
         temperature: float = 0.6,
         grammar: str | None = None,
+        seed: int | None = None,
     ) -> dict[str, Any]:
         if max_tokens < 1:
             raise ValueError("max_tokens must be positive")
@@ -92,6 +93,8 @@ class LlamaCppClient:
         }
         if grammar is not None:
             payload["grammar"] = grammar
+        if seed is not None:
+            payload["seed"] = seed
 
         response = self._request("POST", "/completion", json=payload)
         if response.get("stopped_limit") is True or response.get("stop_type") == "limit":

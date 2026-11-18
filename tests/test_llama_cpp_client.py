@@ -66,6 +66,15 @@ def test_complete_includes_grammar_only_when_provided():
     assert payloads[1]["grammar"] == 'root ::= "Blue"'
 
 
+def test_complete_includes_seed_when_provided():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["seed"] == 7
+        return httpx.Response(200, json={"content": "Blue"})
+
+    with make_client(handler) as client:
+        client.complete("prompt", seed=7)
+
+
 def test_http_error_preserves_status_and_response_body():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, json={"error": "model is loading"})
