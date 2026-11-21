@@ -83,6 +83,15 @@ def test_streaming_matches_non_streaming_for_all_chunkings(fixture):
             assert json.loads(raw_arguments) == json.loads(call.arguments)
 
 
+def test_content_deltas_match_the_stripped_message():
+    text = "  A final answer.  "
+    response, events = parse_chunks(text, ["  A fi", "nal answer.  "], False)
+    content = "".join(event.text for event in events if isinstance(event, ContentDelta))
+
+    assert content == response.content == "A final answer."
+    assert Qwen3ToolCallParser(ids()).parse(" \n\t").content is None
+
+
 def test_every_single_split_preserves_a_tool_call():
     text = '<tool_call>{"name":"weather","arguments":{"city":"Paris"}}</tool_call>'
     expected = Qwen3ToolCallParser(ids()).parse(text)

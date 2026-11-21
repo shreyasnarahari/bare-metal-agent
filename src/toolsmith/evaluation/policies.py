@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from ..grammar import ToolChoice
-from ..registry import Tool
+from ..registry import Tool, ensure_unique_tool_names
 from ..repair import RepairPolicy
 from ..validation import ToolCallValidator
 from .models import CaseResult, Mode
@@ -37,9 +37,48 @@ def service_options(mode: Mode, *, defer_bfcl_schema: bool = False) -> dict[str,
     }
 
 
-def repair_eligible(result: CaseResult) -> bool:
-    if result.status in {"success", "repaired", "constraint_unsupported"}:
+def exception_error_code(exc: BaseException) -> str:
+    code = getattr(exc, "code", None)
+    if isinstance(code, str) and code:
+        return code
+    body = getattr(exc, "body", None)
+    if isinstance(body, Mapping):
+        nested = body.get("error")
+        if isinstance(nested, Mapping) and isinstance(nested.get("code"), str) and nested["code"]:
+            return nested["code"]
+        if isinstance(body.get("code"), str) and body["code"]:
+            return body["code"]
+    return "backend_error"
+
+
+def calls_match_schema(
+    definitions: Sequence[Mapping[str, Any]],
+    calls: Sequence[Mapping[str, Any]],
+    *,
+    allow_empty: bool = False,
+) -> bool:
+    if not calls:
+        return allow_empty
+    try:
+        tools = [Tool.from_openai(definition) for definition in definitions]
+        ensure_unique_tool_names(tools)
+    except (TypeError, ValueError):
         return False
+    validators = {
+        tool.name: Draft202012Validator(tool.parameters) for tool in tools
+    }
+    for call in calls:
+        validator = validators.get(call.get("name"))
+        if validator is None or not validator.is_valid(call.get("arguments")):
+            return False
+    return True
+
+
+def repair_eligible(result: CaseResult) -> bool:
+    if result.status in {"repaired", "constraint_unsupported"}:
+        return False
+    if result.status == "success":
+        return result.semantic_valid is False
     code = (result.error or {}).get("code")
     return code not in {
         "backend_error",
@@ -52,11 +91,18 @@ def repair_eligible(result: CaseResult) -> bool:
 
 
 def reuse_grammar_result(result: CaseResult) -> bool:
-    return result.status == "success" and result.parse_valid and result.schema_valid
+    return (
+        result.status == "success"
+        and result.parse_valid
+        and result.schema_valid
+        and result.semantic_valid is True
+    )
 
 
 __all__ = [
     "DeferredSchemaValidator",
+    "calls_match_schema",
+    "exception_error_code",
     "repair_eligible",
     "reuse_grammar_result",
     "service_options",

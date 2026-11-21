@@ -11,6 +11,7 @@ from toolsmith.grammar import (
     SchemaNotSupportedError,
     resolve_tool_choice,
 )
+from toolsmith.sampling.automaton import PushdownAutomaton
 from toolsmith.parsing import Qwen3ToolCallParser
 from toolsmith.registry import Tool, ToolRegistry
 from toolsmith.validation import ToolCallValidator
@@ -153,6 +154,54 @@ def test_numeric_rules_use_json_syntax():
     assert '"-"? ([0] | [1-9] [0-9]*)' in integer.text
     assert '("." [0-9]+)?' in number.text
     assert '([eE] [+-]? [0-9]+)?' in number.text
+
+
+def _accepted(grammar, text):
+    automaton = PushdownAutomaton.from_compiled(grammar)
+    state = automaton.advance_bytes(automaton.initial_state(), text.encode())
+    return state is not None and automaton.can_finish(state)
+
+
+def test_plain_text_requires_a_visible_character():
+    grammar = GBNFCompiler().compile_tools([weather_tool()], "none")
+
+    assert _accepted(grammar, "No tool needed")
+    assert _accepted(grammar, "  hello")
+    assert _accepted(grammar, "hello  ")
+    assert not _accepted(grammar, "")
+    assert not _accepted(grammar, " \n\t")
+    assert not _accepted(grammar, "<tool_call>")
+
+
+def test_empty_enum_is_rejected():
+    with pytest.raises(SchemaNotSupportedError, match="at least one") as caught:
+        GBNFCompiler().compile_schema({"type": "string", "enum": []})
+
+    assert caught.value.keyword == "enum"
+    assert caught.value.pointer == "/enum"
+
+
+def test_nullable_schema_accepts_value_or_null():
+    schema = {
+        "type": "object",
+        "properties": {
+            "city": {"type": "string"},
+            "unit": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "required": ["city"],
+        "additionalProperties": False,
+    }
+    grammar = GBNFCompiler().compile_schema(schema)
+
+    assert _accepted(grammar, '{"city":"Paris","unit":null}')
+    assert _accepted(grammar, '{"city":"Paris","unit":"c"}')
+    assert _accepted(grammar, '{"city":"Paris"}')
+    assert not _accepted(grammar, '{"city":"Paris","unit":1}')
+
+
+def test_duplicate_tool_names_fail_before_compilation():
+    with pytest.raises(GrammarConfigurationError, match="Duplicate tool name"):
+        GBNFCompiler().compile_tools([weather_tool(), weather_tool()], "auto")
 
 
 def test_no_tool_text_modes_do_not_need_a_grammar():

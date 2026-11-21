@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from .protocols import ToolProtocol
-from .registry import Tool
+from .registry import Tool, ensure_unique_tool_names
 from .sampling.ir import (
     EMPTY,
     CharRange,
@@ -40,6 +40,7 @@ _COMMON_KEYWORDS = {
 }
 _OBJECT_KEYWORDS = _COMMON_KEYWORDS | {"additionalProperties", "properties", "required"}
 _ARRAY_KEYWORDS = _COMMON_KEYWORDS | {"items"}
+_NULLABLE_KEYWORDS = _COMMON_KEYWORDS | {"anyOf"}
 _PROTOCOL_MARKERS = ("<tool_call>", "</tool_call>", "<think>", "</think>")
 _WS = RuleRef("json-ws")
 
@@ -256,6 +257,35 @@ def _pointer_token(value: str) -> str:
     return value.replace("~", "~0").replace("/", "~1")
 
 
+def nullable_value_schema(
+    schema: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], int] | None:
+    """Return the non-null branch of a value-or-null schema, plus its anyOf index."""
+    options = schema.get("anyOf")
+    if not isinstance(options, list) or len(options) != 2:
+        return None
+    null_index = None
+    inner: Mapping[str, Any] | None = None
+    inner_index = None
+    for index, option in enumerate(options):
+        if (
+            isinstance(option, Mapping)
+            and option.get("type") == "null"
+            and set(option) <= _COMMON_KEYWORDS
+        ):
+            if null_index is not None:
+                return None
+            null_index = index
+        elif inner is None and isinstance(option, Mapping):
+            inner = option
+            inner_index = index
+        else:
+            return None
+    if null_index is None or inner is None or inner_index is None:
+        return None
+    return inner, inner_index
+
+
 def _json_literal(value: Any) -> Literal:
     encoded = json.dumps(
         value,
@@ -303,6 +333,10 @@ class GBNFCompiler:
         tool_choice: ToolChoiceValue = "auto",
     ) -> CompiledGrammar | None:
         tools = tuple(tools)
+        try:
+            ensure_unique_tool_names(tools)
+        except ValueError as exc:
+            raise GrammarConfigurationError(str(exc)) from exc
         if len(tools) > self.max_tools:
             raise GrammarConfigurationError(
                 f"The request exceeds the configured limit of {self.max_tools} tools"
@@ -437,6 +471,12 @@ class GBNFCompiler:
                 keyword="type",
             )
 
+    def _nullable_inner(
+        self,
+        schema: Mapping[str, Any],
+    ) -> tuple[Mapping[str, Any], int] | None:
+        return nullable_value_schema(schema)
+
     def _compile_node(
         self,
         builder: _RuleBuilder,
@@ -444,6 +484,9 @@ class GBNFCompiler:
         pointer: str,
         depth: int,
     ) -> str:
+        nullable = self._nullable_inner(schema)
+        if nullable is not None:
+            return self._compile_nullable(builder, schema, nullable, pointer, depth)
         self._validate_node(schema, pointer, depth)
         schema_type = schema.get("type")
         if "enum" in schema:
@@ -461,6 +504,12 @@ class GBNFCompiler:
         pointer: str,
     ) -> str:
         values = schema["enum"]
+        if isinstance(values, list) and not values:
+            raise SchemaNotSupportedError(
+                "enum must contain at least one value",
+                pointer=pointer + "/enum",
+                keyword="enum",
+            )
         schema_type = schema.get("type")
         alternatives = []
         for index, value in enumerate(values):
@@ -489,6 +538,36 @@ class GBNFCompiler:
         if len(alternatives) > 1:
             expression = Group(expression)
         return builder.add(builder.name("enum"), expression)
+
+    def _compile_nullable(
+        self,
+        builder: _RuleBuilder,
+        schema: Mapping[str, Any],
+        nullable: tuple[Mapping[str, Any], int],
+        pointer: str,
+        depth: int,
+    ) -> str:
+        if depth > self.max_depth:
+            raise SchemaNotSupportedError(
+                f"The schema exceeds the configured depth of {self.max_depth}",
+                pointer=pointer,
+            )
+        for keyword in schema:
+            if keyword not in _NULLABLE_KEYWORDS:
+                raise SchemaNotSupportedError(
+                    f"Unsupported JSON Schema keyword: {keyword!r}",
+                    pointer=pointer + "/" + _pointer_token(keyword),
+                    keyword=keyword,
+                )
+        inner, inner_index = nullable
+        inner_rule = self._compile_node(
+            builder,
+            inner,
+            f"{pointer}/anyOf/{inner_index}",
+            depth + 1,
+        )
+        expression = Group(choice(RuleRef(inner_rule), RuleRef(builder.primitive("null"))))
+        return builder.add(builder.name("nullable"), expression)
 
     def _compile_object(
         self,
@@ -987,12 +1066,39 @@ class GBNFCompiler:
             )
             return result
 
+        def opening() -> list[Expression]:
+            expected = {
+                marker[0]
+                for marker in _PROTOCOL_MARKERS
+                if marker
+            }
+            excluded = expected | {"<", " ", "\t", "\r", "\n"}
+            result: list[Expression] = []
+            for character in sorted(expected | {"<"}):
+                following = character
+                if following in _PROTOCOL_MARKERS:
+                    continue
+                result.append(
+                    sequence(
+                        Literal(character),
+                        RuleRef(state_names[target_for(following)]),
+                    )
+                )
+            result.append(
+                sequence(
+                    CharSet.from_characters("".join(sorted(excluded)), negated=True),
+                    RuleRef(state_names[target_for("\ue000")]),
+                )
+            )
+            return result
+
         for prefix in prefixes:
             builder.add(
                 state_names[prefix],
                 choice(EMPTY, *transitions(prefix)),
             )
-        builder.add("plain-text", choice(*transitions("")))
+        builder.add("plain-ws", Repeat(CharSet.from_characters(" \t\r\n")))
+        builder.add("plain-text", sequence(RuleRef("plain-ws"), choice(*opening())))
 
 
 __all__ = [
@@ -1002,5 +1108,6 @@ __all__ = [
     "SchemaNotSupportedError",
     "ToolChoice",
     "ToolChoiceValue",
+    "nullable_value_schema",
     "resolve_tool_choice",
 ]

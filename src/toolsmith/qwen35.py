@@ -5,6 +5,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .grammar import nullable_value_schema
 from .registry import Tool
 from .streaming import (
     ContentDelta,
@@ -16,6 +17,7 @@ from .streaming import (
     ToolCallEnd,
     ToolCallParseError,
     ToolCallStart,
+    _TrimmedText,
 )
 from .validation import strict_json_loads
 
@@ -47,6 +49,10 @@ def _strict_json(value: str) -> Any:
 
 def _same_json_value(left: Any, right: Any) -> bool:
     return type(left) is type(right) and left == right
+
+
+def _is_nullable(schema: Mapping[str, Any]) -> bool:
+    return nullable_value_schema(schema) is not None
 
 
 class _XMLCallParser:
@@ -205,8 +211,8 @@ class Qwen35IncrementalParser:
         self._failed = False
         self._finished = False
         self._response: ParsedResponse | None = None
-        self._content_parts: list[str] = []
-        self._reasoning_parts: list[str] = []
+        self._content = _TrimmedText()
+        self._reasoning = _TrimmedText()
         self._calls: list[dict[str, Any]] = []
         self._used_ids: set[str] = set()
         self._envelope: _XMLCallParser | None = None
@@ -268,8 +274,8 @@ class Qwen35IncrementalParser:
                     )
                 )
             self._response = ParsedResponse(
-                content="".join(self._content_parts).strip() or None,
-                reasoning_content="".join(self._reasoning_parts).strip() or None,
+                content=self._content.value(),
+                reasoning_content=self._reasoning.value(),
                 tool_calls=calls,
             )
         except (ToolCallParseError, ValueError) as exc:
@@ -454,6 +460,11 @@ class Qwen35IncrementalParser:
         schema = self._schema_for(function_name, name)
         if schema is None:
             return raw
+        if _is_nullable(schema):
+            try:
+                return _strict_json(raw)
+            except (ValueError, json.JSONDecodeError):
+                return raw
         enum = schema.get("enum")
         if isinstance(enum, list):
             for value in enum:
@@ -498,14 +509,14 @@ class Qwen35IncrementalParser:
         events.append(ToolCallArgumentsDelta(self._current_call["index"], "}"))
 
     def _emit_content(self, text: str, events: list[ParserEvent]) -> None:
-        if text:
-            self._content_parts.append(text)
-            events.append(ContentDelta(text))
+        delta = self._content.push(text)
+        if delta:
+            events.append(ContentDelta(delta))
 
     def _emit_reasoning(self, text: str, events: list[ParserEvent]) -> None:
-        if text:
-            self._reasoning_parts.append(text)
-            events.append(ReasoningDelta(text))
+        delta = self._reasoning.push(text)
+        if delta:
+            events.append(ReasoningDelta(delta))
 
 
 class Qwen35ToolCallParser:

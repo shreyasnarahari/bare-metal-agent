@@ -55,6 +55,72 @@ def test_delta_adapter_reconstructs_tool_calls_and_usage():
     assert chunks[-1]["choices"] == []
 
 
+def test_aggregate_chunks_accepts_null_tool_calls_from_sdk_dump():
+    chunks = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "", "tool_calls": None},
+                    "finish_reason": None,
+                }
+            ],
+            "usage": None,
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": None,
+                        "function": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": None,
+                                "function": {"name": None, "arguments": '{"city":"Paris"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        },
+    ]
+
+    aggregated = aggregate_chunks(chunks)
+
+    assert aggregated["message"]["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    assert aggregated["finish_reason"] == "tool_calls"
+    assert aggregated["usage"]["total_tokens"] == 3
+
+
 def test_usage_chunk_is_optional_and_sse_preserves_unicode():
     adapter = OpenAIStreamAdapter("test-model")
 

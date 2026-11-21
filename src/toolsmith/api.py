@@ -32,7 +32,7 @@ from .prompting import ChatPromptRenderer, normalize_history, with_response_sche
 from .protocols import ModelProfile, QWEN3_PROFILE, ToolProtocol
 from .qwen35 import Qwen35IncrementalParser, Qwen35ToolCallParser
 from .recording import JsonlRecorder
-from .registry import Tool
+from .registry import Tool, ensure_unique_tool_names
 from .repair import RepairPolicy, build_repair_messages
 from .validation import (
     StrictJSONError,
@@ -420,6 +420,7 @@ class ToolsmithService:
             )
         try:
             tools = tuple(Tool.from_openai(definition) for definition in request.tools)
+            ensure_unique_tool_names(tools)
         except (TypeError, ValueError) as exc:
             raise APIError(f"Invalid tool definition: {exc}") from exc
 
@@ -715,6 +716,10 @@ class ToolsmithService:
             role = message.get("role")
             if role not in {"system", "user", "assistant", "tool"}:
                 raise APIError(f"Message {index} has an unsupported role: {role!r}")
+            if role != "tool" and pending_tool_ids:
+                raise APIError(
+                    f"Message {index} arrived before every tool call had a result"
+                )
             content = message.get("content")
             if not isinstance(content, str) and not (
                 role == "assistant" and content is None
@@ -757,6 +762,8 @@ class ToolsmithService:
                         f"Tool message {index} needs an unanswered preceding tool_call_id"
                     )
                 pending_tool_ids.remove(call_id)
+        if pending_tool_ids:
+            raise APIError("Every tool call needs a tool result before the next response")
 
 
 def create_app(service: ToolsmithService, *, api_key: str | None = None) -> FastAPI:

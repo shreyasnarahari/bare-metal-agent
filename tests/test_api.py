@@ -134,6 +134,34 @@ def test_tool_call_and_tool_result_round_trip():
     assert len(client.calls) == 2
 
 
+def test_duplicate_tools_unanswered_calls_and_blank_text_fail():
+    duplicate, client, _ = make_service({"content": "unused"})
+    with pytest.raises(APIError, match="Duplicate tool name"):
+        duplicate.chat(request(tools=[WEATHER_TOOL, WEATHER_TOOL]))
+    assert client.calls == []
+
+    unanswered, _, _ = make_service({"content": "unused"})
+    with pytest.raises(APIError, match="tool call had a result"):
+        unanswered.chat(request(messages=[
+            {"role": "user", "content": "Weather?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }],
+            },
+            {"role": "user", "content": "And now?"},
+        ]))
+
+    blank, _, _ = make_service({"content": " \n\t"})
+    with pytest.raises(APIError) as caught:
+        blank.chat(request(tool_choice="none"))
+    assert caught.value.code == "empty_model_response"
+
+
 def test_recorder_saves_raw_and_openai_responses(tmp_path):
     path = tmp_path / "records" / "gate.jsonl"
     recorder = JsonlRecorder(path, secrets=["secret-key"])

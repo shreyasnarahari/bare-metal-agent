@@ -2,6 +2,7 @@ from typing import Literal
 
 import pytest
 
+from toolsmith.grammar import GBNFCompiler
 from toolsmith.registry import Tool, ToolRegistry
 
 
@@ -67,6 +68,18 @@ def test_duplicate_tool_names_are_rejected():
 def test_invalid_tool_definitions_are_rejected(name, parameters):
     with pytest.raises((TypeError, ValueError)):
         Tool(name, "description", parameters)
+
+
+def test_nullable_annotation_compiles():
+    def get_weather(city: str, unit: str | None = None) -> dict:
+        """Get the current weather."""
+        return {"city": city, "unit": unit}
+
+    tool = Tool.from_function(get_weather)
+
+    assert tool.parameters["properties"]["unit"]["anyOf"]
+    for protocol in ("qwen3", "qwen35"):
+        assert GBNFCompiler(protocol=protocol).compile_tools([tool], "required") is not None
 
 
 def test_function_parameters_need_type_annotations():

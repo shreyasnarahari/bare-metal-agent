@@ -5,6 +5,7 @@ from typing import Any
 
 from ..api import APIError
 from .models import Mode
+from .policies import exception_error_code
 
 
 @dataclass(frozen=True)
@@ -65,10 +66,7 @@ class JSONSchemaEngineCore:
                 str(exc),
             )
         except Exception as exc:
-            body = getattr(exc, "body", None)
-            code = getattr(exc, "code", None)
-            if code is None and isinstance(body, dict):
-                code = body.get("error", {}).get("code")
+            code = exception_error_code(exc)
             compile_failure = code in {
                 "unsupported_schema",
                 "incompatible_response_format",

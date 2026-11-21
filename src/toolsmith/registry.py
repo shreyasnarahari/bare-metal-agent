@@ -20,6 +20,14 @@ def _validate_name(name: str) -> None:
         raise ValueError(f"Invalid tool name: {name!r}")
 
 
+def ensure_unique_tool_names(tools: Iterable[Tool]) -> None:
+    seen: set[str] = set()
+    for tool in tools:
+        if tool.name in seen:
+            raise ValueError(f"Duplicate tool name: {tool.name!r}")
+        seen.add(tool.name)
+
+
 def _validate_parameters(parameters: Mapping[str, Any]) -> None:
     try:
         Draft202012Validator.check_schema(dict(parameters))

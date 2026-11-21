@@ -1,6 +1,6 @@
 import pytest
 
-from toolsmith.api import ChatCompletionRequest, ToolsmithService
+from toolsmith.api import APIError, ChatCompletionRequest, ToolsmithService
 from toolsmith.evaluation.bfcl_adapter import (
     constraint_support,
     decoded_calls,
@@ -106,6 +106,26 @@ class FakeOpenAI:
         self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
 
+def test_bfcl_runner_records_case_errors_without_aborting():
+    class Broken:
+        def create(self, **kwargs):
+            raise APIError("schema failed", code="schema_validation_failed")
+
+    client = type("Client", (), {"chat": type("Chat", (), {"completions": Broken()})()})()
+    runner = BFCLRunner(
+        client,
+        RunConfig("run", "bfcl", "Qwen/Qwen3-8B", Mode.GRAMMAR),
+        tools_converter=lambda functions: [WEATHER],
+    )
+    entry = {"id": "simple_python_1", "question": [[{"role": "user", "content": "Paris?"}]], "function": []}
+
+    result = runner.execute(entry)
+
+    assert result.status == "error"
+    assert result.error["code"] == "schema_validation_failed"
+    assert result.case_id == "simple_python_1"
+
+
 def test_bfcl_runner_writes_standard_result_metadata():
     runner = BFCLRunner(
         FakeOpenAI(),
@@ -160,5 +180,18 @@ def test_repair_reuse_never_retries_backend_or_truncation():
     assert not repair_eligible(CaseResult(**base, error={"code": "completion_truncated"}))
     assert repair_eligible(CaseResult(**base, error={"code": "invalid_tool_call"}))
     assert reuse_grammar_result(
-        CaseResult(**{**base, "status": "success"}, parse_valid=True, schema_valid=True)
+        CaseResult(
+            **{**base, "status": "success"},
+            parse_valid=True,
+            schema_valid=True,
+            semantic_valid=True,
+        )
     )
+    missed = CaseResult(
+        **{**base, "status": "success"},
+        parse_valid=True,
+        schema_valid=True,
+        semantic_valid=False,
+    )
+    assert not reuse_grammar_result(missed)
+    assert repair_eligible(missed)

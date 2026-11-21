@@ -79,6 +79,38 @@ ParserEvent: TypeAlias = (
 )
 
 
+class _TrimmedText:
+    """Keep streamed text identical to the stripped final message."""
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._held = ""
+        self._started = False
+
+    def push(self, text: str) -> str | None:
+        if not text:
+            return None
+        if not self._started:
+            text = text.lstrip()
+            if not text:
+                return None
+        body = text.rstrip()
+        held = text[len(body):]
+        delta = None
+        if body:
+            delta = self._held + body
+            self._held = ""
+            self._started = True
+            self._parts.append(delta)
+        if held:
+            self._held += held
+            self._started = True
+        return delta
+
+    def value(self) -> str | None:
+        return "".join(self._parts) or None
+
+
 @dataclass
 class _CallBuilder:
     index: int
@@ -288,8 +320,8 @@ class Qwen3IncrementalParser:
         self._failed = False
         self._finished = False
         self._response: ParsedResponse | None = None
-        self._content_parts: list[str] = []
-        self._reasoning_parts: list[str] = []
+        self._content = _TrimmedText()
+        self._reasoning = _TrimmedText()
         self._calls: list[_CallBuilder] = []
         self._used_ids: set[str] = set()
         self._envelope: _EnvelopeParser | None = None
@@ -338,8 +370,8 @@ class Qwen3IncrementalParser:
                 self._buffer = ""
             self._finished = True
             self._response = ParsedResponse(
-                content="".join(self._content_parts).strip() or None,
-                reasoning_content="".join(self._reasoning_parts).strip() or None,
+                content=self._content.value(),
+                reasoning_content=self._reasoning.value(),
                 tool_calls=[
                     ParsedToolCall(
                         id=call.id,
@@ -540,14 +572,14 @@ class Qwen3IncrementalParser:
         events.append(ToolCallArgumentsDelta(self._current_call.index, fragment))
 
     def _emit_content(self, text: str, events: list[ParserEvent]) -> None:
-        if text:
-            self._content_parts.append(text)
-            events.append(ContentDelta(text))
+        delta = self._content.push(text)
+        if delta:
+            events.append(ContentDelta(delta))
 
     def _emit_reasoning(self, text: str, events: list[ParserEvent]) -> None:
-        if text:
-            self._reasoning_parts.append(text)
-            events.append(ReasoningDelta(text))
+        delta = self._reasoning.push(text)
+        if delta:
+            events.append(ReasoningDelta(delta))
 
     @staticmethod
     def _safe_length(text: str, markers: tuple[str, ...]) -> int:

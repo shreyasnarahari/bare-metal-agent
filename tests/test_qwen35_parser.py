@@ -147,6 +147,55 @@ def test_string_null_and_invalid_typed_values_are_not_coerced():
     }
 
 
+def test_null_branch_with_extra_keywords_is_not_nullable():
+    tool = Tool(
+        "get_weather",
+        "Weather",
+        {
+            "type": "object",
+            "properties": {
+                "unit": {"anyOf": [{"type": "string"}, {"type": "null", "const": None}]},
+            },
+            "additionalProperties": False,
+        },
+    )
+    text = (
+        "<tool_call><function=get_weather>"
+        "<parameter=unit>null</parameter>"
+        "</function></tool_call>"
+    )
+
+    parsed = Qwen35ToolCallParser([tool], expect_thinking=False).parse(text)
+
+    assert json.loads(parsed.tool_calls[0].arguments) == {"unit": "null"}
+
+
+def test_nullable_parameter_decodes_json_null_and_string():
+    tool = Tool(
+        "get_weather",
+        "Weather",
+        {
+            "type": "object",
+            "properties": {
+                "city": {"type": "string"},
+                "unit": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            },
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+    )
+    text = (
+        "<tool_call><function=get_weather>"
+        "<parameter=city>Paris</parameter>"
+        "<parameter=unit>null</parameter>"
+        "</function></tool_call>"
+    )
+
+    parsed = Qwen35ToolCallParser([tool], expect_thinking=False).parse(text)
+
+    assert json.loads(parsed.tool_calls[0].arguments) == {"city": "Paris", "unit": None}
+
+
 @pytest.mark.parametrize(
     ("text", "code"),
     [

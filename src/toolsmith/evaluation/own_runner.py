@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ from typing import Any
 from .bfcl_adapter import decoded_calls
 from .metrics import calls_equal
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
-from .policies import repair_eligible, reuse_grammar_result
+from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
 from .runner import CheckpointRunner
 
 
@@ -35,9 +36,15 @@ class OwnRunner:
                     }
                 },
             ).model_dump()
+            message = response["choices"][0]["message"]
+            calls = decoded_calls(response)
         except Exception as exc:
             elapsed = time.perf_counter() - started
-            code = getattr(exc, "code", None) or "backend_error"
+            code = exception_error_code(exc)
+            if code == "backend_error" and isinstance(
+                exc, (json.JSONDecodeError, KeyError, TypeError, ValueError)
+            ):
+                code = "invalid_tool_call_json"
             return CaseResult(
                 case["case_id"],
                 case["category"],
@@ -48,8 +55,6 @@ class OwnRunner:
                 error={"code": code, "message": str(exc)},
             )
         elapsed = time.perf_counter() - started
-        message = response["choices"][0]["message"]
-        calls = decoded_calls(response)
         semantic = calls_equal(calls, case["expected_calls"], case["comparison"])
         if case["comparison"] == "none":
             semantic = semantic and bool((message.get("content") or "").strip())
@@ -74,7 +79,11 @@ class OwnRunner:
             content=message.get("content"),
             reasoning_content=message.get("reasoning_content"),
             parse_valid=True,
-            schema_valid=self.config.mode in {Mode.GRAMMAR, Mode.REPAIR},
+            schema_valid=calls_match_schema(
+                self.tools,
+                calls,
+                allow_empty=case["comparison"] == "none",
+            ),
             semantic_valid=semantic,
             repair_attempts=repairs,
             grammar_sha256=details.get("grammar_sha256"),

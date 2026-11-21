@@ -71,9 +71,9 @@ Important boundaries:
 
 ## Schema and protocol guarantees
 
-The compiler supports closed objects, required and optional properties, strings, integers, numbers, booleans, null, scalar enums, homogeneous arrays, and inline nesting. Objects must explicitly set `additionalProperties: false`. Required properties precede optional properties, and declaration order is preserved within each group. Whitespace is bounded.
+The compiler supports closed objects, required and optional properties, strings, integers, numbers, booleans, null, a single schema or null, scalar enums, homogeneous arrays, and inline nesting. Objects must explicitly set `additionalProperties: false`. Required properties precede optional properties, and declaration order is preserved within each group. Whitespace inside JSON is bounded. Plain text must contain a visible character, so a whitespace-only completion is not a successful constrained response.
 
-Unsupported keywords, unions, `$ref`, patterns, ranges, and other constraints fail with a schema JSON Pointer. The implementation does not silently discard them. Post-validation remains enabled even with a grammar.
+Unsupported keywords, unions other than one schema or null, `$ref`, patterns, ranges, and other constraints fail with a schema JSON Pointer. Empty enums are rejected. The implementation does not silently discard them. Post-validation remains enabled even with a grammar.
 
 Qwen3.5 uses raw parameter text rather than JSON strings for string values. Reserved tool markup cannot be represented inside these raw strings and is reported as a protocol limitation. Names and enum values that cannot be represented unambiguously are rejected.
 

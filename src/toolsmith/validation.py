@@ -8,7 +8,7 @@ from jsonschema import Draft202012Validator
 from .grammar import ToolChoice
 from .json_utils import StrictJSONError, strict_json_loads
 from .parsing import ParsedResponse
-from .registry import Tool
+from .registry import Tool, ensure_unique_tool_names
 
 
 class ToolCallValidationError(ValueError):
@@ -96,6 +96,7 @@ class ToolCallValidator:
     ) -> None:
         if max_errors < 1:
             raise ValueError("max_errors must be positive")
+        ensure_unique_tool_names(tools)
         self.choice = choice
         self.max_errors = max_errors
         self.validators = {

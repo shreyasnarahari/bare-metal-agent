@@ -128,15 +128,16 @@ def aggregate_chunks(chunks: Iterable[dict[str, Any]]) -> dict[str, Any]:
     for chunk in chunks:
         if chunk.get("usage") is not None:
             usage = chunk["usage"]
-        for choice in chunk.get("choices", []):
+        for choice in chunk.get("choices") or []:
             if choice.get("finish_reason") is not None:
                 finish_reason = choice["finish_reason"]
-            delta = choice.get("delta", {})
+            delta = choice.get("delta") or {}
             if delta.get("content"):
                 content_parts.append(delta["content"])
             if delta.get("reasoning_content"):
                 reasoning_parts.append(delta["reasoning_content"])
-            for call_delta in delta.get("tool_calls", []):
+            # SDK dumps keep explicit nulls, so .get(key, []) still returns None.
+            for call_delta in delta.get("tool_calls") or []:
                 index = call_delta["index"]
                 call = calls.setdefault(
                     index,
@@ -148,7 +149,7 @@ def aggregate_chunks(chunks: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 )
                 if call_delta.get("id") is not None:
                     call["id"] = call_delta["id"]
-                function = call_delta.get("function", {})
+                function = call_delta.get("function") or {}
                 if function.get("name") is not None:
                     call["function"]["name"] = function["name"]
                 if function.get("arguments"):

@@ -8,7 +8,7 @@ from typing import Any
 from ..protocols import ToolProtocol
 from .bfcl_adapter import constraint_support, decoded_calls, result_entry
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
-from .policies import repair_eligible, reuse_grammar_result
+from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
 from .runner import CheckpointRunner
 
 
@@ -43,19 +43,35 @@ class BFCLRunner:
             )
         thinking = self.config.mode is Mode.THINKING
         started = time.perf_counter()
-        response = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=entry["question"][0],
-            tools=tools,
-            tool_choice="auto",
-            temperature=self.config.temperature,
-            seed=self.config.seed,
-            max_tokens=self.config.max_tokens,
-            extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
-        ).model_dump()
-        elapsed = time.perf_counter() - started
-        serialized = result_entry(case_id, response, latency=elapsed)
-        calls = decoded_calls(response)
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=entry["question"][0],
+                tools=tools,
+                tool_choice="auto",
+                temperature=self.config.temperature,
+                seed=self.config.seed,
+                max_tokens=self.config.max_tokens,
+                extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
+            ).model_dump()
+            elapsed = time.perf_counter() - started
+            serialized = result_entry(case_id, response, latency=elapsed)
+            calls = decoded_calls(response)
+        except Exception as exc:
+            elapsed = time.perf_counter() - started
+            code = exception_error_code(exc)
+            return CaseResult(
+                case_id,
+                category,
+                self.config.model,
+                self.config.mode.value,
+                "error",
+                attempts=(
+                    AttemptRecord(0, None, elapsed, error={"code": code, "message": str(exc)}),
+                ),
+                error={"code": code, "message": str(exc)},
+                grammar_sha256=support.grammar_sha256 if support else None,
+            )
         details = response.get("toolsmith", {})
         repairs = details.get("repair_attempts", 0)
         return CaseResult(
@@ -69,7 +85,7 @@ class BFCLRunner:
             content=response["choices"][0]["message"].get("content"),
             reasoning_content=response["choices"][0]["message"].get("reasoning_content"),
             parse_valid=True,
-            schema_valid=constrained,
+            schema_valid=calls_match_schema(tools, calls, allow_empty=True),
             repair_attempts=repairs,
             grammar_sha256=support.grammar_sha256 if support else None,
             metadata={
