@@ -169,6 +169,56 @@ def test_health_does_not_retry_authentication_errors(tmp_path):
         server.stop()
 
 
+def test_health_fails_fast_when_the_binary_targets_another_gpu(tmp_path):
+    executable = tmp_path / "stuck-llama-server"
+    executable.write_text(
+        textwrap.dedent(
+            f"""\
+            #!{sys.executable}
+            import json
+            import sys
+            from http.server import BaseHTTPRequestHandler, HTTPServer
+
+            args = sys.argv[1:]
+            port = int(args[args.index('--port') + 1])
+
+            class Handler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = json.dumps({{'error': {{'message': 'Loading model'}}}}).encode()
+                    self.send_response(503)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, fmt, *args):
+                    return
+
+            HTTPServer(('127.0.0.1', port), Handler).serve_forever()
+            """
+        )
+    )
+    executable.chmod(0o755)
+    server = LlamaCppServer(
+        executable,
+        make_model(tmp_path),
+        "test-key",
+        tmp_path / "server.log",
+        port=unused_port(),
+    )
+
+    try:
+        server.start()
+        server.log_path.write_text(
+            "CUDA error: no kernel image is available for execution on the device\n"
+        )
+        with LlamaCppClient(server.base_url, "test-key", timeout=2.0) as client:
+            with pytest.raises(LlamaCppServerError, match="different GPU"):
+                server.wait_until_healthy(client, timeout=30.0, poll_interval=0.01)
+    finally:
+        server.stop()
+
+
 def test_server_rejects_a_port_that_is_already_in_use(tmp_path):
     executable = tmp_path / "fake-llama-server"
     write_fake_server(executable)

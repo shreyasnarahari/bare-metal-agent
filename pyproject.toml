@@ -21,8 +21,8 @@ dev = [
 ]
 colab = [
     "huggingface-hub>=1.32,<3",
-    "torch>=2.4,<3",
-    "transformers>=4.51,<5",
+    "torch>=2.6,<3",
+    "transformers>=5.23,<6",
     "uvicorn>=0.30,<1",
 ]
 

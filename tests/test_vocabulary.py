@@ -109,20 +109,30 @@ def test_unknown_special_empty_and_padded_ids_have_no_raw_bytes():
             vocabulary.raw_bytes(token_id)
 
 
-def test_fast_and_non_qwen_tokenizers_fail_loudly():
-    tokenizer = FakeQwenTokenizer()
-    tokenizer.is_fast = True
-    with pytest.raises(UnsupportedTokenizerError, match="slow"):
-        Vocabulary.from_qwen_tokenizer(tokenizer)
+def test_fast_qwen_tokenizer_recovers_bytes_without_slow_codec():
+    slow = FakeQwenTokenizer()
 
-    class MissingCodec:
-        is_fast = False
+    class FastQwenTokenizer:
+        is_fast = True
+        eos_token_id = slow.eos_token_id
+        added_tokens_decoder = slow.added_tokens_decoder
 
         def get_vocab(self):
-            return {"a": 0}
+            return slow.get_vocab()
 
-    with pytest.raises(UnsupportedTokenizerError, match="byte-level"):
-        Vocabulary.from_qwen_tokenizer(MissingCodec())
+    vocabulary = Vocabulary.from_qwen_tokenizer(FastQwenTokenizer(), model_vocabulary_size=100)
+
+    assert vocabulary.raw_bytes(0) == b"a"
+    assert vocabulary.raw_bytes(80) == b"<tool_call>"
+    assert vocabulary.raw_tokens[90] is None
+
+
+def test_tokenizer_without_a_vocabulary_fails():
+    class MissingVocabulary:
+        is_fast = True
+
+    with pytest.raises(UnsupportedTokenizerError, match="vocabulary"):
+        Vocabulary.from_qwen_tokenizer(MissingVocabulary())
 
 
 def test_unencodable_normal_token_is_not_silently_dropped():

@@ -12,6 +12,21 @@ class UnsupportedTokenizerError(ValueError):
     pass
 
 
+def qwen_byte_decoder() -> dict[str, int]:
+    """Inverse of the Qwen and GPT-2 byte-to-unicode map."""
+    values = list(range(ord("!"), ord("~") + 1))
+    values += list(range(ord("¡"), ord("¬") + 1))
+    values += list(range(ord("®"), ord("ÿ") + 1))
+    characters = values[:]
+    extra = 0
+    for byte in range(256):
+        if byte not in values:
+            values.append(byte)
+            characters.append(256 + extra)
+            extra += 1
+    return {chr(character): byte for byte, character in zip(values, characters)}
+
+
 @dataclass(frozen=True)
 class VocabularyEntry:
     token_id: int
@@ -151,18 +166,17 @@ class Vocabulary:
         eos_token_ids: frozenset[int] | set[int] | None = None,
     ) -> Vocabulary:
         started = time.perf_counter()
-        if getattr(tokenizer, "is_fast", False):
-            raise UnsupportedTokenizerError("Use the slow Qwen2Tokenizer for raw-byte extraction")
-        encoder = getattr(tokenizer, "encoder", None)
-        byte_decoder = getattr(tokenizer, "byte_decoder", None)
         get_vocab = getattr(tokenizer, "get_vocab", None)
-        if not isinstance(encoder, dict) or not isinstance(byte_decoder, dict) or get_vocab is None:
+        if get_vocab is None:
             raise UnsupportedTokenizerError(
-                "The tokenizer must expose Qwen2 byte-level-BPE encoder and byte_decoder"
+                "The tokenizer must expose a Qwen byte-level vocabulary"
             )
         vocabulary = get_vocab()
         if not isinstance(vocabulary, dict):
             raise UnsupportedTokenizerError("Tokenizer get_vocab() did not return a mapping")
+        byte_decoder = getattr(tokenizer, "byte_decoder", None)
+        if not isinstance(byte_decoder, dict):
+            byte_decoder = qwen_byte_decoder()
         added = getattr(tokenizer, "added_tokens_decoder", {}) or {}
         if eos_token_ids is None:
             eos = getattr(tokenizer, "eos_token_id", None)

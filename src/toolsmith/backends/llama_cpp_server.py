@@ -149,6 +149,9 @@ class LlamaCppServer:
                 if getattr(exc, "status_code", None) not in (None, 503):
                     raise
                 last_error = exc
+                fatal = self._fatal_cuda_log()
+                if fatal:
+                    raise LlamaCppServerError(fatal) from exc
 
             if time.monotonic() >= deadline:
                 raise LlamaCppTimeoutError(
@@ -156,6 +159,18 @@ class LlamaCppServer:
                     f"{self.log_tail()}"
                 ) from last_error
             time.sleep(poll_interval)
+
+    def _fatal_cuda_log(self) -> str | None:
+        if not self.log_path.exists():
+            return None
+        log = self.log_path.read_text(errors="replace")
+        if "no kernel image is available for execution on the device" not in log:
+            return None
+        return (
+            "llama-server was compiled for a different GPU and cannot execute "
+            "kernels on this device. Re-run the llama.cpp build cell so it "
+            f"compiles for this GPU. {self.log_tail()}"
+        )
 
     def log_tail(self, lines: int = 30) -> str:
         if self._log_file is not None:

@@ -108,16 +108,42 @@ def test_notebook_runtime_cache_restores_without_completion_marker(tmp_path, mon
     assert namespace["server_works"](local_build)
 
 
-def test_notebook_runtime_cache_restores_legacy_drive_build(tmp_path, monkeypatch):
+def test_notebook_runtime_cache_rejects_a_different_gpu(tmp_path, monkeypatch):
     builds = tmp_path / "builds"
     local_build = tmp_path / "local-build"
-    legacy_build = builds / "llama.cpp-b5401-cuda"
-    server_bin = legacy_build / "bin" / "llama-server"
-    write_executable(server_bin, "print('fake llama.cpp b5401')\n")
-    (legacy_build / "CMakeCache.txt").write_text("full cmake tree")
-    (legacy_build / "bin" / "libggml.so.0").write_bytes(b"library")
-    (legacy_build / "bin" / "libggml.so").symlink_to("libggml.so.0")
-    (legacy_build / "src").mkdir()
+    cached_build = builds / "llama.cpp-b5401-cuda-sm89-runtime-v2"
+    write_executable(cached_build / "bin" / "llama-server", "print('fake llama.cpp b5401')\n")
+    (cached_build / ".compute-cap").write_text("75\n")
+    monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
+
+    namespace = load_build_functions(
+        {
+            "os": os,
+            "shutil": shutil,
+            "subprocess": subprocess,
+            "Path": Path,
+            "LLAMA_CPP_REF": "b5401",
+            "GPU_COMPUTE_CAP": "89",
+            "LOCAL_BUILD": local_build,
+            "CACHED_BUILD": cached_build,
+            "SERVER_BIN": local_build / "bin" / "llama-server",
+        }
+    )
+
+    assert namespace["restore_cached_build"]() is False
+    assert not (local_build / "bin" / "llama-server").exists()
+
+    (cached_build / ".compute-cap").write_text("89\n")
+    assert namespace["restore_cached_build"]() is True
+    assert namespace["server_works"](local_build)
+
+
+def test_notebook_runtime_cache_ignores_binary_from_another_cache_directory(tmp_path, monkeypatch):
+    builds = tmp_path / "builds"
+    local_build = tmp_path / "local-build"
+    other_gpu = builds / "llama.cpp-b5401-cuda"
+    write_executable(other_gpu / "bin" / "llama-server", "print('fake llama.cpp b5401')\n")
+    (other_gpu / "CMakeCache.txt").write_text("full cmake tree")
     monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
 
     namespace = load_build_functions(
@@ -128,16 +154,13 @@ def test_notebook_runtime_cache_restores_legacy_drive_build(tmp_path, monkeypatc
             "Path": Path,
             "LLAMA_CPP_REF": "b5401",
             "LOCAL_BUILD": local_build,
-            "CACHED_BUILD": builds / "llama.cpp-b5401-cuda-runtime-v2",
+            "CACHED_BUILD": builds / "llama.cpp-b5401-cuda-sm89-runtime-v2",
             "SERVER_BIN": local_build / "bin" / "llama-server",
         }
     )
 
-    assert namespace["restore_cached_build"]()
-    assert namespace["server_works"](local_build)
-    assert (local_build / "bin" / "libggml.so").is_symlink()
-    assert not (local_build / "CMakeCache.txt").exists()
-    assert not (local_build / "src").exists()
+    assert namespace["restore_cached_build"]() is False
+    assert not (local_build / "bin" / "llama-server").exists()
 
 
 def test_notebook_has_no_destructive_sync_or_stale_error_outputs():
