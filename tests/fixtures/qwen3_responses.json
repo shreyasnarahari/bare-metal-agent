@@ -1,0 +1,50 @@
+[
+  {
+    "name": "plain_unicode_text",
+    "text": "plain café text",
+    "expect_thinking": null,
+    "content": "plain café text",
+    "reasoning_content": null,
+    "tool_names": []
+  },
+  {
+    "name": "explicit_thinking",
+    "text": "<think>reason</think>Answer",
+    "expect_thinking": true,
+    "content": "Answer",
+    "reasoning_content": "reason",
+    "tool_names": []
+  },
+  {
+    "name": "omitted_thinking_opening",
+    "text": "reason without opening</think>Answer",
+    "expect_thinking": null,
+    "content": "Answer",
+    "reasoning_content": "reason without opening",
+    "tool_names": []
+  },
+  {
+    "name": "nested_arguments_and_tag_in_string",
+    "text": "<tool_call>{\"name\":\"weather\",\"arguments\":{\"city\":\"Paris\",\"nested\":{\"items\":[1,true,null,\"</tool_call>\"]}}}</tool_call>",
+    "expect_thinking": false,
+    "content": null,
+    "reasoning_content": null,
+    "tool_names": ["weather"]
+  },
+  {
+    "name": "arguments_before_name",
+    "text": "<tool_call>{\"arguments\":{\"x\":\"tag <tool_call> text\",\"quote\":\"a\\\"b\"},\"name\":\"later\"}</tool_call>",
+    "expect_thinking": false,
+    "content": null,
+    "reasoning_content": null,
+    "tool_names": ["later"]
+  },
+  {
+    "name": "multiple_calls_and_prose",
+    "text": "<think></think>Before<tool_call>{\"name\":\"a\",\"arguments\":{}}</tool_call>Middle<tool_call>{\"name\":\"b\",\"arguments\":{\"x\":1}}</tool_call>After",
+    "expect_thinking": true,
+    "content": "BeforeMiddleAfter",
+    "reasoning_content": null,
+    "tool_names": ["a", "b"]
+  }
+]

@@ -1,0 +1,186 @@
+{
+  "version": "toolsmith-tools-v1",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "description": "Get current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": {"type": "string", "description": "City name"},
+            "unit": {"enum": ["c", "f"], "description": "Temperature unit"},
+            "note": {"type": "string", "description": "Optional weather note"}
+          },
+          "required": ["city"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_docs",
+        "description": "Search technical documentation.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {"type": "string"},
+            "limit": {"type": "integer"},
+            "tags": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["query"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "create_profile",
+        "description": "Create a user profile with nested location data.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "name": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}},
+            "location": {
+              "type": "object",
+              "properties": {
+                "lat": {"type": "number"},
+                "lon": {"type": "number"}
+              },
+              "required": ["lat", "lon"],
+              "additionalProperties": false
+            },
+            "active": {"type": "boolean"},
+            "count": {"type": "integer"},
+            "nothing": {"type": "null"}
+          },
+          "required": ["name", "location"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "schedule_meeting",
+        "description": "Schedule a meeting with attendees.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {"type": "string"},
+            "date": {"type": "string"},
+            "attendees": {"type": "array", "items": {"type": "string"}},
+            "reminder_minutes": {"type": "integer"}
+          },
+          "required": ["title", "date", "attendees"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "convert_temperature",
+        "description": "Convert a temperature between Celsius and Fahrenheit.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "value": {"type": "number"},
+            "from_unit": {"enum": ["c", "f"]},
+            "to_unit": {"enum": ["c", "f"]}
+          },
+          "required": ["value", "from_unit", "to_unit"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "send_message",
+        "description": "Send a text message with an optional priority.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "recipient": {"type": "string"},
+            "body": {"type": "string"},
+            "priority": {"enum": ["low", "normal", "high"]}
+          },
+          "required": ["recipient", "body"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "translate_text",
+        "description": "Translate text between supported languages.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {"type": "string"},
+            "source_language": {"enum": ["en", "fr", "de", "es"]},
+            "target_language": {"enum": ["en", "fr", "de", "es"]},
+            "formality": {"enum": ["formal", "casual"]}
+          },
+          "required": ["text", "source_language", "target_language"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "sum_numbers",
+        "description": "Sum an array of numbers.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "values": {"type": "array", "items": {"type": "number"}}
+          },
+          "required": ["values"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stock_quote",
+        "description": "Look up a stock symbol on an optional exchange.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "symbol": {"type": "string"},
+            "exchange": {"enum": ["NYSE", "NASDAQ", "LSE"]}
+          },
+          "required": ["symbol"],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_reminder",
+        "description": "Create or update a reminder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {"type": "string"},
+            "due_date": {"type": "string"},
+            "completed": {"type": "boolean"},
+            "tags": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["task", "due_date"],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "bfcl": {
+    "repository": "https://github.com/ShishirPatil/gorilla.git",
+    "commit": "6ea57973c7a6097fd7c5915698c54c17c5b1b6c8"
+  },
+  "jsonschemabench_core": {
+    "repository": "https://github.com/epfl-dlab/jsonschemabench.git",
+    "commit": "8003e8405c4d8d8b327b1eb472c9856297d75493"
+  },
+  "maskbench": {
+    "repository": "https://github.com/guidance-ai/jsonschemabench.git",
+    "commit": "9a94995b9279ae3af3aed4b2629172790b968d14"
+  },
+  "maskbench_tokenizer": "unsloth/Meta-Llama-3.1-8B-Instruct",
+  "peer_versions": {
+    "llama_cpp_python": "0.3.8",
+    "llguidance": "0.7.10",
+    "outlines_core": "0.2.3",
+    "xgrammar": "0.1.17",
+    "grid-guardrail": "0.2.5"
+  }
+}

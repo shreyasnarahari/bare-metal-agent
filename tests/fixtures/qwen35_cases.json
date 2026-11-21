@@ -1,0 +1,41 @@
+[
+  {
+    "name": "all-types",
+    "text": "<tool_call>\n<function=create_profile>\n<parameter=city>\nZürich &lt; raw\n</parameter>\n<parameter=unit>\nc\n</parameter>\n<parameter=count>\n-3\n</parameter>\n<parameter=ratio>\n1.25\n</parameter>\n<parameter=active>\ntrue\n</parameter>\n<parameter=nothing>\nnull\n</parameter>\n<parameter=tags>\n[\"math\",\"雪\"]\n</parameter>\n<parameter=location>\n{\"lat\":1.5,\"lon\":-2}\n</parameter>\n</function>\n</tool_call>",
+    "expect_thinking": false,
+    "expected": {
+      "name": "create_profile",
+      "arguments": {
+        "city": "Zürich &lt; raw",
+        "unit": "c",
+        "count": -3,
+        "ratio": 1.25,
+        "active": true,
+        "nothing": null,
+        "tags": ["math", "雪"],
+        "location": {"lat": 1.5, "lon": -2}
+      }
+    }
+  },
+  {
+    "name": "reasoning-direct-call",
+    "text": "I should use the profile tool.<tool_call>\n<function=ping>\n</function>\n</tool_call>",
+    "expect_thinking": true,
+    "expected": {
+      "name": "ping",
+      "arguments": {},
+      "reasoning": "I should use the profile tool."
+    }
+  },
+  {
+    "name": "closed-thinking-and-content",
+    "text": "<think>Check the request.</think>Before<tool_call>\n<function=create_profile>\n<parameter=city>\n  Paris  \n</parameter>\n</function>\n</tool_call>After",
+    "expect_thinking": true,
+    "expected": {
+      "name": "create_profile",
+      "arguments": {"city": "  Paris  "},
+      "reasoning": "Check the request.",
+      "content": "BeforeAfter"
+    }
+  }
+]

@@ -64,6 +64,19 @@ def write_fake_server(path):
                         return
                     length = int(self.headers.get('Content-Length', '0'))
                     payload = json.loads(self.rfile.read(length))
+                    if payload.get('stream'):
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/event-stream')
+                        self.end_headers()
+                        events = [
+                            {{'content': 'Echo: ', 'stop': False}},
+                            {{'content': payload['prompt'], 'stop': False}},
+                            {{'content': '', 'stop': True, 'truncated': False, 'timings': {{'predicted_n': 2}}}},
+                        ]
+                        for event in events:
+                            self.wfile.write(f"data: {{json.dumps(event)}}\\n\\n".encode())
+                            self.wfile.flush()
+                        return
                     self.reply(200, {{
                         'content': f"Echo: {{payload['prompt']}}",
                         'seed': payload.get('seed'),
@@ -109,6 +122,30 @@ def test_server_client_completion_and_shutdown_end_to_end(tmp_path):
     assert not server.is_running
     assert server.log_path.is_file()
     server.stop()
+
+
+def test_server_streaming_completion_end_to_end(tmp_path):
+    executable = tmp_path / "fake-llama-server"
+    write_fake_server(executable)
+    server = LlamaCppServer(
+        executable,
+        make_model(tmp_path),
+        "test-key",
+        tmp_path / "server.log",
+        port=unused_port(),
+    )
+
+    try:
+        server.start()
+        with LlamaCppClient(server.base_url, "test-key", timeout=2.0) as client:
+            server.wait_until_healthy(client, timeout=5.0, poll_interval=0.01)
+            events = list(client.stream_complete("Blue", seed=7))
+
+        assert "".join(event["content"] for event in events) == "Echo: Blue"
+        assert events[-1]["stop"] is True
+        assert events[-1]["timings"]["predicted_n"] == 2
+    finally:
+        server.stop()
 
 
 def test_health_does_not_retry_authentication_errors(tmp_path):

@@ -1,0 +1,19 @@
+{
+  "valid_utf8": [
+    {"name": "ascii", "text": "A"},
+    {"name": "two-byte", "text": "é"},
+    {"name": "three-byte", "text": "雪"},
+    {"name": "four-byte", "text": "😀"},
+    {"name": "maximum-codepoint", "text": "\udbff\udfff"}
+  ],
+  "invalid_utf8": [
+    {"name": "lone-continuation", "hex": "80"},
+    {"name": "overlong-two-byte", "hex": "c080"},
+    {"name": "overlong-three-byte", "hex": "e08080"},
+    {"name": "utf16-surrogate", "hex": "eda080"},
+    {"name": "overlong-four-byte", "hex": "f0808080"},
+    {"name": "above-unicode-maximum", "hex": "f4908080"},
+    {"name": "invalid-lead", "hex": "f5808080"},
+    {"name": "continuation-mismatch", "hex": "c328"}
+  ]
+}

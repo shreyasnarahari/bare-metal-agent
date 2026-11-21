@@ -1,0 +1,233 @@
+{
+  "supported": [
+    {
+      "name": "weather",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "city": {"type": "string"},
+          "unit": {"enum": ["c", "f"], "default": "c"},
+          "note": {"type": "string"}
+        },
+        "required": ["city"],
+        "additionalProperties": false
+      },
+      "valid": [
+        {"name": "required-only", "text": "{\"city\":\"Paris\"}"},
+        {"name": "optional-enum", "text": "{\"city\":\"Paris\",\"unit\":\"f\"}"},
+        {"name": "skip-first-optional", "text": "{\"city\":\"Paris\",\"note\":\"sunny\"}"},
+        {"name": "all-properties-unicode", "text": "{\"city\":\"Zürich\",\"unit\":\"c\",\"note\":\"café\"}"},
+        {"name": "escaped-string", "text": "{\"city\":\"A\\\"B\\\\C\\/D\",\"note\":\"line\\nnext\\u263a\"}", "differential": false},
+        {"name": "protocol-text-in-string", "text": "{\"city\":\"</tool_call><tool_call>\"}"},
+        {"name": "bounded-whitespace", "text": " { \"city\" : \"Paris\" }\n", "differential": false}
+      ],
+      "invalid": [
+        {"name": "missing-required", "text": "{\"unit\":\"c\"}"},
+        {"name": "additional-property", "text": "{\"city\":\"Paris\",\"extra\":true}"},
+        {"name": "duplicate-property", "text": "{\"city\":\"Paris\",\"city\":\"London\"}"},
+        {"name": "wrong-enum", "text": "{\"city\":\"Paris\",\"unit\":\"k\"}"},
+        {"name": "wrong-property-type", "text": "{\"city\":3}"},
+        {"name": "trailing-comma", "text": "{\"city\":\"Paris\",}"},
+        {"name": "unescaped-control", "text": "{\"city\":\"Par\nis\"}"},
+        {"name": "invalid-escape", "text": "{\"city\":\"Par\\xis\"}"},
+        {"name": "unbounded-whitespace", "text": "     {\"city\":\"Paris\"}", "differential": false}
+      ]
+    },
+    {
+      "name": "nested-arrays",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "tags": {"type": "array", "items": {"type": "string"}},
+          "location": {
+            "type": "object",
+            "properties": {
+              "lat": {"type": "number"},
+              "lon": {"type": "number"}
+            },
+            "required": ["lat", "lon"],
+            "additionalProperties": false
+          },
+          "active": {"type": "boolean"},
+          "count": {"type": "integer"},
+          "nothing": {"type": "null"}
+        },
+        "required": ["name", "location"],
+        "additionalProperties": false
+      },
+      "valid": [
+        {"name": "required-first", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1.5,\"lon\":-2}}"},
+        {"name": "all-supported-types", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1e2,\"lon\":-0.25},\"tags\":[],\"active\":false,\"count\":-3,\"nothing\":null}"},
+        {"name": "nested-array-values", "text": "{\"name\":\"sample\",\"location\":{\"lat\":0,\"lon\":0},\"tags\":[\"a\",\"</tool_call>\"]}"}
+      ],
+      "invalid": [
+        {"name": "missing-nested-required", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1.5}}"},
+        {"name": "wrong-array-item", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1,\"lon\":2},\"tags\":[\"a\",2]}"},
+        {"name": "integer-as-number", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1,\"lon\":2},\"count\":1.5}"},
+        {"name": "unknown-nested-property", "text": "{\"name\":\"sample\",\"location\":{\"lat\":1,\"lon\":2,\"altitude\":3}}"}
+      ]
+    },
+    {
+      "name": "integer",
+      "schema": {"type": "integer"},
+      "valid": [
+        {"name": "zero", "text": "0"},
+        {"name": "negative", "text": "-42"},
+        {"name": "positive", "text": "9000"}
+      ],
+      "invalid": [
+        {"name": "decimal", "text": "1.0"},
+        {"name": "leading-zero", "text": "01"},
+        {"name": "plus", "text": "+1"},
+        {"name": "boolean", "text": "true"},
+        {"name": "nan", "text": "NaN"}
+      ]
+    },
+    {
+      "name": "number",
+      "schema": {"type": "number"},
+      "valid": [
+        {"name": "integer", "text": "0"},
+        {"name": "decimal", "text": "-0.25"},
+        {"name": "exponent", "text": "1.2e-3"},
+        {"name": "positive-exponent", "text": "4E+2"}
+      ],
+      "invalid": [
+        {"name": "missing-fraction", "text": "1."},
+        {"name": "missing-exponent", "text": "1e"},
+        {"name": "infinity", "text": "Infinity"},
+        {"name": "leading-zero", "text": "00.1"}
+      ]
+    },
+    {
+      "name": "array",
+      "schema": {"type": "array", "items": {"type": "integer"}},
+      "valid": [
+        {"name": "empty", "text": "[]"},
+        {"name": "one", "text": "[1]"},
+        {"name": "many", "text": "[1,-2,3]"},
+        {"name": "whitespace", "text": "[ 1, -2, 3 ]"}
+      ],
+      "invalid": [
+        {"name": "trailing-comma", "text": "[1,]"},
+        {"name": "missing-comma", "text": "[1 2]"},
+        {"name": "wrong-item", "text": "[true]"},
+        {"name": "unterminated", "text": "[1,2"}
+      ]
+    },
+    {
+      "name": "scalar-enums",
+      "schema": {"enum": ["red", "blue", 2, 2.5, true, false, null]},
+      "valid": [
+        {"name": "string", "text": "\"red\""},
+        {"name": "integer", "text": "2"},
+        {"name": "number", "text": "2.5"},
+        {"name": "boolean", "text": "false"},
+        {"name": "null", "text": "null"}
+      ],
+      "invalid": [
+        {"name": "wrong-string", "text": "\"green\""},
+        {"name": "wrong-number", "text": "2.0"},
+        {"name": "wrong-null", "text": "\"null\""}
+      ]
+    },
+    {
+      "name": "boolean",
+      "schema": {"type": "boolean"},
+      "valid": [
+        {"name": "true", "text": "true"},
+        {"name": "false", "text": "false"}
+      ],
+      "invalid": [
+        {"name": "string", "text": "\"true\""},
+        {"name": "integer", "text": "1"}
+      ]
+    },
+    {
+      "name": "null",
+      "schema": {"type": "null"},
+      "valid": [
+        {"name": "null", "text": "null"}
+      ],
+      "invalid": [
+        {"name": "string", "text": "\"null\""},
+        {"name": "zero", "text": "0"}
+      ]
+    }
+  ],
+  "unsupported": [
+    {
+      "name": "implicit-additional-properties",
+      "schema": {"type": "object", "properties": {"x": {"type": "string"}}},
+      "keyword": "additionalProperties",
+      "pointer": "/additionalProperties"
+    },
+    {
+      "name": "open-additional-properties",
+      "schema": {"type": "object", "additionalProperties": true},
+      "keyword": "additionalProperties",
+      "pointer": "/additionalProperties"
+    },
+    {
+      "name": "pattern",
+      "schema": {"type": "string", "pattern": "^[a-z]+$"},
+      "keyword": "pattern",
+      "pointer": "/pattern"
+    },
+    {
+      "name": "minimum",
+      "schema": {"type": "integer", "minimum": 0},
+      "keyword": "minimum",
+      "pointer": "/minimum"
+    },
+    {
+      "name": "array-limit",
+      "schema": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+      "keyword": "minItems",
+      "pointer": "/minItems"
+    },
+    {
+      "name": "reference",
+      "schema": {"$ref": "#/$defs/value", "$defs": {"value": {"type": "string"}}},
+      "keyword": "$ref",
+      "pointer": "/$ref"
+    },
+    {
+      "name": "union",
+      "schema": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+      "keyword": "anyOf",
+      "pointer": "/anyOf"
+    },
+    {
+      "name": "type-union",
+      "schema": {"type": ["string", "null"]},
+      "keyword": "type",
+      "pointer": "/type"
+    },
+    {
+      "name": "untyped-array",
+      "schema": {"type": "array"},
+      "keyword": "items",
+      "pointer": "/items"
+    },
+    {
+      "name": "undeclared-required-property",
+      "schema": {"type": "object", "properties": {}, "required": ["x"], "additionalProperties": false},
+      "keyword": "required",
+      "pointer": "/required"
+    },
+    {
+      "name": "compound-enum",
+      "schema": {"enum": [{"x": 1}]},
+      "keyword": "enum",
+      "pointer": "/enum/0"
+    },
+    {
+      "name": "other-dialect",
+      "schema": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "string"},
+      "keyword": "$schema",
+      "pointer": "/$schema"
+    }
+  ]
+}
