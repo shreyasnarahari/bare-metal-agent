@@ -1,0 +1,212 @@
+{
+  "version": "steadyhand_store_v1",
+  "clock": "2026-11-08T10:00:00+05:30",
+  "counters": {
+    "note": 2,
+    "refund": 7002,
+    "ticket": 9003
+  },
+  "customers": [
+    {
+      "customer_id": "cus_101",
+      "name": "Asha Rao",
+      "email": "asha.rao@example.com",
+      "tier": "gold"
+    },
+    {
+      "customer_id": "cus_102",
+      "name": "Vikram Shah",
+      "email": "vikram.shah@example.com",
+      "tier": "standard"
+    },
+    {
+      "customer_id": "cus_103",
+      "name": "Meera Iyer",
+      "email": "meera.iyer@example.com",
+      "tier": "standard"
+    }
+  ],
+  "orders": [
+    {
+      "order_id": "ord_1001",
+      "customer_id": "cus_101",
+      "status": "delivered",
+      "placed_at": "2026-10-28T11:15:00+05:30",
+      "total_inr": "1499.00",
+      "items": [
+        {
+          "sku": "KTL-200",
+          "name": "Electric kettle",
+          "quantity": 1,
+          "unit_price_inr": "1499.00"
+        }
+      ],
+      "notes": [],
+      "cancelled_at": null
+    },
+    {
+      "order_id": "ord_1002",
+      "customer_id": "cus_101",
+      "status": "shipped",
+      "placed_at": "2026-11-05T09:40:00+05:30",
+      "total_inr": "898.00",
+      "items": [
+        {
+          "sku": "MUG-011",
+          "name": "Ceramic mug",
+          "quantity": 2,
+          "unit_price_inr": "449.00"
+        }
+      ],
+      "notes": [
+        {
+          "note_id": "note_1",
+          "text": "Customer asked for evening delivery.",
+          "created_at": "2026-11-05T09:45:00+05:30"
+        }
+      ],
+      "cancelled_at": null
+    },
+    {
+      "order_id": "ord_1003",
+      "customer_id": "cus_102",
+      "status": "placed",
+      "placed_at": "2026-11-07T18:05:00+05:30",
+      "total_inr": "2499.00",
+      "items": [
+        {
+          "sku": "HDP-310",
+          "name": "Wireless headphones",
+          "quantity": 1,
+          "unit_price_inr": "2499.00"
+        }
+      ],
+      "notes": [],
+      "cancelled_at": null
+    },
+    {
+      "order_id": "ord_1004",
+      "customer_id": "cus_102",
+      "status": "cancelled",
+      "placed_at": "2026-11-01T14:20:00+05:30",
+      "total_inr": "349.00",
+      "items": [
+        {
+          "sku": "CBL-002",
+          "name": "USB-C cable",
+          "quantity": 1,
+          "unit_price_inr": "349.00"
+        }
+      ],
+      "notes": [],
+      "cancelled_at": "2026-11-01T16:00:00+05:30"
+    },
+    {
+      "order_id": "ord_1005",
+      "customer_id": "cus_103",
+      "status": "delivered",
+      "placed_at": "2026-10-20T10:00:00+05:30",
+      "total_inr": "5999.00",
+      "items": [
+        {
+          "sku": "BLN-500",
+          "name": "Countertop blender",
+          "quantity": 1,
+          "unit_price_inr": "5999.00"
+        }
+      ],
+      "notes": [],
+      "cancelled_at": null
+    }
+  ],
+  "payments": [
+    {
+      "payment_id": "pay_5001",
+      "order_id": "ord_1001",
+      "method": "upi",
+      "status": "captured",
+      "amount_inr": "1499.00",
+      "created_at": "2026-10-28T11:16:00+05:30"
+    },
+    {
+      "payment_id": "pay_5002",
+      "order_id": "ord_1002",
+      "method": "card",
+      "status": "captured",
+      "amount_inr": "898.00",
+      "created_at": "2026-11-05T09:41:00+05:30"
+    },
+    {
+      "payment_id": "pay_5003",
+      "order_id": "ord_1003",
+      "method": "card",
+      "status": "authorized",
+      "amount_inr": "2499.00",
+      "created_at": "2026-11-07T18:06:00+05:30"
+    },
+    {
+      "payment_id": "pay_5004",
+      "order_id": "ord_1004",
+      "method": "upi",
+      "status": "voided",
+      "amount_inr": "349.00",
+      "created_at": "2026-11-01T14:21:00+05:30"
+    },
+    {
+      "payment_id": "pay_5005",
+      "order_id": "ord_1005",
+      "method": "card",
+      "status": "captured",
+      "amount_inr": "5999.00",
+      "created_at": "2026-10-20T10:01:00+05:30"
+    }
+  ],
+  "tickets": [
+    {
+      "ticket_id": "tkt_9001",
+      "customer_id": "cus_101",
+      "order_id": "ord_1001",
+      "subject": "Kettle arrived with a dented lid",
+      "status": "open",
+      "created_at": "2026-11-02T08:30:00+05:30",
+      "transitions": [
+        {
+          "status": "open",
+          "at": "2026-11-02T08:30:00+05:30"
+        }
+      ]
+    },
+    {
+      "ticket_id": "tkt_9002",
+      "customer_id": "cus_103",
+      "order_id": "ord_1005",
+      "subject": "Blender delivered without the jar lid",
+      "status": "resolved",
+      "created_at": "2026-10-24T12:00:00+05:30",
+      "transitions": [
+        {
+          "status": "open",
+          "at": "2026-10-24T12:00:00+05:30"
+        },
+        {
+          "status": "pending",
+          "at": "2026-10-25T09:00:00+05:30"
+        },
+        {
+          "status": "resolved",
+          "at": "2026-10-26T15:05:00+05:30"
+        }
+      ]
+    }
+  ],
+  "refunds": [
+    {
+      "refund_id": "ref_7001",
+      "order_id": "ord_1005",
+      "amount_inr": "500.00",
+      "reason": "Missing jar lid",
+      "status": "issued",
+      "created_at": "2026-10-26T15:00:00+05:30"
+    }
+  ]
+}
