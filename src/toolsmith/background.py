@@ -259,10 +259,15 @@ class BackgroundJobs:
     def status(self) -> dict[str, str]:
         return {name: job.state for name, job in self._snapshot()}
 
-    def drain(self, timeout: float) -> dict[str, str]:
-        """Wait up to ``timeout`` seconds for every job; returns the jobs that did not finish cleanly."""
+    def drain(self, timeout: float, *, match: Callable[[str], bool] | None = None) -> dict[str, str]:
+        """Wait up to ``timeout`` seconds for every job (or those ``match`` selects).
+
+        Returns the selected jobs that did not finish cleanly.
+        """
         deadline = time.monotonic() + timeout
-        for _, job in self._snapshot():
+        for name, job in self._snapshot():
+            if match is not None and not match(name):
+                continue
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -272,7 +277,10 @@ class BackgroundJobs:
                 break
             except BaseException:
                 continue
-        return {name: state for name, state in self.status().items() if state != "done"}
+        return {
+            name: state for name, state in self.status().items()
+            if state != "done" and (match is None or match(name))
+        }
 
     def cancel_all(self) -> list[str]:
         """Kill running jobs' processes and drop jobs that have not started; returns the names stopped.

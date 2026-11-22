@@ -346,3 +346,9 @@ def test_only_the_hardware_cell_defines_the_records_folder():
             if cell["cell_type"] == "code" and cell["id"] != "hardware":
                 assert "DRIVE_RECORDS =" not in "".join(cell["source"]), (path.name, cell["id"])
     assert "DRIVE_ROOT / 'records' / HARDWARE.records_slug" in notebook_source("hardware")
+
+
+def test_the_sweep_and_cleanup_flush_drive():
+    assert "sync_drive(BACKGROUND, stage='steadyhand-sweep')" in notebook_source("steadyhand-sweep")
+    assert "sync_drive(BACKGROUND, stage='cleanup', remount=False)" in notebook_source("cleanup")
+    assert "from toolsmith.drive import ensure_drive, sync_drive" in notebook_source("hardware")

@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
+from ..artifacts import MirroredFile
+from ..recording import trim_partial_line
 from .models import CaseResult, RunConfig
 
 # The default when a caller does not size the pool to its llama-server slots.
@@ -52,10 +54,27 @@ class CheckpointRunner:
     With ``manifest`` (the dict that was hashed), the first run also writes it
     beside the checkpoint, and a later mismatch names the fields that changed
     (for example ``runtime.parallel: recorded 4, current 8``).
+
+    ``path`` may be a :class:`~toolsmith.artifacts.MirroredFile`: the checkpoint
+    is then written on local disk, restored from its durable copy on a fresh
+    runtime, mirrored at most every ``every_seconds`` while cases finish, and
+    synced at the end of every run. A final line cut off mid-write is repaired
+    before anything is appended.
     """
 
-    def __init__(self, path: str | Path, manifest_sha256: str, *, manifest: Mapping[str, Any] | None = None) -> None:
-        self.path = Path(path)
+    def __init__(
+        self,
+        path: str | Path | MirroredFile,
+        manifest_sha256: str,
+        *,
+        manifest: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.store = path if isinstance(path, MirroredFile) else MirroredFile(path)
+        self.path = self.store.local
+        self._sidecar = self.store.sibling(".manifest.json")
+        self.store.restore()
+        self._sidecar.restore()
+        trim_partial_line(self.path)
         self.manifest_sha256 = manifest_sha256
         self.manifest = manifest
         self.completed: dict[str, CaseResult] = {}
@@ -82,8 +101,9 @@ class CheckpointRunner:
         if result.case_id in self.completed:
             raise ValueError(f"Case is already checkpointed: {result.case_id}")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.manifest is not None and not manifest_sidecar(self.path).exists():
-            atomic_write_json(manifest_sidecar(self.path), {**self.manifest, "manifest_sha256": self.manifest_sha256})
+        if self.manifest is not None and not self._sidecar.local.exists():
+            atomic_write_json(self._sidecar.local, {**self.manifest, "manifest_sha256": self.manifest_sha256})
+            self._sidecar.sync(force=True)
         envelope = {
             "manifest_sha256": self.manifest_sha256,
             "result": result.as_dict(),
@@ -93,6 +113,12 @@ class CheckpointRunner:
             output.flush()
             os.fsync(output.fileno())
         self.completed[result.case_id] = result
+        self.store.sync()
+
+    def sync(self) -> None:
+        """Copy the checkpoint and its manifest to durable storage now."""
+        self.store.sync(force=True)
+        self._sidecar.sync(force=True)
 
     def run(
         self,
@@ -110,8 +136,12 @@ class CheckpointRunner:
             ordered_ids.append(case_id)
             if case_id not in self.completed:
                 pending.append((case_id, case))
-        if pending:
-            self._execute_pending(pending, execute, workers)
+        try:
+            if pending:
+                self._execute_pending(pending, execute, workers)
+        finally:
+            if pending:
+                self.sync()
         return [self.completed[case_id] for case_id in ordered_ids]
 
     def _execute_pending(

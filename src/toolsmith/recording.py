@@ -76,3 +76,28 @@ class JsonlRecorder:
         with self.path.open("a", encoding="utf-8") as output:
             output.write(serialized + "\n")
         return snapshot
+
+
+def trim_partial_line(path: str | Path) -> bool:
+    """Repair a JSONL file whose last line was cut off (a crash or copy mid-write).
+
+    A complete record that only lacks its newline gets one; anything else after
+    the last newline is dropped, so the next append starts on a fresh line.
+    Returns whether the file changed.
+    """
+    path = Path(path)
+    if not path.is_file():
+        return False
+    data = path.read_bytes()
+    if not data or data.endswith(b"\n"):
+        return False
+    start = data.rfind(b"\n") + 1
+    try:
+        json.loads(data[start:])
+    except ValueError:
+        with path.open("r+b") as handle:
+            handle.truncate(start)
+        return True
+    with path.open("ab") as handle:
+        handle.write(b"\n")
+    return True

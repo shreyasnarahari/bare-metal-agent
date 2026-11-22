@@ -26,12 +26,14 @@ import os
 import queue
 import re
 import threading
+import time
 import uuid
+from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from toolsmith.artifacts import copy_file_atomic
+from toolsmith.artifacts import copy_file_atomic, copy_snapshot
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from toolsmith.recording import JsonlRecorder
 
@@ -497,33 +499,75 @@ class EpisodeJournal:
 
 
 class JournalCopier:
-    """Copies finished journals and their manifests off the worker, one at a time.
+    """Copies finished journals (and other files or calls) off the workers, one at a time.
 
-    A bounded queue (depth 2) means a slow Drive mount slows ``submit`` instead
-    of stalling every GPU worker, and a sweep can never fall far behind its
-    copies. ``close`` waits until every submitted episode is copied.
+    Workers never wait long on a slow or hung Drive mount: ``submit`` waits at
+    most ``submit_timeout`` seconds for room in the bounded queue, then parks
+    the item on an overflow list the copier drains as soon as it catches up.
+    A failed copy is retried with backoff before it lands in ``errors``.
+    ``close`` waits up to ``close_timeout`` seconds, then records what was left
+    (the journals stay on local disk and the next run copies them).
     """
 
-    def __init__(self, destination: str | Path, *, depth: int = 2) -> None:
+    def __init__(
+        self,
+        destination: str | Path,
+        *,
+        depth: int = 2,
+        submit_timeout: float = 5.0,
+        retries: int = 3,
+        retry_delay: float = 2.0,
+        close_timeout: float = 600.0,
+        sleep: Any = time.sleep,
+    ) -> None:
         if depth < 1:
             raise ValueError("depth must be positive")
         self.destination = Path(destination)
         self.copied: list[Path] = []
         self.errors: list[tuple[Path, str]] = []
-        self._queue: queue.Queue[Path | tuple[Path, Path] | None] = queue.Queue(maxsize=depth)
+        self.pending_at_close: list[str] = []
+        self.submit_timeout = submit_timeout
+        self.retries = retries
+        self.retry_delay = retry_delay
+        self.close_timeout = close_timeout
+        self._sleep = sleep
+        self._queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=depth)
+        self._overflow: deque[tuple[str, Any]] = deque()
+        self._overflow_lock = threading.Lock()
+        self._closing = threading.Event()
         self._thread = threading.Thread(target=self._run, name="steadyhand-copier", daemon=True)
         self._thread.start()
 
     def submit(self, journal_path: str | Path) -> None:
-        self._queue.put(Path(journal_path))
+        path = Path(journal_path)
+
+        def copy_episode() -> None:
+            for source in (path, manifest_path_for(path)):
+                if source.exists():
+                    self.copied.append(copy_file_atomic(source, self.destination / source.name))
+
+        self._put(str(path), copy_episode)
 
     def submit_file(self, source: str | Path, destination: str | Path) -> None:
-        """Copy any file (a sweep's scores, its manifest) to an exact destination, in queue order."""
-        self._queue.put((Path(source), Path(destination)))
+        """Copy any file (a sweep's scores, its manifest) to an exact destination, as it is when copied."""
+        source, destination = Path(source), Path(destination)
+        self._put(str(source), lambda: self.copied.append(copy_snapshot(source, destination)))
+
+    def submit_call(self, name: str, fn: Any, *args: Any) -> None:
+        """Run ``fn(*args)`` on the copier thread (the ``BackgroundJobs.submit`` signature, for ``MirroredFile``)."""
+        self._put(name, lambda: fn(*args))
 
     def close(self) -> None:
-        self._queue.put(None)
-        self._thread.join()
+        self._closing.set()
+        self._thread.join(self.close_timeout)
+        if self._thread.is_alive():
+            with self._overflow_lock:
+                self.pending_at_close = [label for label, _ in list(self._queue.queue) + list(self._overflow)]
+            self.errors.append((
+                self.destination,
+                f"copier still busy after {self.close_timeout:g}s with {len(self.pending_at_close)} copies pending; "
+                "the files are still on local disk",
+            ))
 
     def __enter__(self) -> JournalCopier:
         return self
@@ -531,22 +575,37 @@ class JournalCopier:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def _put(self, label: str, action: Any) -> None:
+        try:
+            self._queue.put((label, action), timeout=self.submit_timeout)
+        except queue.Full:
+            with self._overflow_lock:
+                self._overflow.append((label, action))
+
+    def _next(self) -> tuple[str, Any] | None:
+        try:
+            return self._queue.get(timeout=0.2)
+        except queue.Empty:
+            with self._overflow_lock:
+                return self._overflow.popleft() if self._overflow else None
+
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
+            item = self._next()
             if item is None:
-                return
-            if isinstance(item, tuple):
-                pairs = [item]
-            else:
-                pairs = [(source, self.destination / source.name) for source in (item, manifest_path_for(item))]
-            for source, destination in pairs:
-                if not source.exists():
-                    continue
+                if self._closing.is_set() and self._queue.empty():
+                    return
+                continue
+            label, action = item
+            for attempt in range(self.retries + 1):
                 try:
-                    self.copied.append(copy_file_atomic(source, destination))
+                    action()
+                    break
                 except Exception as exc:  # recorded, so one bad copy cannot stop the queue
-                    self.errors.append((source, f"{type(exc).__name__}: {exc}"))
+                    if attempt == self.retries:
+                        self.errors.append((Path(label), f"{type(exc).__name__}: {exc}"))
+                    else:
+                        self._sleep(self.retry_delay * (2 ** attempt))
 
 
 def dump_record(record: Mapping[str, Any]) -> str:

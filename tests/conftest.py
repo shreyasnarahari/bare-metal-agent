@@ -33,7 +33,7 @@ class SyncJobs:
     def status(self):
         return {name: "failed" if name in self.errors else "done" for name in self.submitted}
 
-    def drain(self, timeout):
+    def drain(self, timeout, match=None):
         return {}
 
     def cancel_all(self):

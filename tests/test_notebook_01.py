@@ -352,3 +352,21 @@ def test_day10_manifests_include_the_runtime_identity_and_size_workers_to_slots(
     assert helpers.count("manifest=manifest, workers=workers") == 1 and "manifest=repair_manifest, workers=workers" in helpers
     assert "manifest=manifest, workers=workers" in pilot and "manifest=repair_manifest, workers=workers" in pilot
     assert "canonical_hash({'config'" not in helpers + pilot
+
+
+def test_day10_results_are_local_first_and_flushed_to_drive():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+    pilot = "".join(notebook_cell("day10-bfcl-pilot")["source"])
+    setup = "".join(notebook_cell("day10-eval-setup")["source"])
+    cleanup = "".join(notebook_cell("cleanup")["source"])
+
+    assert "MirroredFile(DAY10_LOCAL / name, DAY10_RECORDS / name" in helpers
+    assert "DAY10_RECORDS / f'own-" not in helpers and "DAY10_RECORDS / f'bfcl-" not in pilot
+    assert "day10_checkpoint(f'own-{profile.name}-repair.jsonl')" in helpers
+    assert "log_path=DAY10_LOGS / f'{profile.name}-server.log'" in helpers  # no open file on Drive
+    assert "copy_file_atomic(server_log, DAY10_RECORDS / server_log.name)" in helpers
+    assert "os.environ['HF_DATASETS_CACHE'] = '/content/hf-datasets'" in setup
+    for cell_id in ("day10-own-qwen3", "day10-own-qwen35", "day10-bfcl-qwen3", "day10-bfcl-qwen35",
+                    "day10-schema-coverage", "day10-jsonschema-generation", "day10-hf-jsonschema", "day10-maskbench"):
+        assert f"sync_drive(BACKGROUND, stage='{cell_id}')" in "".join(notebook_cell(cell_id)["source"]), cell_id
+    assert "sync_drive(BACKGROUND, stage='cleanup', remount=False)" in cleanup

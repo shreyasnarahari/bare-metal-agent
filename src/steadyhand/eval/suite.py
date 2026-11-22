@@ -22,7 +22,6 @@ import json
 import multiprocessing
 import os
 import threading
-import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -32,11 +31,11 @@ from pathlib import Path
 from typing import Any
 
 import toolsmith
-from toolsmith.artifacts import copy_file_atomic
+from toolsmith.artifacts import MirroredFile
 from toolsmith.evaluation.models import canonical_hash
 from toolsmith.evaluation.runner import atomic_write_json
 from toolsmith.json_utils import strict_json_loads
-from toolsmith.recording import JsonlRecorder
+from toolsmith.recording import JsonlRecorder, trim_partial_line
 
 from .. import __version__ as STEADYHAND_VERSION
 from ..controller import Budgets, call_hash
@@ -777,10 +776,17 @@ def run_sweep(
     manifest_path = sweep_dir / f"{spec.sweep_id}.json"
     scores_path = sweep_dir / f"{spec.sweep_id}.scores.jsonl"
     mirror = Path(mirror_dir) if mirror_dir is not None else None
-    if mirror is not None and not manifest_path.exists() and (mirror / manifest_path.name).is_file():
-        copy_file_atomic(mirror / manifest_path.name, manifest_path)
-        if (mirror / scores_path.name).is_file():
-            copy_file_atomic(mirror / scores_path.name, scores_path)
+
+    def mirrored(path: Path) -> MirroredFile:
+        return MirroredFile(
+            path, mirror / path.name if mirror is not None else None, every_seconds=mirror_seconds,
+            submit=copier.submit_call if copier is not None else None,
+        )
+
+    manifest_store, scores_store = mirrored(manifest_path), mirrored(scores_path)
+    if not manifest_path.exists() and manifest_store.restore():
+        scores_store.restore()
+    trim_partial_line(scores_path)  # a copy cut mid-record must not glue onto the next append
     if manifest_path.exists():
         recorded = sweep_identity(json.loads(manifest_path.read_text(encoding="utf-8")))
         current = sweep_identity(spec.as_dict())
@@ -793,18 +799,6 @@ def run_sweep(
     done = load_scores(scores_path) if scores_path.exists() else {}
     recorder = JsonlRecorder(scores_path, secrets=secrets)
     lock = threading.Lock()
-    last_mirror = [time.monotonic()]
-
-    def mirror_scores(force: bool = False) -> None:
-        if mirror is None or not scores_path.exists():
-            return
-        if not force and time.monotonic() - last_mirror[0] < mirror_seconds:
-            return
-        last_mirror[0] = time.monotonic()
-        if copier is not None:
-            copier.submit_file(scores_path, mirror / scores_path.name)
-        else:
-            copy_file_atomic(scores_path, mirror / scores_path.name)
 
     def work(unit: SweepUnit) -> EpisodeScore | None:
         score = run_task(
@@ -815,7 +809,7 @@ def run_sweep(
             return None
         with lock:
             recorder.append({"event": "episode_scored", "unit": unit.key, **score.as_dict()})
-            mirror_scores()
+        scores_store.sync()
         if copier is not None:
             copier.submit(score.journal_path)
         return score
@@ -827,11 +821,7 @@ def run_sweep(
                 "event": "sweep_segment", "workers": workers, "pending": len(pending), "done": len(done),
                 **{key: spec.server.get(key) for key in SWEEP_SHAPE_KEYS},
             })
-    if mirror is not None:
-        if copier is not None:
-            copier.submit_file(manifest_path, mirror / manifest_path.name)
-        else:
-            copy_file_atomic(manifest_path, mirror / manifest_path.name)
+    manifest_store.sync()
     try:
         if workers <= 1:
             fresh = [work(unit) for unit in pending]
@@ -840,7 +830,7 @@ def run_sweep(
                 fresh = list(pool.map(work, pending))
     finally:
         with lock:
-            mirror_scores(force=True)
+            scores_store.sync(force=True)
     return [*done.values(), *[score for score in fresh if score is not None]]
 
 
