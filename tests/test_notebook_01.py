@@ -2,6 +2,7 @@ import ast
 import json
 from pathlib import Path
 
+from toolsmith.hardware import Hardware
 from toolsmith.recording import JsonlRecorder
 
 
@@ -236,8 +237,7 @@ def run_cell_with_stubbed_provisioning(cell_id, namespace, monkeypatch):
     import toolsmith.provision as provision
 
     calls = []
-    monkeypatch.setattr(provision, "gpu_query", lambda field: {"name": "NVIDIA L4", "compute_cap": "8.9"}[field])
-    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime: calls.append(runtime) or runtime.server_bin)
+    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime, **options: calls.append(runtime) or runtime.server_bin)
     monkeypatch.setattr(
         provision, "resolve_gguf",
         lambda repo, *, token, filename=None, select=None, api=None: provision.GgufFile(
@@ -257,6 +257,7 @@ def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch):
         "Path": Path, "os": os, "json": json,
         "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
         "HF_TOKEN": "hf-test", "QWEN35_GGUF_REPO": "unsloth/Qwen3.5-9B-GGUF",
+        "HARDWARE": Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000),
     }
 
     build = run_cell_with_stubbed_provisioning("build-llama-cpp", namespace, monkeypatch)

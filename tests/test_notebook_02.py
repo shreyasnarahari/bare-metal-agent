@@ -10,12 +10,15 @@ from steadyhand.journal import manifest_path_for
 from steadyhand.manifest import load_manifest
 from toolsmith.json_utils import strict_json_loads
 from toolsmith.prompting import ChatPromptRenderer
+from toolsmith.hardware import Hardware
 from toolsmith.protocols import QWEN35_PROFILE
 
 ROOT = Path(__file__).parent.parent
 NOTEBOOK_PATH = ROOT / "notebooks" / "02_steadyhand.ipynb"
 TOOLSMITH_NOTEBOOK = ROOT / "notebooks" / "01_toolsmith.ipynb"
-SHARED_SETUP_CELLS = ("environment", "drive-and-secrets", "install-project")
+L4 = Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000)
+T4 = Hardware("Tesla T4", "75", 15360, 2, 13000, 80_000)
+SHARED_SETUP_CELLS = ("environment", "drive-and-secrets", "install-project", "hardware")
 
 
 def load(path=NOTEBOOK_PATH):
@@ -38,7 +41,7 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
     ids = [cell["id"] for cell in notebook["cells"]]
 
     assert ids == [
-        "introduction", "environment", "drive-and-secrets", "install-project",
+        "introduction", "environment", "drive-and-secrets", "install-project", "hardware",
         "steadyhand-sweep-notes", "steadyhand-cpu-gate", "steadyhand-runtime-notes", "steadyhand-runtime",
         "steadyhand-server", "steadyhand-notes", "steadyhand-bare-loop", "steadyhand-smoke",
         "steadyhand-sweep", "steadyhand-server-stop", "cleanup",
@@ -275,8 +278,7 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
 
     calls = []
     monkeypatch.setenv("STEADYHAND_PHASE", phase)
-    monkeypatch.setattr(provision, "gpu_query", lambda field: {"name": "NVIDIA L4", "compute_cap": "8.9"}[field])
-    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime: calls.append(runtime) or runtime.server_bin)
+    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime, **options: calls.append(runtime) or runtime.server_bin)
     monkeypatch.setattr(
         provision, "resolve_gguf",
         lambda repo, *, token, filename=None, select=None, api=None: provision.GgufFile(
@@ -286,7 +288,7 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
     monkeypatch.setattr(provision, "ensure_gguf", lambda gguf, **options: calls.append(options) or options["local_path"])
     monkeypatch.setattr(ChatPromptRenderer, "from_pretrained", classmethod(lambda cls, *a, **k: PromptEchoRenderer()))
     namespace = {
-        "Path": Path, "os": os, "json": json, "HF_TOKEN": "hf-test",
+        "Path": Path, "os": os, "json": json, "HF_TOKEN": "hf-test", "HARDWARE": L4,
         "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
     }
 
@@ -297,3 +299,24 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
     assert calls[0].cache == tmp_path / "builds" / f"llama.cpp-{ref}-cuda-sm89-runtime-v2"
     assert calls[1]["drive_path"] == tmp_path / "models" / drive_name
     assert runtime["server_bin"] == calls[0].server_bin and runtime["model"] == calls[1]["local_path"]
+
+
+@pytest.mark.parametrize(("output", "family"), [("Tesla T4, 7.5, 15360\n", "T4"), ("NVIDIA L4, 8.9, 23034\n", "L4")])
+def test_the_hardware_cell_detects_the_runtime(monkeypatch, output, family):
+    import toolsmith.hardware as hardware
+
+    monkeypatch.setattr(hardware, "query_gpus", lambda: output)
+    namespace = {}
+
+    exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
+
+    assert namespace["GPU_FAMILY"] == family and namespace["HARDWARE"].family == family
+    assert namespace["CPU_COUNT"] == namespace["HARDWARE"].cpu_count
+
+
+def test_the_hardware_cell_fails_fast_without_a_gpu(monkeypatch):
+    import toolsmith.hardware as hardware
+
+    monkeypatch.setattr(hardware, "query_gpus", lambda: "")
+    with pytest.raises(hardware.UnsupportedRuntime, match="Change runtime type"):
+        exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), {})
