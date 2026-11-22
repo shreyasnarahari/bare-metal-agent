@@ -4,6 +4,8 @@ import json
 import multiprocessing
 import resource
 import time
+from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -126,6 +128,37 @@ def isolated_compile_coverage(
     return queue.get()
 
 
+def parallel_compile_coverage(
+    items: Iterable[tuple[dict[str, Any], str]],
+    *,
+    workers: int,
+    wall_seconds: float = 10,
+    memory_mb: int = 512,
+    cpu_seconds: int = 5,
+) -> Iterator[dict[str, Any]]:
+    """``isolated_compile_coverage`` for each ``(schema, unique_id)``, ``workers`` processes at a time.
+
+    Each schema still compiles in its own process under the same limits, and the
+    compile time is measured inside that process, so running several at once
+    (one per vCPU) leaves TTFM close to the serial value. Results come back in
+    input order.
+    """
+    if workers < 1:
+        raise ValueError("workers must be positive")
+
+    def one(item: tuple[dict[str, Any], str]) -> dict[str, Any]:
+        schema, unique_id = item
+        return isolated_compile_coverage(
+            schema, unique_id, wall_seconds=wall_seconds, memory_mb=memory_mb, cpu_seconds=cpu_seconds,
+        )
+
+    if workers == 1:
+        yield from map(one, items)
+        return
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="coverage") as pool:
+        yield from pool.map(one, items)
+
+
 def pending_file_is_stale(path, run_id: str) -> bool:
     try:
         value = json.loads(path.read_text())
@@ -138,6 +171,7 @@ __all__ = [
     "CoverageResult",
     "compile_coverage",
     "isolated_compile_coverage",
+    "parallel_compile_coverage",
     "pending_file_is_stale",
     "replay_schema",
 ]

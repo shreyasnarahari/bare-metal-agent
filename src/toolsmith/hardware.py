@@ -98,6 +98,25 @@ def query_gpus() -> str:
     return result.stdout if result.returncode == 0 else ""
 
 
+def vram_free_mib(output: str | None = None) -> int | None:
+    """Free VRAM on the first GPU right now, or ``None`` when ``nvidia-smi`` cannot say."""
+    if output is None:
+        if shutil.which("nvidia-smi") is None:
+            return None
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.total,memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            return None
+        output = result.stdout
+    try:
+        total, used = (int(float(value)) for value in output.strip().splitlines()[0].split(",")[:2])
+    except (IndexError, ValueError):
+        return None
+    return total - used
+
+
 @dataclass(frozen=True)
 class Hardware:
     gpu_name: str  # "" when no GPU is visible
@@ -232,4 +251,5 @@ __all__ = [
     "runtime_stamp",
     "total_ram_mib",
     "visible_cpus",
+    "vram_free_mib",
 ]

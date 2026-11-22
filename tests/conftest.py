@@ -1,8 +1,12 @@
+from pathlib import Path
+
 import pytest
 
 
 class SyncJobs:
     """``BackgroundJobs`` stand-in for notebook exec tests: each job runs at submit time."""
+
+    log_dir = Path("/tmp/sync-jobs")
 
     def __init__(self):
         self.submitted = []
@@ -25,6 +29,9 @@ class SyncJobs:
 
     def active(self):
         return []
+
+    def status(self):
+        return {name: "failed" if name in self.errors else "done" for name in self.submitted}
 
     def drain(self, timeout):
         return {}

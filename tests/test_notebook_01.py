@@ -242,11 +242,12 @@ def test_notebook_day10_offline_validation_checks_gold_dataset(tmp_path):
     assert namespace["day10_dataset_summary"]["categories"]["no-tool"] == 25
 
 
-def run_cell_with_stubbed_provisioning(cell_id, namespace, monkeypatch):
+def stub_provisioning(monkeypatch):
+    import toolsmith.artifacts as artifacts
     import toolsmith.provision as provision
 
     calls = []
-    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime, **options: calls.append(runtime) or runtime.server_bin)
+    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime, **options: calls.append((runtime, options)) or runtime.server_bin)
     monkeypatch.setattr(
         provision, "resolve_gguf",
         lambda repo, *, token, filename=None, select=None, api=None: provision.GgufFile(
@@ -254,37 +255,73 @@ def run_cell_with_stubbed_provisioning(cell_id, namespace, monkeypatch):
         ),
     )
     monkeypatch.setattr(provision, "ensure_gguf", lambda gguf, **options: calls.append(options) or options["local_path"])
+    monkeypatch.setattr(artifacts, "is_gguf", lambda path, size: True)
+    return calls
+
+
+def run_cell(cell_id, namespace):
     source = "".join(notebook_cell(cell_id)["source"])
     exec(compile(source, str(NOTEBOOK_PATH), "exec"), namespace)
-    return calls
 
 
 def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch, sync_jobs):
     import os
 
+    calls = stub_provisioning(monkeypatch)
     namespace = {
         "Path": Path, "os": os, "json": json,
         "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
-        "HF_TOKEN": "hf-test", "QWEN35_GGUF_REPO": "unsloth/Qwen3.5-9B-GGUF",
-        "HARDWARE": Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000), "BACKGROUND": sync_jobs,
+        "HF_TOKEN": "hf-test", "HARDWARE": Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000),
+        "BACKGROUND": sync_jobs,
     }
 
-    build = run_cell_with_stubbed_provisioning("build-llama-cpp", namespace, monkeypatch)
-    download = run_cell_with_stubbed_provisioning("download-model", namespace, monkeypatch)
-    qwen35 = run_cell_with_stubbed_provisioning("day09-qwen35-runtime", namespace, monkeypatch)
+    run_cell("build-llama-cpp", namespace)
+    qwen3_gguf, qwen35_gguf, (b5401, b5401_options), (b8233, b8233_options) = calls
 
+    # The downloads are submitted before the foreground build, and b8233 only after it.
+    assert sync_jobs.submitted[:2] == ["qwen3-gguf", "qwen35-gguf"] and sync_jobs.submitted[-1] == "qwen35-server"
     assert namespace["GPU_COMPUTE_CAP"] == "89"
     assert namespace["CACHED_BUILD"] == tmp_path / "builds" / "llama.cpp-b5401-cuda-sm89-runtime-v2"
-    assert build[0].ref == "b5401" and build[0].build == namespace["LOCAL_BUILD"]
+    assert b5401.ref == "b5401" and b5401.build == namespace["LOCAL_BUILD"] and b5401_options["jobs"] == 8
+    assert b8233.ref == "b8233" and b8233.staging == Path("/content/llama.cpp-qwen35-runtime-staging")
+    assert b8233_options["nice"] == 10 and b8233_options["defer"] == sync_jobs.submit
     assert namespace["SERVER_BIN"] == namespace["LOCAL_BUILD"] / "bin" / "llama-server"
     assert callable(namespace["server_environment"]) and callable(namespace["runtime_matches_gpu"])
+    assert qwen3_gguf["drive_path"] == tmp_path / "models" / "Qwen3-8B-Q4_K_M.gguf"
+    assert qwen35_gguf["drive_path"] == tmp_path / "models" / "0123456789ab-Qwen3.5-9B-Q4_K_M.gguf"
+
+    run_cell("download-model", namespace)
     assert callable(namespace["hf_hub_download"])  # day09-qwen35-tokenizer still relies on it
     assert (namespace["MODEL_REVISION"], namespace["EXPECTED_MODEL_SIZE"]) == ("0123456789abcdef", 1234)
-    assert download[0]["drive_path"] == tmp_path / "models" / "Qwen3-8B-Q4_K_M.gguf"
-    assert qwen35[0].ref == "b8233" and qwen35[0].staging == Path("/content/llama.cpp-qwen35-runtime-staging")
+
+    run_cell("day09-qwen35-runtime", namespace)
     assert namespace["QWEN35_SERVER_BIN"] == namespace["QWEN35_LOCAL_BUILD"] / "bin" / "llama-server"
+    assert namespace["QWEN35_LOCAL_MODEL"] == Path("/content/qwen35-Qwen3.5-9B-Q4_K_M.gguf")
     assert namespace["QWEN35_DRIVE_MODEL_FILE"] == tmp_path / "models" / "0123456789ab-Qwen3.5-9B-Q4_K_M.gguf"
     assert namespace["qwen35_runtime_metadata"]["model_size"] == 1234
+    assert len(calls) == 4  # waiting provisioned nothing new
+
+
+def test_day10_cells_use_every_slot_and_vcpu():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+    setup = "".join(notebook_cell("day10-eval-setup")["source"])
+    coverage = "".join(notebook_cell("day10-schema-coverage")["source"])
+    generation = "".join(notebook_cell("day10-jsonschema-generation")["source"])
+    hf = "".join(notebook_cell("day10-hf-jsonschema")["source"])
+    maskbench = "".join(notebook_cell("day10-maskbench")["source"])
+
+    assert "DAY10_SLOTS = HARDWARE.day10_slots()" in helpers and "parallel=DAY10_SLOTS" in helpers
+    assert "context_size=DAY10_SLOT_CONTEXT * DAY10_SLOTS" in helpers and "vram_free_mib()" in helpers
+    assert "parallel=4" not in helpers and "context_size=16384" not in helpers
+    assert "BACKGROUND.submit('maskbench-peers', install_maskbench_peers)" in setup and "nice=10" in setup
+    assert "clone_pool.submit(checkout_pinned" in setup
+    assert "parallel_compile_coverage(" in coverage and "workers=coverage_workers" in coverage
+    assert "copy_file_atomic(coverage_local, DAY10_RECORDS / 'schema-coverage.jsonl')" in coverage
+    assert generation.count("load_dataset(") == 1 and "workers=active['identity']['parallel']" in generation
+    assert "read_identified_json(report_path, identity)" in generation
+    assert "workers=HARDWARE.hf_processes()" in hf and "run_hf_units(" in hf
+    assert "BACKGROUND.wait('maskbench-peers')" in maskbench and "workers=HARDWARE.peer_workers()" in maskbench
+    assert "'concurrency': maskbench_concurrency" in maskbench
 
 
 def test_every_recorder_carries_the_runtime_stamp():
