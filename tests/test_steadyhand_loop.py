@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import steadyhand
 from steadyhand import (
     Budgets,
     Effect,
@@ -26,16 +25,12 @@ from steadyhand import (
     run_episode,
     worker_service,
 )
-from steadyhand.journal import manifest_path_for
-from steadyhand.manifest import load_manifest
 from steadyhand.tools import get_order
 from toolsmith.api import APIError, ToolsmithService
 from toolsmith.backends import LlamaCppConnectionError, LlamaCppTimeoutError
 from toolsmith.json_utils import strict_json_loads
-from toolsmith.prompting import ChatPromptRenderer
 from toolsmith.protocols import QWEN3_PROFILE, QWEN35_PROFILE
 
-NOTEBOOK_PATH = Path(__file__).parent.parent / "notebooks" / "01_toolsmith.ipynb"
 SYSTEM = {"role": "system", "content": "You are a support agent. Use the tools."}
 
 
@@ -674,80 +669,3 @@ def test_real_service_round_trip_uses_native_calls_grammars_and_no_thinking(tmp_
         assert payload["enable_thinking"] is False
         assert settings["grammar"]
         assert settings["temperature"] == 0.0
-
-
-# Notebook cell
-
-
-def notebook_source(cell_id):
-    notebook = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
-    cell = next(cell for cell in notebook["cells"] if cell["id"] == cell_id)
-    return "".join(cell["source"])
-
-
-def run_notebook_cell(tmp_path):
-    namespace = {
-        "DRIVE_RECORDS": tmp_path / "drive",
-        "HF_TOKEN": "hf-test-secret",
-        "LOCAL_KEY": "local-test-secret",
-    }
-    source = notebook_source("steadyhand-bare-loop")
-    exec(compile(source, str(NOTEBOOK_PATH), "exec"), namespace)
-    return namespace
-
-
-@pytest.mark.parametrize(
-    ("base_url", "reason"),
-    [(None, "TOOLSMITH_BASE_URL is not set"), ("http://10.0.0.5:8080", "localhost")],
-)
-def test_notebook_cell_skips_with_a_recorded_reason(tmp_path, monkeypatch, base_url, reason):
-    monkeypatch.delenv("TOOLSMITH_BASE_URL", raising=False)
-    if base_url is not None:
-        monkeypatch.setenv("TOOLSMITH_BASE_URL", base_url)
-    monkeypatch.setenv("STEADYHAND_LOCAL_DIR", str(tmp_path / "local"))
-
-    namespace = run_notebook_cell(tmp_path)
-
-    record = namespace["steadyhand_record"]
-    assert record["status"] == "skipped"
-    assert reason in record["reason"]
-    saved = journal_records(tmp_path / "drive" / "steadyhand" / "part1-smoke.jsonl")
-    assert saved[-1]["status"] == "skipped"
-    assert not (tmp_path / "local").exists()
-
-
-def test_notebook_cell_runs_two_overlapping_episodes_and_copies_journals(tmp_path, monkeypatch):
-    llama = ScriptedLlama(barrier=threading.Barrier(2, timeout=10))
-    built = {}
-
-    def fake_build_llama_client(settings, *, connections, timeout):
-        built.update(base_url=settings.base_url, api_key=settings.api_key, connections=connections)
-        return llama
-
-    monkeypatch.setenv("TOOLSMITH_BASE_URL", "http://127.0.0.1:8080")
-    monkeypatch.setenv("STEADYHAND_LOCAL_DIR", str(tmp_path / "local"))
-    monkeypatch.delenv("STEADYHAND_PROFILE", raising=False)
-    monkeypatch.delenv("TOOLSMITH_PARALLEL", raising=False)
-    monkeypatch.setattr(steadyhand, "build_llama_client", fake_build_llama_client)
-    monkeypatch.setattr(ChatPromptRenderer, "from_pretrained", classmethod(lambda cls, *a, **k: PromptEchoRenderer()))
-
-    namespace = run_notebook_cell(tmp_path)
-
-    record = namespace["steadyhand_record"]
-    assert record["status"] == "ran"
-    assert record["completions_overlapped"] is True
-    assert record["copy_errors"] == []
-    assert record["overlap_seconds"] > 0
-    assert built == {"base_url": "http://127.0.0.1:8080", "api_key": "local-test-secret", "connections": 4}
-    assert llama.closed
-    assert [run["status"] for run in record["episodes"]] == ["done", "done"]
-    assert len({run["episode_id"] for run in record["episodes"]}) == 2
-    for run in record["episodes"]:
-        local, copy = Path(run["journal"]), Path(run["drive_copy"])
-        assert local.parent == tmp_path / "local"
-        assert copy.parent == tmp_path / "drive" / "steadyhand"
-        assert local.read_bytes() == copy.read_bytes()
-        assert load_manifest(manifest_path_for(copy)).completed is True
-        assert {r["episode_id"] for r in journal_records(local)} == {run["episode_id"]}
-        assert "local-test-secret" not in local.read_text(encoding="utf-8")
-    assert all(settings["grammar"] for _, settings in llama.calls)

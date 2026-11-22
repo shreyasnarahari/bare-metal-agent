@@ -43,7 +43,7 @@ src/steadyhand/eval/report.py
 tests/test_steadyhand_eval.py
 ```
 
-The canonical notebook gains one sweep section: load secrets from Colab Secrets, start one llama-server for the selected model and shape, run the grid with one episode per slot, copy finished journals from `/content/steadyhand/` to Drive, and render `RESULTS.md` from those records. A crashed agent cell must not kill the server cell. The base URL comes from `TOOLSMITH_BASE_URL`. The GPU holds one GGUF at a time. The notebook already stops the Qwen3-8B server before loading another model onto a 16 GB T4. Steadyhand keeps that rule on both T4 and L4.
+The Steadyhand notebook (`notebooks/02_steadyhand.ipynb`) holds the sweep section: load secrets from Colab Secrets, start one llama-server for the selected model and shape, run the grid with one episode per slot, copy finished journals from `/content/steadyhand/` to Drive, and render `RESULTS.md` from those records. A crashed agent cell must not kill the server cell. The base URL comes from `TOOLSMITH_BASE_URL`. The GPU holds one GGUF at a time. Its server cell stops the previous Steadyhand server before loading another model onto a 16 GB T4. Steadyhand keeps that rule on both T4 and L4.
 
 ## Design
 

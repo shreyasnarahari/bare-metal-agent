@@ -6,7 +6,7 @@ Toolsmith is a from-first-principles function-calling and constrained-decoding l
 
 ## Run and verify
 
-On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` from the synced tree.
+On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` (Toolsmith) or `notebooks/02_steadyhand.ipynb` (Steadyhand) from the synced tree.
 
 Local checks:
 
@@ -17,13 +17,13 @@ Local checks:
 git diff --check
 ```
 
-The single canonical Toolsmith notebook is `notebooks/01_toolsmith.ipynb`. On a fresh Colab L4, run the entire notebook top-to-bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
+There are two notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track and `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop. Both provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. On a fresh Colab L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
 
 ## Steadyhand: the agent loop
 
 `src/steadyhand/` is the agent loop that runs on top of the Toolsmith shim. The design notes are in `Steadyhand/`. It sends a conversation and tool schemas through `ToolsmithService.chat`, validates each native tool call, and runs it against an in-memory mock store. On a tool failure it applies one of six recovery policies, and it writes one append-only journal per episode. CPU replay of a journal reproduces the episode exactly.
 
-The boundary is unchanged: **handlers run in Steadyhand, after the shim returns. The shim and its FastAPI routes never execute a tool.**
+The boundary is unchanged: **handlers run in Steadyhand, after the shim returns. The shim and its FastAPI routes never execute a tool.** Steadyhand runs on Colab from `notebooks/02_steadyhand.ipynb`.
 
 **Status:** the 60-task suite, the fault injector, the policies, replay, and the report generator are implemented. They are checked on CPU with a scripted model and golden journals. **The live sweep has not been run.** No Steadyhand accuracy, duplicate-effect, or throughput number is claimed. Once a sweep runs, `results/steadyhand/RESULTS.md` is generated from its journals by `steadyhand.eval.report`. This section will cite only the measured cells, with their manifests.
 
@@ -168,7 +168,7 @@ Expected artifacts include the manifest, own-set results, BFCL result/score tree
 
 ## Next acceptance steps
 
-1. Publish or copy the exact working tree to Colab and run the canonical notebook from a fresh L4 runtime.
+1. Publish or copy the exact working tree to Colab and run the Toolsmith notebook from a fresh L4 runtime.
 2. Complete all earlier serving, parser, sampler, Qwen3.5, and cleanup checks before benchmarking.
 3. Run the small adapter smoke tests before long BFCL or JSONSchemaBench jobs.
 4. Generate results from recorded evidence, then replace the pending performance section with measured values and explicit limitations.

@@ -1,9 +1,5 @@
 import ast
 import json
-import os
-import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 from toolsmith.recording import JsonlRecorder
@@ -17,152 +13,6 @@ def notebook_cell(cell_id):
     return next(cell for cell in notebook["cells"] if cell["id"] == cell_id)
 
 
-def load_build_functions(namespace):
-    source = "".join(notebook_cell("build-llama-cpp")["source"])
-    tree = ast.parse(source)
-    names = {
-        "remove_directory",
-        "server_environment",
-        "server_works",
-        "restore_cached_build",
-        "cache_local_build",
-    }
-    functions = [
-        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names
-    ]
-    assert {node.name for node in functions} == names
-    module = ast.Module(body=functions, type_ignores=[])
-    exec(compile(module, str(NOTEBOOK_PATH), "exec"), namespace)
-    return namespace
-
-
-def write_executable(path, body):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!{sys.executable}\n{body}")
-    path.chmod(0o755)
-
-
-def test_notebook_runtime_cache_restores_over_partial_build(tmp_path, monkeypatch):
-    local_build = tmp_path / "local-build"
-    cached_build = tmp_path / "cached-build"
-    server_bin = local_build / "bin" / "llama-server"
-    write_executable(server_bin, "print('fake llama.cpp b5401')\n")
-    (local_build / "lib").mkdir()
-    (local_build / "lib" / "libllama.so").write_bytes(b"library")
-    (local_build / "bin" / "libggml.so.0").write_bytes(b"library")
-    (local_build / "bin" / "libggml.so").symlink_to("libggml.so.0")
-    (local_build / "CMakeCache.txt").write_text("not a runtime artifact")
-    monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
-
-    namespace = load_build_functions(
-        {
-            "os": os,
-            "shutil": shutil,
-            "subprocess": subprocess,
-            "Path": Path,
-            "LLAMA_CPP_REF": "b5401",
-            "LOCAL_BUILD": local_build,
-            "CACHED_BUILD": cached_build,
-            "SERVER_BIN": server_bin,
-        }
-    )
-
-    assert namespace["server_works"](local_build)
-    namespace["cache_local_build"]()
-    assert (cached_build / ".complete").read_text() == "b5401\n"
-    assert not (cached_build / "CMakeCache.txt").exists()
-    assert namespace["server_works"](cached_build)
-
-    write_executable(server_bin, "raise SystemExit(1)\n")
-    shutil.rmtree(local_build / "lib")
-    assert not namespace["server_works"](local_build)
-    assert namespace["restore_cached_build"]()
-    assert namespace["server_works"](local_build)
-    assert (local_build / "lib" / "libllama.so").is_file()
-    assert (local_build / "bin" / "libggml.so").is_symlink()
-
-
-def test_notebook_runtime_cache_restores_without_completion_marker(tmp_path, monkeypatch):
-    builds = tmp_path / "builds"
-    local_build = tmp_path / "local-build"
-    cached_build = builds / "llama.cpp-b5401-cuda-runtime-v2"
-    server_bin = cached_build / "bin" / "llama-server"
-    write_executable(server_bin, "print('fake llama.cpp b5401')\n")
-    (cached_build / "bin" / "libggml.so").write_bytes(b"library")
-    monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
-
-    namespace = load_build_functions(
-        {
-            "os": os,
-            "shutil": shutil,
-            "subprocess": subprocess,
-            "Path": Path,
-            "LLAMA_CPP_REF": "b5401",
-            "LOCAL_BUILD": local_build,
-            "CACHED_BUILD": cached_build,
-            "SERVER_BIN": local_build / "bin" / "llama-server",
-        }
-    )
-
-    assert namespace["restore_cached_build"]()
-    assert namespace["server_works"](local_build)
-
-
-def test_notebook_runtime_cache_rejects_a_different_gpu(tmp_path, monkeypatch):
-    builds = tmp_path / "builds"
-    local_build = tmp_path / "local-build"
-    cached_build = builds / "llama.cpp-b5401-cuda-sm89-runtime-v2"
-    write_executable(cached_build / "bin" / "llama-server", "print('fake llama.cpp b5401')\n")
-    (cached_build / ".compute-cap").write_text("75\n")
-    monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
-
-    namespace = load_build_functions(
-        {
-            "os": os,
-            "shutil": shutil,
-            "subprocess": subprocess,
-            "Path": Path,
-            "LLAMA_CPP_REF": "b5401",
-            "GPU_COMPUTE_CAP": "89",
-            "LOCAL_BUILD": local_build,
-            "CACHED_BUILD": cached_build,
-            "SERVER_BIN": local_build / "bin" / "llama-server",
-        }
-    )
-
-    assert namespace["restore_cached_build"]() is False
-    assert not (local_build / "bin" / "llama-server").exists()
-
-    (cached_build / ".compute-cap").write_text("89\n")
-    assert namespace["restore_cached_build"]() is True
-    assert namespace["server_works"](local_build)
-
-
-def test_notebook_runtime_cache_ignores_binary_from_another_cache_directory(tmp_path, monkeypatch):
-    builds = tmp_path / "builds"
-    local_build = tmp_path / "local-build"
-    other_gpu = builds / "llama.cpp-b5401-cuda"
-    write_executable(other_gpu / "bin" / "llama-server", "print('fake llama.cpp b5401')\n")
-    (other_gpu / "CMakeCache.txt").write_text("full cmake tree")
-    monkeypatch.setenv("TOOLSMITH_RUNTIME_STAGING", str(tmp_path / "restore-staging"))
-
-    namespace = load_build_functions(
-        {
-            "os": os,
-            "shutil": shutil,
-            "subprocess": subprocess,
-            "Path": Path,
-            "LLAMA_CPP_REF": "b5401",
-            "LOCAL_BUILD": local_build,
-            "CACHED_BUILD": builds / "llama.cpp-b5401-cuda-sm89-runtime-v2",
-            "SERVER_BIN": local_build / "bin" / "llama-server",
-        }
-    )
-
-    assert namespace["restore_cached_build"]() is False
-    assert not (local_build / "bin" / "llama-server").exists()
-
-
 def test_notebook_has_no_destructive_sync_or_stale_error_outputs():
     notebook = json.loads(NOTEBOOK_PATH.read_text())
     source = "\n".join("".join(cell.get("source", [])) for cell in notebook["cells"])
@@ -171,7 +21,7 @@ def test_notebook_has_no_destructive_sync_or_stale_error_outputs():
     assert 'reset", "--hard' not in source
     assert "fuser" not in source
     assert "sys.modules" not in source
-    assert "force_download=True" in source
+    assert "ensure_gguf(" in source and "ensure_llama_server(" in source
     assert "EXPECTED_MODEL_SIZE" in source
     assert "QWEN35_LLAMA_REF = 'b8233'" in source
     assert "LLAMA_CPP_REF = 'b5401'" in source
@@ -380,3 +230,48 @@ def test_notebook_day10_offline_validation_checks_gold_dataset(tmp_path):
     assert summary["dataset"]["tools"] == 10
     assert len(summary["smoke_case_ids"]) == 12
     assert namespace["day10_dataset_summary"]["categories"]["no-tool"] == 25
+
+
+def run_cell_with_stubbed_provisioning(cell_id, namespace, monkeypatch):
+    import toolsmith.provision as provision
+
+    calls = []
+    monkeypatch.setattr(provision, "gpu_query", lambda field: {"name": "NVIDIA L4", "compute_cap": "8.9"}[field])
+    monkeypatch.setattr(provision, "ensure_llama_server", lambda runtime: calls.append(runtime) or runtime.server_bin)
+    monkeypatch.setattr(
+        provision, "resolve_gguf",
+        lambda repo, *, token, filename=None, select=None, api=None: provision.GgufFile(
+            repo, filename or "Qwen3.5-9B-Q4_K_M.gguf", "0123456789abcdef", 1234,
+        ),
+    )
+    monkeypatch.setattr(provision, "ensure_gguf", lambda gguf, **options: calls.append(options) or options["local_path"])
+    source = "".join(notebook_cell(cell_id)["source"])
+    exec(compile(source, str(NOTEBOOK_PATH), "exec"), namespace)
+    return calls
+
+
+def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch):
+    import os
+
+    namespace = {
+        "Path": Path, "os": os, "json": json,
+        "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
+        "HF_TOKEN": "hf-test", "QWEN35_GGUF_REPO": "unsloth/Qwen3.5-9B-GGUF",
+    }
+
+    build = run_cell_with_stubbed_provisioning("build-llama-cpp", namespace, monkeypatch)
+    download = run_cell_with_stubbed_provisioning("download-model", namespace, monkeypatch)
+    qwen35 = run_cell_with_stubbed_provisioning("day09-qwen35-runtime", namespace, monkeypatch)
+
+    assert namespace["GPU_COMPUTE_CAP"] == "89"
+    assert namespace["CACHED_BUILD"] == tmp_path / "builds" / "llama.cpp-b5401-cuda-sm89-runtime-v2"
+    assert build[0].ref == "b5401" and build[0].build == namespace["LOCAL_BUILD"]
+    assert namespace["SERVER_BIN"] == namespace["LOCAL_BUILD"] / "bin" / "llama-server"
+    assert callable(namespace["server_environment"]) and callable(namespace["runtime_matches_gpu"])
+    assert callable(namespace["hf_hub_download"])  # day09-qwen35-tokenizer still relies on it
+    assert (namespace["MODEL_REVISION"], namespace["EXPECTED_MODEL_SIZE"]) == ("0123456789abcdef", 1234)
+    assert download[0]["drive_path"] == tmp_path / "models" / "Qwen3-8B-Q4_K_M.gguf"
+    assert qwen35[0].ref == "b8233" and qwen35[0].staging == Path("/content/llama.cpp-qwen35-runtime-staging")
+    assert namespace["QWEN35_SERVER_BIN"] == namespace["QWEN35_LOCAL_BUILD"] / "bin" / "llama-server"
+    assert namespace["QWEN35_DRIVE_MODEL_FILE"] == tmp_path / "models" / "0123456789ab-Qwen3.5-9B-Q4_K_M.gguf"
+    assert namespace["qwen35_runtime_metadata"]["model_size"] == 1234

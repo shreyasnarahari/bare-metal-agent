@@ -66,7 +66,7 @@ tests/test_steadyhand_store.py
 
 `pyproject.toml` already discovers packages under `src/`. A `steadyhand` package there is part of the same distribution. Tests stay in `tests/test_*.py`.
 
-Colab work is new cells in `notebooks/01_toolsmith.ipynb`. The repo rule is one canonical notebook. Do not add a second notebook.
+Colab work lives in `notebooks/02_steadyhand.ipynb`. It shares llama.cpp and GGUF provisioning, and the Drive caches, with `notebooks/01_toolsmith.ipynb` through `toolsmith.provision`. (The cells were first written into the Toolsmith notebook, then moved to their own notebook after part 7.)
 
 ## Design
 
