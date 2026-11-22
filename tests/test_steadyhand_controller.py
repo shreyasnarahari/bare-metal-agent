@@ -326,7 +326,7 @@ def test_a_prompt_that_cannot_fit_the_slot_aborts_as_truncated(tmp_path):
     assert len(service.requests) == 1
     finished = records(result)[-1]
     assert "4096-token server slot" in finished["error_message"]
-    assert events(result, "episode_started")[0]["slot_context"] == 4096
+    assert events(result, "episode_started")[0]["settings"]["slot_context"] == 4096
 
 
 def test_a_backend_truncation_names_the_slot_size(tmp_path):

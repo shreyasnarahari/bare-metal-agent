@@ -43,9 +43,14 @@ class JsonlRecorder:
         self.path = Path(path)
         self._secrets = tuple(sorted({secret for secret in secrets if secret}, key=len, reverse=True))
 
-    def append(self, record: Mapping[str, Any]) -> dict[str, Any]:
+    def snapshot(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """The redacted, timestamped record that ``append`` would write, without writing it."""
         snapshot = _redact(dict(record), self._secrets)
         snapshot.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
+        return snapshot
+
+    def append(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        snapshot = self.snapshot(record)
         serialized = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
 
         self.path.parent.mkdir(parents=True, exist_ok=True)

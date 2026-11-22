@@ -1,5 +1,7 @@
 """Steadyhand: a reliable agent loop around the Toolsmith endpoint."""
 
+__version__ = "0.1.0"
+
 from .client import (
     LiveConfigError,
     LiveSettings,

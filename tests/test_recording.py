@@ -42,3 +42,15 @@ def test_recorder_appends_independent_records_and_preserves_timestamp(tmp_path):
     assert [record["event"] for record in records] == ["first", "second"]
     assert records[0]["recorded_at"] == "2026-01-01T00:00:00+00:00"
     assert "recorded_at" in records[1]
+
+
+def test_snapshot_redacts_like_append_without_writing(tmp_path):
+    path = tmp_path / "unused.jsonl"
+    recorder = JsonlRecorder(path, secrets=["local-secret"])
+
+    snapshot = recorder.snapshot({"note": "uses local-secret", "Authorization": "Bearer x"})
+
+    assert snapshot["note"] == "uses [redacted]"
+    assert snapshot["Authorization"] == "[redacted]"
+    assert "recorded_at" in snapshot
+    assert not path.exists()

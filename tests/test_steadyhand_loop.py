@@ -26,6 +26,8 @@ from steadyhand import (
     run_episode,
     worker_service,
 )
+from steadyhand.journal import manifest_path_for
+from steadyhand.manifest import load_manifest
 from steadyhand.tools import get_order
 from toolsmith.api import APIError, ToolsmithService
 from toolsmith.backends import LlamaCppConnectionError, LlamaCppTimeoutError
@@ -414,12 +416,13 @@ def test_journal_lines_are_strict_json_with_sequence_numbers(tmp_path):
     assert result.journal_path == tmp_path / f"{result.episode_id}.jsonl"
 
     started = records[0]
-    assert started["profile"] == "qwen3"
-    assert started["seed"] == 0
+    assert started["settings"]["profile"] == "qwen3"
+    assert started["settings"]["seed"] == 0
     assert started["budgets"]["max_steps"] == 8
     assert started["guard_limit"] == 3
     assert started["fixture_sha256"] == load_fixture().fixture_sha256
-    assert started["use_grammars"] is True and started["enable_thinking"] is False
+    assert started["settings"]["use_grammars"] is True and started["settings"]["enable_thinking"] is False
+    assert started["journal_version"] == 1
     tool = next(record for record in records if record["event"] == "tool_result")
     assert tool["tool"] == "get_order"
     assert tool["arguments"] == '{"order_id": "ord_1001"}'
@@ -733,6 +736,7 @@ def test_notebook_cell_runs_two_overlapping_episodes_and_copies_journals(tmp_pat
     record = namespace["steadyhand_record"]
     assert record["status"] == "ran"
     assert record["completions_overlapped"] is True
+    assert record["copy_errors"] == []
     assert record["overlap_seconds"] > 0
     assert built == {"base_url": "http://127.0.0.1:8080", "api_key": "local-test-secret", "connections": 4}
     assert llama.closed
@@ -743,6 +747,7 @@ def test_notebook_cell_runs_two_overlapping_episodes_and_copies_journals(tmp_pat
         assert local.parent == tmp_path / "local"
         assert copy.parent == tmp_path / "drive" / "steadyhand"
         assert local.read_bytes() == copy.read_bytes()
+        assert load_manifest(manifest_path_for(copy)).completed is True
         assert {r["episode_id"] for r in journal_records(local)} == {run["episode_id"]}
         assert "local-test-secret" not in local.read_text(encoding="utf-8")
     assert all(settings["grammar"] for _, settings in llama.calls)

@@ -120,7 +120,8 @@ class BudgetCheck:
             "steps": self.steps,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
-            "elapsed_s": round(self.elapsed_s, 3) if self.elapsed_s is not None else None,
+            # Unrounded, so a replayed clock reproduces the exact decision.
+            "elapsed_s": self.elapsed_s,
             "budgets": self.budgets.as_dict(),
             "exhausted": self.exhausted,
             "slot_overflow": self.slot_overflow,

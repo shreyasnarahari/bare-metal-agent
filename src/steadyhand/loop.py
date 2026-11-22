@@ -22,6 +22,8 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Any
 
+from toolsmith.evaluation.models import canonical_hash
+
 from .controller import (
     DEFAULT_GUARD_LIMIT,
     Budgets,
@@ -30,7 +32,7 @@ from .controller import (
     repeated_call_observation,
 )
 from .executor import SequentialExecutor
-from .journal import EpisodeJournal
+from .journal import EpisodeJournal, ReplayMismatch
 from .messages import PARAPHRASE_REQUEST, render_final_message
 from .registry import SteadyhandRegistry
 from .store import Store
@@ -95,6 +97,7 @@ def run_episode(
         store_sha256=store.snapshot_sha256(),
         budgets=budgets.as_dict(),
         guard_limit=guard_limit,
+        paraphrase_final=paraphrase_final,
         tool_names=registry.names(),
         schema_sha256=registry.schemas_sha256(),
         policy_sha256=registry.policies_sha256(),
@@ -114,9 +117,10 @@ def run_episode(
                 controller.abort("completion_truncated", check.slot_overflow)
                 break
 
+            messages_sha256 = canonical_hash(history)
             turn = _visible_or_parse_error(client.complete(history, tools).with_call_ids(controller.steps))
             controller.record_usage(turn)
-            journal.model_turn(step=controller.steps, turn=turn)
+            journal.model_turn(step=controller.steps, turn=turn, messages_sha256=messages_sha256)
 
             if turn.kind is TurnKind.TEXT:
                 final_content = turn.content
@@ -148,16 +152,22 @@ def run_episode(
             final_content = render_final_message(status, journal.records)
             if paraphrase_final and final_content is not None:
                 final_content = _paraphrase(client, history, tools, final_content, controller, journal)
-    except BaseException:
-        journal.episode_finished(
-            status=EpisodeStatus.ABORTED,
-            steps=controller.steps,
-            final_content=None,
-            prompt_tokens=controller.prompt_tokens,
-            completion_tokens=controller.completion_tokens,
-            error_code="internal_error",
-            store_sha256=store.snapshot_sha256(),
-        )
+    except BaseException as exc:
+        # A replay mismatch is the result, not a crash to journal. Otherwise record
+        # the crash, without letting a second failure hide the first.
+        if not isinstance(exc, ReplayMismatch):
+            try:
+                journal.episode_finished(
+                    status=EpisodeStatus.ABORTED,
+                    steps=controller.steps,
+                    final_content=None,
+                    prompt_tokens=controller.prompt_tokens,
+                    completion_tokens=controller.completion_tokens,
+                    error_code="internal_error",
+                    store_sha256=store.snapshot_sha256(),
+                )
+            except ReplayMismatch:
+                pass
         raise
 
     journal.episode_finished(
@@ -273,11 +283,12 @@ def _paraphrase(
     if history and history[-1].get("role") == "assistant" and history[-1].get("tool_calls"):
         answerable = history[:-1]  # the escalating turn's calls were never run or answered
     request = {"role": "user", "content": PARAPHRASE_REQUEST + template}
-    turn = client.complete([*answerable, request], tools, tool_choice="none")
+    sent = [*answerable, request]
+    turn = client.complete(sent, tools, tool_choice="none")
     controller.record_usage(turn)
     history.append(request)
     journal.observation(step=controller.steps, message=request, observation={"purpose": "final_paraphrase"})
-    journal.model_turn(step=controller.steps, turn=turn)
+    journal.model_turn(step=controller.steps, turn=turn, messages_sha256=canonical_hash(sent), tool_choice="none")
     if turn.kind is TurnKind.TEXT and has_visible_character(turn.content) and turn.assistant_message:
         history.append(turn.assistant_message)
         return turn.content or template
