@@ -597,3 +597,74 @@ def test_a_scores_copy_cut_mid_line_loses_only_that_episode(tmp_path):
     path.write_text("not json\n" + text)
     with pytest.raises(ValueError):
         load_scores(path)  # corruption anywhere else is still an error
+
+
+# Infrastructure aborts on a flaky Colab server
+
+
+class DeadServerModel(ScriptedTaskModel):
+    """A model whose server is gone: every turn fails the way SteadyhandClient reports it."""
+
+    def __init__(self, task, code="backend_connection_error"):
+        super().__init__(task)
+        self.code = code
+
+    def complete(self, messages, tools, *, tool_choice="auto"):
+        from steadyhand.types import ModelTurn, TurnKind
+
+        return ModelTurn.failure(TurnKind.FATAL_ERROR, self.code, "connection refused")
+
+
+def test_an_infrastructure_abort_is_rerun_under_a_new_episode_id_and_capped(tmp_path):
+    from steadyhand.eval.suite import SWEEP_RETRIES, score_history
+
+    two = [BY_ID["sh_write_01"], BY_ID["sh_write_02"]]
+    spec = spec_for(two, ["typed_hint"], sweep_id="flaky")
+    folders = {"journal_dir": tmp_path / "journals", "sweep_dir": tmp_path / "sweeps"}
+
+    def dead_for_second(unit):
+        return DeadServerModel(unit.task) if unit.task.task_id == "sh_write_02" else ScriptedTaskModel(unit.task)
+
+    first = {s.task_id: s for s in run_sweep(spec, two, dead_for_second, **folders)}
+    assert first["sh_write_02"].aborted and first["sh_write_02"].error_code == "backend_connection_error"
+    assert first["sh_write_02"].task_success is None  # never scored as a task result
+
+    calls = []
+    second = {s.task_id: s for s in run_sweep(
+        spec, two, lambda unit: calls.append(unit.key) or ScriptedTaskModel(unit.task), **folders)}
+    assert calls == ["sh_write_02|clean|typed_hint|plain"]
+    assert second["sh_write_02"].task_success and second["sh_write_02"].attempt == 2
+    assert second["sh_write_02"].episode_id != first["sh_write_02"].episode_id
+
+    always_dead = spec_for([BY_ID["sh_read_01"]], ["typed_hint"], sweep_id="always-dead")
+    for _ in range(SWEEP_RETRIES + 3):
+        run_sweep(always_dead, [BY_ID["sh_read_01"]], lambda unit: DeadServerModel(unit.task), **folders)
+    [attempts] = score_history(tmp_path / "sweeps" / "always-dead.scores.jsonl").values()
+    assert len(attempts) == 1 + SWEEP_RETRIES  # then it stays aborted, listed in the report
+    assert "rerun after an infrastructure abort" in render_report([attempts[-1]])
+
+
+def test_a_token_limit_abort_is_not_rerun(tmp_path):
+    one = [BY_ID["sh_read_01"]]
+    spec = spec_for(one, ["typed_hint"], sweep_id="truncated")
+    folders = {"journal_dir": tmp_path / "journals", "sweep_dir": tmp_path / "sweeps"}
+
+    [score] = run_sweep(spec, one, lambda unit: DeadServerModel(unit.task, code="completion_truncated"), **folders)
+    assert score.aborted and score.error_code == "completion_truncated"
+    assert run_sweep(spec, one, lambda unit: pytest.fail("a token limit does not go away on a rerun"), **folders)
+
+
+def test_a_dead_server_interrupts_the_sweep_instead_of_aborting_every_episode(tmp_path):
+    from steadyhand.eval.suite import SweepInterrupted
+
+    four = [BY_ID["sh_read_01"], BY_ID["sh_read_02"], BY_ID["sh_write_01"], BY_ID["sh_write_02"]]
+    spec = spec_for(four, ["typed_hint"], sweep_id="server-died")
+
+    with pytest.raises(SweepInterrupted, match="2 episodes in a row aborted"):
+        run_sweep(spec, four, lambda unit: DeadServerModel(unit.task), journal_dir=tmp_path / "journals",
+                  sweep_dir=tmp_path / "sweeps", abort_limit=2)
+
+    assert len(scored_lines(tmp_path / "sweeps" / "server-died.scores.jsonl")) == 2  # the rest never started
+    scores = run_sweep(spec, four, lambda unit: ScriptedTaskModel(unit.task), journal_dir=tmp_path / "journals",
+                       sweep_dir=tmp_path / "sweeps")
+    assert len(scores) == 4 and all(s.task_success for s in scores)

@@ -219,7 +219,15 @@ def render_report(
 
     aborted = [score for score in scores if score.aborted]
     out += ["### Infrastructure aborts", ""]
-    out += [f"- `{score.episode_id}` ({score.task_id}, {score.variant}, {score.policy})" for score in aborted] or ["- None."]
+    out += [
+        f"- `{score.episode_id}` ({score.task_id}, {score.variant}, {score.policy}"
+        f"{', ' + score.error_code if score.error_code else ''})"
+        for score in aborted
+    ] or ["- None."]
+    retried = [score for score in scores if score.attempt > 1]
+    if retried:
+        out += ["", f"{len(retried)} episode(s) were rerun after an infrastructure abort; each row above and in the "
+                "tables is the latest attempt. Earlier attempts stay in the scores file and on Drive."]
     out.append("")
 
     out += ["## 3. Failure taxonomy", ""]

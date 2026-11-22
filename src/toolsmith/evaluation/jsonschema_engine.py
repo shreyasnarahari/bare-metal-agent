@@ -5,7 +5,8 @@ from typing import Any
 
 from ..api import APIError
 from .models import Mode
-from .policies import exception_error_code
+from .policies import exception_error_code, is_infrastructure_error
+from .runner import InfrastructureError
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,8 @@ class JSONSchemaEngineCore:
                 extra_body={"chat_template_kwargs": {"enable_thinking": thinking}},
             ).model_dump()
         except APIError as exc:
+            if is_infrastructure_error(exc):
+                raise InfrastructureError("jsonschema", f"{type(exc).__name__}: {exc}") from exc
             compile_failure = exc.code in {"unsupported_schema", "incompatible_response_format"}
             return JSONGenerationResult(
                 "",
@@ -66,6 +69,9 @@ class JSONSchemaEngineCore:
                 str(exc),
             )
         except Exception as exc:
+            # A dead or hung server is not a failed generation: the split is redone after a restart.
+            if is_infrastructure_error(exc):
+                raise InfrastructureError("jsonschema", f"{type(exc).__name__}: {exc}") from exc
             code = exception_error_code(exc)
             compile_failure = code in {
                 "unsupported_schema",

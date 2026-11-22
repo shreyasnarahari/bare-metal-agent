@@ -352,3 +352,12 @@ def test_the_sweep_and_cleanup_flush_drive():
     assert "sync_drive(BACKGROUND, stage='steadyhand-sweep')" in notebook_source("steadyhand-sweep")
     assert "sync_drive(BACKGROUND, stage='cleanup', remount=False)" in notebook_source("cleanup")
     assert "from toolsmith.drive import ensure_drive, sync_drive" in notebook_source("hardware")
+
+
+def test_a_sweep_interrupted_by_a_dead_server_restarts_it_once():
+    server, sweep = notebook_source("steadyhand-server"), notebook_source("steadyhand-sweep")
+
+    assert "def start_steadyhand_runtime():" in server and "global STEADYHAND_ACTIVE" in server
+    assert "steadyhand_active = start_steadyhand_runtime()" in server
+    assert "except SweepInterrupted as steadyhand_error:" in sweep and "for steadyhand_attempt in (1, 2):" in sweep
+    assert "steadyhand_active = start_steadyhand_runtime()" in sweep and "ensure_drive()" in sweep

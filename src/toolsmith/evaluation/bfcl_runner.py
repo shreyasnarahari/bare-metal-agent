@@ -8,7 +8,14 @@ from typing import Any
 from ..protocols import ToolProtocol
 from .bfcl_adapter import constraint_support, decoded_calls, result_entry
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
-from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
+from .own_runner import infrastructure_error
+from .policies import (
+    calls_match_schema,
+    exception_error_code,
+    is_infrastructure_error,
+    repair_eligible,
+    reuse_grammar_result,
+)
 from .runner import EVAL_WORKERS, CheckpointRunner
 
 
@@ -60,7 +67,7 @@ class BFCLRunner:
         except Exception as exc:
             elapsed = time.perf_counter() - started
             code = exception_error_code(exc)
-            return CaseResult(
+            result = CaseResult(
                 case_id,
                 category,
                 self.config.model,
@@ -72,6 +79,9 @@ class BFCLRunner:
                 error={"code": code, "message": str(exc)},
                 grammar_sha256=support.grammar_sha256 if support else None,
             )
+            if is_infrastructure_error(exc):
+                raise infrastructure_error(case_id, exc, result) from exc
+            return result
         details = response.get("toolsmith", {})
         repairs = details.get("repair_attempts", 0)
         return CaseResult(

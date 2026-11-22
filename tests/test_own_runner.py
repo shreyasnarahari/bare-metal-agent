@@ -192,14 +192,32 @@ def test_repair_reuse_skips_success_and_backend_but_repairs_parse_failure(tmp_pa
     assert len(resumed) == 4
 
 
-def test_backend_error_is_explicit_result():
+def broken_client(error):
     class Broken:
         def create(self, **kwargs):
-            raise APIError("backend", code="backend_error")
+            raise error
 
-    client = type("Client", (), {"chat": type("Chat", (), {"completions": Broken()})()})()
-    result = OwnRunner(client, RunConfig("run", "own", "m", Mode.PROMPT), []).execute(case())
+    return type("Client", (), {"chat": type("Chat", (), {"completions": Broken()})()})()
 
-    assert result.status == "error"
-    assert result.error["code"] == "backend_error"
-    assert not result.parse_valid
+
+def test_a_backend_failure_is_not_a_result_but_keeps_an_explicit_fallback():
+    import pytest
+
+    from toolsmith.evaluation.runner import InfrastructureError
+
+    runner = OwnRunner(broken_client(APIError("backend", code="backend_error")), RunConfig("run", "own", "m", Mode.PROMPT), [])
+    with pytest.raises(InfrastructureError) as caught:
+        runner.execute(case())
+
+    fallback = caught.value.fallback
+    assert fallback.status == "error" and not fallback.parse_valid
+    assert fallback.error["code"] == "infrastructure_retries_exhausted"
+    assert fallback.attempts[0].error["code"] == "backend_error"  # the original failure is kept
+
+
+def test_a_model_output_failure_is_still_a_result():
+    runner = OwnRunner(broken_client(APIError("truncated", code="completion_truncated")), RunConfig("run", "own", "m", Mode.PROMPT), [])
+
+    result = runner.execute(case())
+
+    assert result.status == "error" and result.error["code"] == "completion_truncated"

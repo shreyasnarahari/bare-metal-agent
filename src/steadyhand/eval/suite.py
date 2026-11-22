@@ -25,7 +25,7 @@ import threading
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -307,6 +307,8 @@ class EpisodeScore:
     problems: tuple[str, ...]
     episode_id: str
     journal_path: str
+    error_code: str | None = None  # why an aborted episode stopped (backend_timeout, completion_truncated, ...)
+    attempt: int = 1  # 2 or more when the sweep reran the unit after an infrastructure abort
 
     @property
     def recovery_match(self) -> bool:
@@ -407,6 +409,7 @@ def score_episode(
         problems=tuple(problems),
         episode_id=started["episode_id"],
         journal_path=str(journal_path),
+        error_code=finished.get("error_code") if aborted else None,
     )
 
 
@@ -706,6 +709,22 @@ class SweepSpec:
         return units
 
 
+# Episodes that stopped because the server failed (not the model, not a token limit) are rerun,
+# under a new run label so they get a new episode id, up to SWEEP_RETRIES more times.
+INFRASTRUCTURE_ABORTS = frozenset({
+    "backend_error", "backend_timeout", "backend_connection_error", "invalid_backend_response",
+})
+SWEEP_RETRIES = 2
+
+
+class SweepInterrupted(RuntimeError):
+    """Too many episodes in a row aborted on infrastructure: the server is probably down."""
+
+
+def infrastructure_abort(score: EpisodeScore) -> bool:
+    return score.aborted and score.error_code in INFRASTRUCTURE_ABORTS
+
+
 # The slot count may differ between resumes (the probe shrinks it when VRAM is short); episodes
 # do not depend on it. Per-slot context, KV cache type, GPU and model still must match.
 SWEEP_SHAPE_KEYS = ("parallel", "context_size")
@@ -720,7 +739,12 @@ def sweep_identity(spec_dict: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def load_scores(path: str | Path) -> dict[str, EpisodeScore]:
-    """Scored units from a sweep's scores file, skipping segment events.
+    """The latest score of each unit in a sweep's scores file."""
+    return {unit: attempts[-1] for unit, attempts in score_history(path).items()}
+
+
+def score_history(path: str | Path) -> dict[str, list[EpisodeScore]]:
+    """Every scored attempt of each unit, oldest first, skipping segment events.
 
     A copy taken mid-write (from Drive after a disconnect) can end in a partial
     line; that line is dropped and its episode simply runs again.
@@ -728,7 +752,7 @@ def load_scores(path: str | Path) -> dict[str, EpisodeScore]:
     path = Path(path)
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
-    done: dict[str, EpisodeScore] = {}
+    done: dict[str, list[EpisodeScore]] = {}
     for index, line in enumerate(lines):
         if not line.strip():
             continue
@@ -740,7 +764,7 @@ def load_scores(path: str | Path) -> dict[str, EpisodeScore]:
             raise
         if record.get("event", "episode_scored") != "episode_scored":
             continue
-        done[record["unit"]] = EpisodeScore.from_dict(record)
+        done.setdefault(record["unit"], []).append(EpisodeScore.from_dict(record))
     return done
 
 
@@ -758,6 +782,8 @@ def run_sweep(
     secrets: Sequence[str] = (),
     mirror_dir: str | Path | None = None,
     mirror_seconds: float = 30.0,
+    retries: int = SWEEP_RETRIES,
+    abort_limit: int | None = None,
 ) -> list[EpisodeScore]:
     """Run every unit of ``spec`` not already scored, ``workers`` at a time.
 
@@ -769,6 +795,12 @@ def run_sweep(
     are restored from it first, so a sweep resumes on a fresh runtime after a
     disconnect, and the scores file is copied back at most every
     ``mirror_seconds`` (through ``copier`` when given) and once at the end.
+
+    A unit whose latest episode aborted on infrastructure is rerun (``retries``
+    times at most) under ``run_label="retry-<n>"``. After ``abort_limit``
+    infrastructure aborts in a row (default ``max(4, 2 * workers)``) no new
+    episode starts and :class:`SweepInterrupted` is raised: restart the server
+    and run again.
     """
     if spec.dataset_sha256 != dataset_sha256([task for task in tasks if task.task_id in set(spec.task_ids)]):
         raise SweepMismatch("dataset_sha256", spec.dataset_sha256, "the tasks given")
@@ -796,19 +828,36 @@ def run_sweep(
     else:
         atomic_write_json(manifest_path, spec.as_dict())
 
-    done = load_scores(scores_path) if scores_path.exists() else {}
+    history = score_history(scores_path) if scores_path.exists() else {}
+    done: dict[str, EpisodeScore] = {}
+    retry_labels: dict[str, str] = {}
+    for unit_key, attempts in history.items():
+        if infrastructure_abort(attempts[-1]) and len(attempts) <= retries:
+            retry_labels[unit_key] = f"retry-{len(attempts)}"
+        else:
+            done[unit_key] = attempts[-1]
     recorder = JsonlRecorder(scores_path, secrets=secrets)
     lock = threading.Lock()
+    limit = abort_limit or max(4, 2 * workers)
+    aborts_in_a_row = [0]
+    stop = threading.Event()
 
     def work(unit: SweepUnit) -> EpisodeScore | None:
+        if stop.is_set():
+            return None
         score = run_task(
             unit.task, unit.variant, policy=unit.policy, prompt_variant=unit.prompt_variant,
             directory=journal_dir, client=client_factory(unit), budgets=budgets, sleep=sleep, secrets=secrets,
+            run_label=retry_labels.get(unit.key),
         )
         if score is None:
             return None
+        score = replace(score, attempt=len(history.get(unit.key, ())) + 1)
         with lock:
             recorder.append({"event": "episode_scored", "unit": unit.key, **score.as_dict()})
+            aborts_in_a_row[0] = aborts_in_a_row[0] + 1 if infrastructure_abort(score) else 0
+            if aborts_in_a_row[0] >= limit:
+                stop.set()
         scores_store.sync()
         if copier is not None:
             copier.submit(score.journal_path)
@@ -831,6 +880,12 @@ def run_sweep(
     finally:
         with lock:
             scores_store.sync(force=True)
+    if stop.is_set():
+        raise SweepInterrupted(
+            f"{aborts_in_a_row[0]} episodes in a row aborted on infrastructure (last: "
+            f"{next((s.error_code for s in reversed(fresh) if s is not None), None)}); no new episode was started. "
+            "Restart llama-server and run the sweep again: aborted episodes are rerun."
+        )
     return [*done.values(), *[score for score in fresh if score is not None]]
 
 
@@ -888,18 +943,25 @@ __all__ = [
     "RECOVERY_LABELS",
     "ScriptedTaskModel",
     "StoreDiff",
+    "INFRASTRUCTURE_ABORTS",
+    "SWEEP_RETRIES",
+    "SweepInterrupted",
     "SweepMismatch",
     "SweepSpec",
     "SweepUnit",
     "Task",
     "dataset_sha256",
+    "infrastructure_abort",
+    "load_scores",
     "load_tasks",
     "recovery_class",
     "run_cpu_suite",
     "run_sweep",
     "run_task",
     "score_diff",
+    "score_history",
     "score_episode",
     "store_diff",
+    "sweep_identity",
     "validate_tasks",
 ]

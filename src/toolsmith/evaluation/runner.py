@@ -18,8 +18,40 @@ from .models import CaseResult, RunConfig
 EVAL_WORKERS = 4
 
 
+# A case whose requests failed on infrastructure this many times (across resumes) is recorded
+# as an error so the run can finish; until then nothing is recorded and a rerun retries it.
+INFRASTRUCTURE_RETRIES = 3
+
+
 class ManifestMismatchError(ValueError):
     pass
+
+
+class InfrastructureError(RuntimeError):
+    """A case could not run because the serving stack failed. It must not become a result.
+
+    ``fallback`` is the error result to record once the case has failed this
+    way ``INFRASTRUCTURE_RETRIES`` times.
+    """
+
+    def __init__(self, case_id: str, message: str, *, fallback: CaseResult | None = None) -> None:
+        super().__init__(f"{case_id}: {message}")
+        self.case_id = case_id
+        self.message = message
+        self.fallback = fallback
+
+
+class InfrastructureFailure(RuntimeError):
+    """A run stopped because the serving stack failed; the affected cases were not recorded."""
+
+    def __init__(self, path: Path, failures: list[tuple[str, str]]) -> None:
+        first_case, first_message = failures[0]
+        super().__init__(
+            f"{len(failures)} case(s) in {path.name} hit infrastructure errors (first: {first_case}: "
+            f"{first_message[:300]}). Nothing was recorded for them, so a rerun retries them."
+        )
+        self.path = path
+        self.failures = failures
 
 
 def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
@@ -72,9 +104,16 @@ class CheckpointRunner:
         self.store = path if isinstance(path, MirroredFile) else MirroredFile(path)
         self.path = self.store.local
         self._sidecar = self.store.sibling(".manifest.json")
-        self.store.restore()
-        self._sidecar.restore()
+        self._infra = self.store.sibling(".infra.jsonl")
+        for store in (self.store, self._sidecar, self._infra):
+            store.restore()
         trim_partial_line(self.path)
+        trim_partial_line(self._infra.local)
+        self.infrastructure_attempts: dict[str, int] = {}
+        if self._infra.local.exists():
+            for line in self._infra.local.read_text().splitlines():
+                case_id = json.loads(line)["case_id"]
+                self.infrastructure_attempts[case_id] = self.infrastructure_attempts.get(case_id, 0) + 1
         self.manifest_sha256 = manifest_sha256
         self.manifest = manifest
         self.completed: dict[str, CaseResult] = {}
@@ -116,9 +155,18 @@ class CheckpointRunner:
         self.store.sync()
 
     def sync(self) -> None:
-        """Copy the checkpoint and its manifest to durable storage now."""
-        self.store.sync(force=True)
-        self._sidecar.sync(force=True)
+        """Copy the checkpoint, its manifest, and its infrastructure log to durable storage now."""
+        for store in (self.store, self._sidecar, self._infra):
+            store.sync(force=True)
+
+    def _record_infrastructure(self, error: InfrastructureError) -> bool:
+        """Log an infrastructure failure; True once the case has used up its retries."""
+        self._infra.local.parent.mkdir(parents=True, exist_ok=True)
+        with self._infra.local.open("a", encoding="utf-8") as output:
+            output.write(json.dumps({"case_id": error.case_id, "message": error.message[:2000]}) + "\n")
+        attempts = self.infrastructure_attempts.get(error.case_id, 0) + 1
+        self.infrastructure_attempts[error.case_id] = attempts
+        return attempts >= INFRASTRUCTURE_RETRIES and error.fallback is not None
 
     def run(
         self,
@@ -150,23 +198,42 @@ class CheckpointRunner:
         execute: Callable[[dict[str, Any]], CaseResult],
         workers: int,
     ) -> None:
+        """Run the pending cases. An infrastructure error stops new cases from starting; the
+        ones in flight finish, and the run raises ``InfrastructureFailure`` without recording
+        anything for the failed cases (a rerun retries them)."""
+        lock = threading.Lock()
+        stop = threading.Event()
+        failures: list[tuple[str, str]] = []
+
         def run_one(item: tuple[Any, dict[str, Any]]) -> None:
             case_id, case = item
-            result = execute(case)
+            if stop.is_set():
+                return
+            try:
+                result = execute(case)
+            except InfrastructureError as error:
+                with lock:
+                    if self._record_infrastructure(error):
+                        self.append(error.fallback)  # retries used up: recorded, visibly, as an error
+                    else:
+                        failures.append((str(case_id), error.message))
+                        stop.set()
+                return
             if result.case_id != case_id:
                 raise ValueError(f"Executor returned {result.case_id} for {case_id}")
             with lock:
                 self.append(result)
 
-        lock = threading.Lock()
         if workers == 1 or len(pending) == 1:
             for item in pending:
                 run_one(item)
-            return
-        with ThreadPoolExecutor(max_workers=min(workers, len(pending))) as pool:
-            futures = [pool.submit(run_one, item) for item in pending]
-            for future in futures:
-                future.result()
+        else:
+            with ThreadPoolExecutor(max_workers=min(workers, len(pending))) as pool:
+                futures = [pool.submit(run_one, item) for item in pending]
+                for future in futures:
+                    future.result()
+        if failures:
+            raise InfrastructureFailure(self.path, failures)
 
 
 class IdentityMismatchError(ManifestMismatchError):
@@ -210,7 +277,10 @@ def atomic_write_json(path: str | Path, value: Any) -> Path:
 
 __all__ = [
     "EVAL_WORKERS",
+    "INFRASTRUCTURE_RETRIES",
     "CheckpointRunner",
+    "InfrastructureError",
+    "InfrastructureFailure",
     "IdentityMismatchError",
     "manifest_differences",
     "manifest_sidecar",

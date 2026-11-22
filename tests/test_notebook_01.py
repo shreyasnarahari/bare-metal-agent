@@ -317,7 +317,8 @@ def test_day10_cells_use_every_slot_and_vcpu():
     assert "clone_pool.submit(checkout_pinned" in setup
     assert "parallel_compile_coverage(" in coverage and "workers=coverage_workers" in coverage
     assert "copy_file_atomic(coverage_local, DAY10_RECORDS / 'schema-coverage.jsonl')" in coverage
-    assert generation.count("load_dataset(") == 1 and "workers=active['identity']['parallel']" in generation
+    assert generation.count("load_dataset(") == 1 and "workers=DAY10_SLOTS" in generation
+    assert "run_with_restart(profile, lambda: generate_jsonschema(profile))" in generation
     assert "read_identified_json(report_path, identity)" in generation
     assert "workers=HARDWARE.hf_processes()" in hf and "run_hf_units(" in hf
     assert "BACKGROUND.wait('maskbench-peers')" in maskbench and "workers=HARDWARE.peer_workers()" in maskbench
@@ -346,7 +347,7 @@ def test_day10_manifests_include_the_runtime_identity_and_size_workers_to_slots(
     helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
     pilot = "".join(notebook_cell("day10-bfcl-pilot")["source"])
 
-    assert "'runtime': active['identity']" in helpers
+    assert "'runtime': day10_identity(profile)" in helpers and "'identity': day10_identity(profile)" in helpers
     for key in ("'compute_cap'", "'llama_cpp_ref'", "'context_size'", "'parallel'", "'per_slot_context'"):
         assert key in helpers
     assert helpers.count("manifest=manifest, workers=workers") == 1 and "manifest=repair_manifest, workers=workers" in helpers
@@ -370,3 +371,16 @@ def test_day10_results_are_local_first_and_flushed_to_drive():
                     "day10-schema-coverage", "day10-jsonschema-generation", "day10-hf-jsonschema", "day10-maskbench"):
         assert f"sync_drive(BACKGROUND, stage='{cell_id}')" in "".join(notebook_cell(cell_id)["source"]), cell_id
     assert "sync_drive(BACKGROUND, stage='cleanup', remount=False)" in cleanup
+
+
+def test_day10_runs_restart_a_failed_server_once_and_start_it_only_when_needed():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+    pilot = "".join(notebook_cell("day10-bfcl-pilot")["source"])
+
+    assert "except (InfrastructureFailure, InfrastructureError) as error:" in helpers
+    assert "for attempt in (1, 2):" in helpers and "server.log_tail(40)" in helpers
+    assert "outputs = run_with_restart(profile, run)" in helpers and "outputs = run_with_restart(profile, run)" in pilot
+    # The runtime starts on the first request, not before: a finished run never loads the model.
+    assert "Day10Client(profile, 'own', mode)" in helpers and "Day10Client(profile, 'bfcl', mode)" in pilot
+    assert "active = start_day10_runtime(profile)" not in helpers + pilot
+    assert "if DAY10_ACTIVE.get('profile') != self.profile:" in helpers  # a dead server is not silently restarted

@@ -9,8 +9,23 @@ from typing import Any
 from .bfcl_adapter import decoded_calls
 from .metrics import calls_equal
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
-from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
-from .runner import EVAL_WORKERS, CheckpointRunner
+from .policies import (
+    calls_match_schema,
+    exception_error_code,
+    is_infrastructure_error,
+    repair_eligible,
+    reuse_grammar_result,
+)
+from .runner import EVAL_WORKERS, CheckpointRunner, InfrastructureError
+
+def infrastructure_error(case_id: str, exc: BaseException, result: CaseResult) -> InfrastructureError:
+    """The serving stack failed: raise instead of recording ``result``, which becomes the
+    fallback once the case has failed this way ``INFRASTRUCTURE_RETRIES`` times."""
+    message = f"{type(exc).__name__}: {exc}"
+    fallback = dataclasses.replace(
+        result, error={"code": "infrastructure_retries_exhausted", "message": message},
+    )
+    return InfrastructureError(case_id, message, fallback=fallback)
 
 
 class OwnRunner:
@@ -45,7 +60,7 @@ class OwnRunner:
                 exc, (json.JSONDecodeError, KeyError, TypeError, ValueError)
             ):
                 code = "invalid_tool_call_json"
-            return CaseResult(
+            result = CaseResult(
                 case["case_id"],
                 case["category"],
                 self.config.model,
@@ -54,6 +69,9 @@ class OwnRunner:
                 attempts=(AttemptRecord(0, None, elapsed, error={"code": code, "message": str(exc)}),),
                 error={"code": code, "message": str(exc)},
             )
+            if is_infrastructure_error(exc):
+                raise infrastructure_error(case["case_id"], exc, result) from exc
+            return result
         elapsed = time.perf_counter() - started
         semantic = calls_equal(calls, case["expected_calls"], case["comparison"])
         if case["comparison"] == "none":
