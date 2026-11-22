@@ -127,3 +127,43 @@ def test_atomic_report_and_metrics(tmp_path):
 def test_run_config_serializes_mode():
     config = RunConfig("run", "own", "model", Mode.GRAMMAR)
     assert config.as_dict()["mode"] == "grammar"
+
+
+def test_checkpoint_mismatch_names_the_fields_that_changed(tmp_path):
+    import pytest
+
+    from toolsmith.evaluation.models import CaseResult
+    from toolsmith.evaluation.runner import CheckpointRunner, ManifestMismatchError, manifest_sidecar
+
+    path = tmp_path / "own-qwen3-prompt.jsonl"
+    t4 = {"config": {"mode": "prompt"}, "runtime": {"compute_cap": "75", "parallel": 4}}
+    l4 = {"config": {"mode": "prompt"}, "runtime": {"compute_cap": "89", "parallel": 8}}
+    first = CheckpointRunner(path, "hash-t4", manifest=t4)
+    sample = result()
+    first.append(sample)
+    assert manifest_sidecar(path).is_file()
+
+    with pytest.raises(ManifestMismatchError) as caught:
+        CheckpointRunner(path, "hash-l4", manifest=l4)
+    message = str(caught.value)
+    assert "runtime.compute_cap: recorded '75', current '89'" in message
+    assert "runtime.parallel: recorded 4, current 8" in message
+    assert "config.mode" not in message
+    assert CheckpointRunner(path, "hash-t4", manifest=t4).completed == {sample.case_id: sample}
+    with pytest.raises(ManifestMismatchError, match="different run configuration"):
+        CheckpointRunner(path, "hash-other")  # without a manifest the old message still applies
+
+
+def test_identified_json_skips_a_match_and_refuses_a_different_runtime(tmp_path):
+    import pytest
+
+    from toolsmith.evaluation.runner import IdentityMismatchError, read_identified_json, write_identified_json
+
+    path = tmp_path / "jsonschema-qwen3-prompt-Github_easy.json"
+    identity = {"gpu_family": "T4", "parallel": 4}
+    assert read_identified_json(path, identity) is None
+    write_identified_json(path, {"compliance": 0.9}, identity)
+
+    assert read_identified_json(path, identity)["compliance"] == 0.9
+    with pytest.raises(IdentityMismatchError, match="parallel: recorded 4, current 8"):
+        read_identified_json(path, {"gpu_family": "T4", "parallel": 8})

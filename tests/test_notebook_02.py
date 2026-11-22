@@ -302,11 +302,11 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
 
 
 @pytest.mark.parametrize(("output", "family"), [("Tesla T4, 7.5, 15360\n", "T4"), ("NVIDIA L4, 8.9, 23034\n", "L4")])
-def test_the_hardware_cell_detects_the_runtime(monkeypatch, background_logs, output, family):
+def test_the_hardware_cell_detects_the_runtime(tmp_path, monkeypatch, background_logs, output, family):
     import toolsmith.hardware as hardware
 
     monkeypatch.setattr(hardware, "query_gpus", lambda: output)
-    namespace = {}
+    namespace = {"DRIVE_ROOT": tmp_path / "toolsmith"}
 
     exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
 
@@ -316,6 +316,10 @@ def test_the_hardware_cell_detects_the_runtime(monkeypatch, background_logs, out
     assert jobs.log_dir == background_logs
     exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
     assert namespace["BACKGROUND"] is jobs  # a rerun keeps the running jobs
+    assert namespace["DRIVE_RECORDS"] == tmp_path / "toolsmith" / "records" / family.lower()
+    assert namespace["DRIVE_RECORDS"].is_dir()
+    stamp = namespace["RUNTIME_STAMP"]()["runtime"]
+    assert stamp["gpu_family"] == family and stamp["background_jobs"] == []
 
 
 def test_the_hardware_cell_fails_fast_without_a_gpu(monkeypatch, background_logs):
@@ -323,4 +327,12 @@ def test_the_hardware_cell_fails_fast_without_a_gpu(monkeypatch, background_logs
 
     monkeypatch.setattr(hardware, "query_gpus", lambda: "")
     with pytest.raises(hardware.UnsupportedRuntime, match="Change runtime type"):
-        exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), {})
+        exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), {"DRIVE_ROOT": Path("/nonexistent")})
+
+
+def test_only_the_hardware_cell_defines_the_records_folder():
+    for path in (NOTEBOOK_PATH, TOOLSMITH_NOTEBOOK):
+        for cell in load(path)["cells"]:
+            if cell["cell_type"] == "code" and cell["id"] != "hardware":
+                assert "DRIVE_RECORDS =" not in "".join(cell["source"]), (path.name, cell["id"])
+    assert "DRIVE_ROOT / 'records' / HARDWARE.records_slug" in notebook_source("hardware")

@@ -9,7 +9,7 @@ from ..protocols import ToolProtocol
 from .bfcl_adapter import constraint_support, decoded_calls, result_entry
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
 from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
-from .runner import CheckpointRunner
+from .runner import EVAL_WORKERS, CheckpointRunner
 
 
 class BFCLRunner:
@@ -94,8 +94,17 @@ class BFCLRunner:
             },
         )
 
-    def run(self, entries: list[dict[str, Any]], checkpoint: str | Path, manifest_sha256: str) -> list[CaseResult]:
-        return CheckpointRunner(checkpoint, manifest_sha256).run(entries, self.execute)
+    def run(
+        self,
+        entries: list[dict[str, Any]],
+        checkpoint: str | Path,
+        manifest_sha256: str,
+        *,
+        manifest: dict[str, Any] | None = None,
+        workers: int = EVAL_WORKERS,
+    ) -> list[CaseResult]:
+        """``workers`` should equal the llama-server slots so every slot stays busy."""
+        return CheckpointRunner(checkpoint, manifest_sha256, manifest=manifest).run(entries, self.execute, workers=workers)
 
 
 def score_entries(results: list[Any], *, full: bool) -> list[dict[str, Any]]:
@@ -149,9 +158,12 @@ def run_bfcl_repair_with_reuse(
     runner,
     checkpoint,
     manifest_sha256,
+    *,
+    manifest=None,
+    workers=EVAL_WORKERS,
 ):
     entry_by_id = {entry["id"]: entry for entry in entries}
-    checkpoint_runner = CheckpointRunner(checkpoint, manifest_sha256)
+    checkpoint_runner = CheckpointRunner(checkpoint, manifest_sha256, manifest=manifest)
     remaining = []
     for result in grammar_results:
         if not reuse_grammar_result(result) and repair_eligible(result):
@@ -167,7 +179,7 @@ def run_bfcl_repair_with_reuse(
         )
         if result.case_id not in checkpoint_runner.completed:
             checkpoint_runner.append(reused)
-    checkpoint_runner.run(remaining, runner.execute)
+    checkpoint_runner.run(remaining, runner.execute, workers=workers)
     return [checkpoint_runner.completed[entry["id"]] for entry in entries]
 
 

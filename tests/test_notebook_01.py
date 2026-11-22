@@ -9,6 +9,10 @@ from toolsmith.recording import JsonlRecorder
 NOTEBOOK_PATH = Path(__file__).parent.parent / "notebooks" / "01_toolsmith.ipynb"
 
 
+def STAMP():
+    return {"runtime": {"gpu_family": "T4", "loadavg": [0.5, 0.5, 0.5], "background_jobs": []}}
+
+
 def notebook_cell(cell_id):
     notebook = json.loads(NOTEBOOK_PATH.read_text())
     return next(cell for cell in notebook["cells"] if cell["id"] == cell_id)
@@ -41,6 +45,7 @@ def test_notebook_streaming_replay_cell_records_valid_fixtures(tmp_path):
         "HF_TOKEN": "test-secret",
         "LOCAL_KEY": "test-secret",
         "JsonlRecorder": JsonlRecorder,
+        "RUNTIME_STAMP": STAMP,
     }
     source = "".join(notebook_cell("streaming-offline-replay")["source"])
 
@@ -56,6 +61,7 @@ def test_notebook_streaming_replay_cell_records_valid_fixtures(tmp_path):
     ]
     assert len(record["fixtures"][2]["tool_calls"]) == 2
     assert "test-secret" not in path.read_text()
+    assert record["runtime"]["gpu_family"] == "T4"  # every record carries the runtime stamp
 
 
 def test_notebook_grammar_offline_cell_records_artifacts(tmp_path):
@@ -66,6 +72,7 @@ def test_notebook_grammar_offline_cell_records_artifacts(tmp_path):
         "DRIVE_RECORDS": records,
         "HF_TOKEN": "test-secret",
         "LOCAL_KEY": "test-secret",
+        "RUNTIME_STAMP": STAMP,
     }
     source = "".join(notebook_cell("grammar-offline-corpus")["source"])
 
@@ -89,6 +96,7 @@ def test_notebook_sampler_offline_cell_records_differential_results(tmp_path):
         "DRIVE_RECORDS": records,
         "HF_TOKEN": "test-secret",
         "LOCAL_KEY": "test-secret",
+        "RUNTIME_STAMP": STAMP,
     }
     for cell_id in ("grammar-offline-corpus", "sampler-offline-differential"):
         source = "".join(notebook_cell(cell_id)["source"])
@@ -203,6 +211,7 @@ def test_notebook_day09_offline_replay_records_protocol_masks_and_repair(tmp_pat
         "DRIVE_RECORDS": records,
         "HF_TOKEN": "test-secret",
         "LOCAL_KEY": "test-secret",
+        "RUNTIME_STAMP": STAMP,
     }
     source = "".join(notebook_cell("day09-offline-replay")["source"])
 
@@ -276,3 +285,33 @@ def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch, s
     assert namespace["QWEN35_SERVER_BIN"] == namespace["QWEN35_LOCAL_BUILD"] / "bin" / "llama-server"
     assert namespace["QWEN35_DRIVE_MODEL_FILE"] == tmp_path / "models" / "0123456789ab-Qwen3.5-9B-Q4_K_M.gguf"
     assert namespace["qwen35_runtime_metadata"]["model_size"] == 1234
+
+
+def test_every_recorder_carries_the_runtime_stamp():
+    import re
+
+    notebook = json.loads(NOTEBOOK_PATH.read_text())
+    unstamped = []
+    for cell in notebook["cells"]:
+        source = "".join(cell["source"])
+        for match in re.finditer(r"JsonlRecorder\(", source):
+            depth, end = 0, match.end() - 1
+            for end in range(match.end() - 1, len(source)):
+                depth += {"(": 1, ")": -1}.get(source[end], 0)
+                if depth == 0:
+                    break
+            if "context=RUNTIME_STAMP" not in source[match.start():end]:
+                unstamped.append(cell["id"])
+    assert unstamped == []
+
+
+def test_day10_manifests_include_the_runtime_identity_and_size_workers_to_slots():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+    pilot = "".join(notebook_cell("day10-bfcl-pilot")["source"])
+
+    assert "'runtime': active['identity']" in helpers
+    for key in ("'compute_cap'", "'llama_cpp_ref'", "'context_size'", "'parallel'", "'per_slot_context'"):
+        assert key in helpers
+    assert helpers.count("manifest=manifest, workers=workers") == 1 and "manifest=repair_manifest, workers=workers" in helpers
+    assert "manifest=manifest, workers=workers" in pilot and "manifest=repair_manifest, workers=workers" in pilot
+    assert "canonical_hash({'config'" not in helpers + pilot

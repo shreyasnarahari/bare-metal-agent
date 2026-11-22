@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -39,13 +39,32 @@ def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
 
 
 class JsonlRecorder:
-    def __init__(self, path: str | Path, *, secrets: Iterable[str] = ()) -> None:
+    """Append redacted JSON records, one per line.
+
+    ``context`` (a mapping, or a zero-argument callable evaluated per record)
+    adds fields such as the runtime stamp to every record. A record's own
+    fields win over context fields with the same name.
+    """
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        secrets: Iterable[str] = (),
+        context: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None = None,
+    ) -> None:
         self.path = Path(path)
         self._secrets = tuple(sorted({secret for secret in secrets if secret}, key=len, reverse=True))
+        self._context = context
 
     def snapshot(self, record: Mapping[str, Any]) -> dict[str, Any]:
         """The redacted, timestamped record that ``append`` would write, without writing it."""
-        snapshot = _redact(dict(record), self._secrets)
+        merged = dict(record)
+        if self._context is not None:
+            context = self._context() if callable(self._context) else self._context
+            for key, value in context.items():
+                merged.setdefault(key, value)
+        snapshot = _redact(merged, self._secrets)
         snapshot.setdefault("recorded_at", datetime.now(timezone.utc).isoformat())
         return snapshot
 

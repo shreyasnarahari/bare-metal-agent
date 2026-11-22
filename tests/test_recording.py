@@ -54,3 +54,25 @@ def test_snapshot_redacts_like_append_without_writing(tmp_path):
     assert snapshot["Authorization"] == "[redacted]"
     assert "recorded_at" in snapshot
     assert not path.exists()
+
+
+def test_context_is_added_to_every_record_without_overriding_its_fields(tmp_path):
+    from toolsmith.recording import JsonlRecorder
+
+    calls = []
+
+    def stamp():
+        calls.append(1)
+        return {"runtime": {"gpu_family": "T4", "note": "secret-value"}, "event": "from-context"}
+
+    recorder = JsonlRecorder(tmp_path / "records.jsonl", secrets=("secret-value",), context=stamp)
+    first = recorder.append({"event": "timing", "seconds": 1.5})
+    second = recorder.append({"event": "timing", "runtime": "own"})
+
+    assert first["runtime"]["gpu_family"] == "T4" and first["event"] == "timing"
+    assert first["runtime"]["note"] == "[redacted]"  # context is redacted like the record
+    assert second["runtime"] == "own"  # the record's own field wins
+    assert len(calls) == 2  # a callable context is evaluated per record
+
+    fixed = JsonlRecorder(tmp_path / "fixed.jsonl", context={"gpu": "L4"})
+    assert fixed.append({"event": "x"})["gpu"] == "L4"

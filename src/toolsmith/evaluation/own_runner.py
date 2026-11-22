@@ -10,7 +10,7 @@ from .bfcl_adapter import decoded_calls
 from .metrics import calls_equal
 from .models import AttemptRecord, CaseResult, Mode, RunConfig
 from .policies import calls_match_schema, exception_error_code, repair_eligible, reuse_grammar_result
-from .runner import CheckpointRunner
+from .runner import EVAL_WORKERS, CheckpointRunner
 
 
 class OwnRunner:
@@ -89,8 +89,17 @@ class OwnRunner:
             grammar_sha256=details.get("grammar_sha256"),
         )
 
-    def run(self, cases: list[dict[str, Any]], checkpoint: str | Path, manifest_sha256: str) -> list[CaseResult]:
-        return CheckpointRunner(checkpoint, manifest_sha256).run(cases, self.execute)
+    def run(
+        self,
+        cases: list[dict[str, Any]],
+        checkpoint: str | Path,
+        manifest_sha256: str,
+        *,
+        manifest: dict[str, Any] | None = None,
+        workers: int = EVAL_WORKERS,
+    ) -> list[CaseResult]:
+        """``workers`` should equal the llama-server slots so every slot stays busy."""
+        return CheckpointRunner(checkpoint, manifest_sha256, manifest=manifest).run(cases, self.execute, workers=workers)
 
 
 def run_repair_with_reuse(
@@ -99,9 +108,12 @@ def run_repair_with_reuse(
     runner: OwnRunner,
     checkpoint: str | Path,
     manifest_sha256: str,
+    *,
+    manifest: dict[str, Any] | None = None,
+    workers: int = EVAL_WORKERS,
 ) -> list[CaseResult]:
     case_by_id = {case["case_id"]: case for case in cases}
-    checkpoint_runner = CheckpointRunner(checkpoint, manifest_sha256)
+    checkpoint_runner = CheckpointRunner(checkpoint, manifest_sha256, manifest=manifest)
     remaining = []
     for result in grammar_results:
         if not reuse_grammar_result(result) and repair_eligible(result):
@@ -117,7 +129,7 @@ def run_repair_with_reuse(
         )
         if result.case_id not in checkpoint_runner.completed:
             checkpoint_runner.append(reused)
-    checkpoint_runner.run(remaining, runner.execute)
+    checkpoint_runner.run(remaining, runner.execute, workers=workers)
     return [checkpoint_runner.completed[case["case_id"]] for case in cases]
 
 
