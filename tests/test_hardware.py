@@ -104,3 +104,8 @@ def test_runtime_stamp_carries_identity_load_and_background_jobs():
 def test_summary_names_the_derived_settings():
     text = T4.summary()
     assert "Tesla T4 (sm_75" in text and "2 vCPUs" in text and "Day 10 slots 4" in text
+
+
+def test_runtime_stamp_carries_the_session_id():
+    assert runtime_stamp(T4, session_id="abc123")["runtime"]["session_id"] == "abc123"
+    assert runtime_stamp(T4)["runtime"]["session_id"] is None

@@ -236,6 +236,25 @@ class CheckpointRunner:
             raise InfrastructureFailure(self.path, failures)
 
 
+def completed_results(
+    path: str | Path | MirroredFile,
+    manifest_sha256: str,
+    ids: Iterable[Any],
+    *,
+    manifest: Mapping[str, Any] | None = None,
+) -> list[CaseResult] | None:
+    """A finished run's results, in ``ids`` order, read from its checkpoint without running anything.
+
+    ``None`` when any case is missing, so a report cell never mistakes a
+    partial run for a complete one.
+    """
+    runner = CheckpointRunner(path, manifest_sha256, manifest=manifest)
+    ids = list(ids)
+    if any(case_id not in runner.completed for case_id in ids):
+        return None
+    return [runner.completed[case_id] for case_id in ids]
+
+
 class IdentityMismatchError(ManifestMismatchError):
     pass
 
@@ -282,6 +301,7 @@ __all__ = [
     "InfrastructureError",
     "InfrastructureFailure",
     "IdentityMismatchError",
+    "completed_results",
     "manifest_differences",
     "manifest_sidecar",
     "read_identified_json",

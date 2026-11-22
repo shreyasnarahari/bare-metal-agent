@@ -361,3 +361,17 @@ def test_a_sweep_interrupted_by_a_dead_server_restarts_it_once():
     assert "steadyhand_active = start_steadyhand_runtime()" in server
     assert "except SweepInterrupted as steadyhand_error:" in sweep and "for steadyhand_attempt in (1, 2):" in sweep
     assert "steadyhand_active = start_steadyhand_runtime()" in sweep and "ensure_drive()" in sweep
+
+
+def test_records_carry_a_session_id_and_the_intro_explains_resuming(tmp_path, monkeypatch, background_logs):
+    import toolsmith.hardware as hardware
+
+    monkeypatch.setattr(hardware, "query_gpus", lambda: "Tesla T4, 7.5, 15360\n")
+    namespace = {"DRIVE_ROOT": tmp_path / "toolsmith"}
+    exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
+    session = namespace["SESSION_ID"]
+    exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
+
+    assert namespace["SESSION_ID"] == session  # stable for this kernel
+    assert namespace["RUNTIME_STAMP"]()["runtime"]["session_id"] == session
+    assert "run all cells from the top" in notebook_source("introduction")

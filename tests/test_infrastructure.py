@@ -104,3 +104,13 @@ def test_a_case_that_keeps_failing_on_infrastructure_is_recorded_after_the_retri
     assert [result.status for result in results] == ["error", "success"]
     assert results[0].error["code"] == "infrastructure_retries_exhausted"
     assert len((tmp_path / "bfcl.jsonl.infra.jsonl").read_text().splitlines()) == INFRASTRUCTURE_RETRIES
+
+
+def test_completed_results_reads_a_finished_run_only(tmp_path):
+    from toolsmith.evaluation.runner import completed_results
+
+    path = tmp_path / "own.jsonl"
+    CheckpointRunner(path, "sha").run([{"case_id": "a"}, {"case_id": "b"}], lambda case: ok(case["case_id"]), workers=1)
+
+    assert [r.case_id for r in completed_results(path, "sha", ["b", "a"])] == ["b", "a"]
+    assert completed_results(path, "sha", ["a", "b", "c"]) is None  # a partial run is not a result

@@ -199,8 +199,9 @@ def test_notebook_bfcl_pilot_checkpoints_do_not_collide_with_full_runs():
     source = "".join(notebook_cell("day10-bfcl-pilot")["source"])
 
     assert "suffix = '' if limit is None else f'-pilot{limit}'" in source
-    assert "{mode.value}{suffix}.jsonl'" in source
-    assert "-repair{suffix}.jsonl'" in source
+    assert "day10_checkpoint(f'bfcl-{profile.name}-{category}-{mode.value}{suffix}.jsonl')" in source
+    assert "for mode in (Mode.PROMPT, Mode.GRAMMAR, Mode.THINKING, Mode.REPAIR):" in source  # repair too
+    assert "if limit is None:  # a pilot is never scored as the full run" in source
 
 
 def test_notebook_day09_offline_replay_records_protocol_masks_and_repair(tmp_path):
@@ -365,7 +366,8 @@ def test_day10_results_are_local_first_and_flushed_to_drive():
 
     assert "MirroredFile(DAY10_LOCAL / name, DAY10_RECORDS / name" in helpers
     assert "DAY10_RECORDS / f'own-" not in helpers and "DAY10_RECORDS / f'bfcl-" not in pilot
-    assert "day10_checkpoint(f'own-{profile.name}-repair.jsonl')" in helpers
+    assert "day10_checkpoint(f'own-{profile.name}-{mode.value}.jsonl')" in helpers
+    assert "for mode in (Mode.PROMPT, Mode.GRAMMAR, Mode.THINKING, Mode.REPAIR):" in helpers
     assert "log_path=DAY10_LOGS / f'{profile.name}-server.log'" in helpers  # no open file on Drive
     assert "copy_file_atomic(server_log, DAY10_RECORDS / server_log.name)" in helpers
     assert "os.environ['HF_DATASETS_CACHE'] = '/content/hf-datasets'" in setup
@@ -396,3 +398,17 @@ def test_long_cells_check_drive_and_network_calls_cannot_hang():
         assert "".join(notebook_cell(cell_id)["source"]).startswith("ensure_drive()"), cell_id
     assert setup.count("check=True, timeout=1800)") == 2
     assert "'HF_HUB_DOWNLOAD_TIMEOUT': '60'" in hardware and "'GIT_HTTP_LOW_SPEED_TIME': '60'" in hardware
+
+
+def test_report_cells_read_finished_runs_back_without_starting_a_server():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+    pilot = "".join(notebook_cell("day10-bfcl-pilot")["source"])
+    score = "".join(notebook_cell("day10-bfcl-score")["source"])
+    report = "".join(notebook_cell("day10-report")["source"])
+
+    assert "def load_day10_own(profile):" in helpers and "completed_results(checkpoint" in helpers
+    assert "def load_day10_bfcl(profile):" in pilot and "completed_results(checkpoint" in pilot
+    assert "loaded = load_day10_bfcl(profile)" in score and "Not scored." in score
+    assert "loaded = load_day10_own(profile)" in report and "if 'custom_results' not in globals():" in report
+    for cell in ("introduction",):
+        assert "run all cells from the top" in "".join(notebook_cell(cell)["source"])

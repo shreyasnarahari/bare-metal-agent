@@ -223,8 +223,12 @@ def require_supported(hardware: Hardware) -> None:
         )
 
 
-def runtime_stamp(hardware: Hardware, jobs: Any = None) -> dict[str, Any]:
-    """Hardware identity plus how busy the machine is right now, for timing records."""
+def runtime_stamp(hardware: Hardware, jobs: Any = None, session_id: str | None = None) -> dict[str, Any]:
+    """Hardware identity plus how busy the machine is right now, for timing records.
+
+    ``session_id`` (one per kernel) tells records written by a rerun after a
+    disconnect apart from the first run's.
+    """
     try:
         load = [round(value, 2) for value in os.getloadavg()]
     except OSError:
@@ -235,6 +239,7 @@ def runtime_stamp(hardware: Hardware, jobs: Any = None) -> dict[str, Any]:
             **hardware.identity(),
             "loadavg": load,
             "background_jobs": active() if active else [],
+            "session_id": session_id,
         },
     }
 

@@ -55,6 +55,35 @@ Each Day 10 request pool sends one request per server slot. Any other GPU uses t
   - Running out of VRAM drops one slot.
   - Sweeps mirror their scores to Drive and resume from that copy after a disconnect.
 
+### Disconnects, hangs, and Colab Pro
+
+A Colab session can disconnect, hang, or lose its Drive mount. Recovery is always the same: reconnect, then run all cells from the top.
+
+- **Durable copies.** Checkpoints, scores, and coverage are written on local disk and copied to Drive as whole-line atomic snapshots (`MirroredFile`): every minute for Day 10 checkpoints, every 30 s for Steadyhand scores, and every 2 minutes for coverage. A fresh runtime restores from those copies. A copy cut off mid-line is repaired before anything is appended to it.
+- **Flushing Drive.** Colab uploads Drive writes in the background, so each long cell ends with `sync_drive` (`flush_and_unmount`, then mount again), and cleanup flushes and unmounts. If remounting asks you to authorize again, set `TOOLSMITH_DRIVE_SYNC=cleanup` to flush only in cleanup.
+- **Serving failures are never results.** A connection error, a timeout, or a 502–504 from the shim is not recorded as a case result. The run stops new work, restarts llama-server once, and resumes. A case that fails this way three times is recorded as `infrastructure_retries_exhausted`. Steadyhand reruns an episode that aborted on infrastructure up to twice, under a new episode ID. It stops the sweep, restarts the server, and resumes when episodes keep aborting.
+- **Nothing waits forever.**
+  - Clones and builds are killed when their logs stall (10 and 20 minutes).
+  - git aborts a transfer that crawls.
+  - Hugging Face requests time out.
+  - A background job that goes silent is reported.
+  - Long cells probe Drive first and remount it if it hung.
+  - The Steadyhand journal copier never blocks the sweep workers.
+
+| Section | Resumes at | A disconnect loses |
+|---|---|---|
+| Setup | Drive caches for the builds and GGUFs | an unfinished llama.cpp build, unless only the kernel restarted |
+| Day 10 own set and BFCL | each finished case | cases in flight and the last minute not yet copied |
+| JSONSchemaBench generation | each finished split per model and mode | the split in progress |
+| HF Qwen3-0.6B generation | each finished item | items in flight |
+| Schema coverage | each finished schema | up to 2 minutes of schemas |
+| MaskBench | each schema per engine | schemas in progress |
+| Steadyhand sweep | each scored episode | episodes in flight and up to 30 s of scores |
+
+Each row can also lose whatever Drive had not yet uploaded since the last `sync_drive`. The report cells read finished runs back from their checkpoints, so they work without rerunning generation and without loading a model.
+
+On Colab Pro (unlike Pro+), a session generally does not keep running in the background once the browser disconnects, so keep the tab open during long cells. The notebooks deliberately do not use keep-alive tricks; making resume cheap is what they rely on.
+
 ## Steadyhand: the agent loop
 
 `src/steadyhand/` is the agent loop that runs on top of the Toolsmith shim. The design notes are in `Steadyhand/`. It sends a conversation and tool schemas through `ToolsmithService.chat`, validates each native tool call, and runs it against an in-memory mock store. On a tool failure it applies one of six recovery policies, and it writes one append-only journal per episode. CPU replay of a journal reproduces the episode exactly.
