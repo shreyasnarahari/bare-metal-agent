@@ -75,6 +75,9 @@ class APIError(RuntimeError):
         self.error_type = error_type
         self.code = code
         self.repair_attempts = repair_attempts
+        # Raw model text behind a model-output failure, for in-process callers.
+        # Never part of body(), so HTTP responses do not echo model output.
+        self.raw_output: str | None = None
 
     def body(self) -> dict[str, Any]:
         error: dict[str, Any] = {
@@ -195,6 +198,7 @@ class ToolsmithService:
                     )
             except _ModelOutputError as exc:
                 error = self._model_output_error(exc, attempt)
+                error.raw_output = content
                 can_repair = attempt < self.repair_policy.max_repairs
                 self._record_non_stream(
                     request,
@@ -220,6 +224,7 @@ class ToolsmithService:
                 raise error from exc
             except APIError as exc:
                 exc.repair_attempts = attempt
+                exc.raw_output = content
                 can_repair = (
                     exc.code == "empty_model_response"
                     and attempt < self.repair_policy.max_repairs

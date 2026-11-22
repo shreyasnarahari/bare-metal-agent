@@ -6,21 +6,24 @@ typed arguments only, so ``store`` never appears in the schema. The registry
 stores the raw function on ``Tool.handler``, and the executor binds the store:
 ``handler(store, **arguments)``. Handlers return plain JSON-compatible dicts and
 raise ``NotFoundError`` for ids the store does not hold.
+
+``build_registry`` attaches each tool's policy and semantic check. Store rules
+that depend on state (ids exist, refund limits) are semantic checks, not
+JSON Schema keywords, so the schemas stay inside the grammar subset.
 """
 
 from __future__ import annotations
 
-import inspect
-from collections.abc import Callable
 from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated, Any
 
 from pydantic import Field
 
-from toolsmith.registry import Tool, ToolRegistry
-
+from .policy import Effect, RetrySpec, ToolPolicy
+from .registry import SemanticCheck, SteadyhandRegistry
 from .store import OrderStatus, Store, TicketStatus, money
+from .validate import check_create_ticket, check_issue_refund, require_existing
 
 OrderId = Annotated[str, Field(description="Order id, for example ord_1001.")]
 CustomerId = Annotated[str, Field(description="Customer id, for example cus_101.")]
@@ -138,34 +141,61 @@ IDEMPOTENT_WRITE_HANDLERS = (set_ticket_status, cancel_order)
 HANDLERS = READ_HANDLERS + NON_IDEMPOTENT_WRITE_HANDLERS + IDEMPOTENT_WRITE_HANDLERS
 
 
-def tool_from_handler(handler: Callable[..., Any]) -> Tool:
-    """Build a ``Tool`` whose schema covers every parameter after ``store``."""
-    signature = inspect.signature(handler, eval_str=True)
-    parameters = list(signature.parameters.values())
-    if not parameters or parameters[0].name != "store":
-        raise TypeError(f"{handler.__name__} must take the store as its first parameter")
+TOOL_TIMEOUT_S = 5.0
+TRANSIENT_ERRORS = ("timeout", "rate_limit", "server_error")
+SAFE_RETRY = RetrySpec(on=TRANSIENT_ERRORS, max_attempts=2, backoff="exp")
 
-    def arguments_only(**arguments: Any) -> Any:
-        raise NotImplementedError
+READ_POLICY = ToolPolicy(Effect.READ, TOOL_TIMEOUT_S, idempotent=True, retry=SAFE_RETRY)
+IDEMPOTENT_WRITE_POLICY = ToolPolicy(
+    Effect.IDEMPOTENT_WRITE, TOOL_TIMEOUT_S, idempotent=True, retry=SAFE_RETRY
+)
 
-    arguments_only.__signature__ = signature.replace(  # type: ignore[attr-defined]
-        parameters=parameters[1:],
-        return_annotation=inspect.Signature.empty,
+
+def _non_idempotent(verify: str, alternatives: tuple[str, ...] = ()) -> ToolPolicy:
+    return ToolPolicy(
+        Effect.NON_IDEMPOTENT_WRITE,
+        TOOL_TIMEOUT_S,
+        idempotent=False,
+        retry=None,
+        verify=verify,
+        alternatives=alternatives,
     )
-    schema = Tool.from_function(arguments_only, name=handler.__name__).parameters
-    return Tool.from_function(handler, parameters=schema)
 
 
-def build_registry() -> ToolRegistry:
-    """A fresh registry of the ten tools. Safe to share across worker threads."""
-    return ToolRegistry(tool_from_handler(handler) for handler in HANDLERS)
+# (handler, policy, semantic check). Reads come first: a write's verify tool
+# must already be registered.
+TOOL_SPECS: tuple[tuple[Any, ToolPolicy, SemanticCheck | None], ...] = (
+    (get_order, READ_POLICY, None),  # an absent order is a not_found result from the handler
+    (get_customer, READ_POLICY, require_existing("customer", "customer_id")),
+    (list_payments, READ_POLICY, require_existing("order", "order_id")),
+    (get_ticket, READ_POLICY, require_existing("ticket", "ticket_id")),
+    (search_orders, READ_POLICY, require_existing("customer", "customer_id")),
+    (issue_refund, _non_idempotent("list_payments", ("refund_via_ledger",)), check_issue_refund),
+    (create_ticket, _non_idempotent("get_ticket"), check_create_ticket),
+    (add_order_note, _non_idempotent("get_order"), require_existing("order", "order_id")),
+    (set_ticket_status, IDEMPOTENT_WRITE_POLICY, require_existing("ticket", "ticket_id")),
+    (cancel_order, IDEMPOTENT_WRITE_POLICY, require_existing("order", "order_id")),
+)
+
+
+def build_registry() -> SteadyhandRegistry:
+    """A frozen registry of the ten tools with their policies. Safe to share across workers."""
+    registry = SteadyhandRegistry()
+    for handler, policy, semantic in TOOL_SPECS:
+        registry.register(handler, policy, semantic)
+    return registry.freeze()
 
 
 __all__ = [
     "HANDLERS",
     "IDEMPOTENT_WRITE_HANDLERS",
+    "IDEMPOTENT_WRITE_POLICY",
     "NON_IDEMPOTENT_WRITE_HANDLERS",
     "READ_HANDLERS",
+    "READ_POLICY",
+    "SAFE_RETRY",
+    "TOOL_SPECS",
+    "TOOL_TIMEOUT_S",
     "add_order_note",
     "build_registry",
     "cancel_order",
@@ -177,5 +207,4 @@ __all__ = [
     "list_payments",
     "search_orders",
     "set_ticket_status",
-    "tool_from_handler",
 ]

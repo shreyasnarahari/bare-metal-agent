@@ -30,17 +30,24 @@ from toolsmith.backends import (
     LlamaCppError,
     LlamaCppTimeoutError,
 )
+from toolsmith.parsing import ToolCallParseError
 from toolsmith.prompting import ChatPromptRenderer
 from toolsmith.protocols import ModelProfile
+from toolsmith.validation import StructuredOutputValidationError, ToolCallValidationError
 
 from .types import ModelTurn, ToolCall, TurnKind
 
 DEFAULT_MAX_TOKENS = 256
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_MODEL_OUTPUT_EXCEPTIONS = (
+    ToolCallParseError,
+    ToolCallValidationError,
+    StructuredOutputValidationError,
+)
 
 
 class SteadyhandClient:
-    """One model turn per ``complete()`` call, classified as text, tool calls, or parse error."""
+    """One model turn per ``complete()`` call: text, tool calls, a parse error, or a fatal error."""
 
     def __init__(
         self,
@@ -108,14 +115,17 @@ class SteadyhandClient:
         try:
             response = self.service.chat(request)
         except APIError as exc:
-            return ModelTurn.parse_error(
+            return ModelTurn.failure(
+                TurnKind.PARSE_ERROR if is_model_output_error(exc) else TurnKind.FATAL_ERROR,
                 exc.code,
                 str(exc),
+                raw_output=getattr(exc, "raw_output", None),
                 repair_attempts=exc.repair_attempts,
                 elapsed_s=time.perf_counter() - started,
             )
         except LlamaCppError as exc:
-            return ModelTurn.parse_error(
+            return ModelTurn.failure(
+                TurnKind.FATAL_ERROR,
                 backend_error_code(exc),
                 f"{type(exc).__name__}: {exc}",
                 elapsed_s=time.perf_counter() - started,
@@ -135,7 +145,8 @@ def classify_completion(response: Mapping[str, Any], *, elapsed_s: float = 0.0) 
         raw_calls = message.get("tool_calls") or []
         calls = tuple(ToolCall.from_openai(call) for call in raw_calls)
     except (KeyError, IndexError, TypeError, AttributeError) as exc:
-        return ModelTurn.parse_error(
+        return ModelTurn.failure(
+            TurnKind.FATAL_ERROR,
             "invalid_backend_response",
             f"Chat completion has no usable assistant message: {exc!r}",
             repair_attempts=repair_attempts,
@@ -150,9 +161,11 @@ def classify_completion(response: Mapping[str, Any], *, elapsed_s: float = 0.0) 
     elif isinstance(content, str) and content.strip():
         kind = TurnKind.TEXT
     else:
-        return ModelTurn.parse_error(
+        return ModelTurn.failure(
+            TurnKind.PARSE_ERROR,
             "empty_model_response",
             "The assistant message has neither visible content nor tool calls",
+            raw_output=content if isinstance(content, str) else None,
             repair_attempts=repair_attempts,
             elapsed_s=elapsed_s,
             prompt_tokens=prompt_tokens,
@@ -170,6 +183,16 @@ def classify_completion(response: Mapping[str, Any], *, elapsed_s: float = 0.0) 
         repair_attempts=repair_attempts,
         elapsed_s=elapsed_s,
     )
+
+
+def is_model_output_error(exc: APIError) -> bool:
+    """True when the model's own output failed to parse or validate, so the model can repair it.
+
+    The shim raises these ``from`` a parser or validator exception, and raises
+    ``empty_model_response`` directly. Request errors, backend failures, and
+    ``completion_truncated`` are not model-output errors.
+    """
+    return isinstance(exc.__cause__, _MODEL_OUTPUT_EXCEPTIONS) or exc.code == "empty_model_response"
 
 
 def backend_error_code(exc: LlamaCppError) -> str:
@@ -266,5 +289,6 @@ __all__ = [
     "backend_error_code",
     "build_llama_client",
     "classify_completion",
+    "is_model_output_error",
     "worker_service",
 ]

@@ -10,11 +10,18 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Protocol
 
+from .errors import ErrorObservation
+
 
 class TurnKind(str, Enum):
     TEXT = "text"
     TOOL_CALLS = "tool_calls"
+    # The model's output failed to parse or validate. The model can repair it,
+    # so the loop shows it a parse_error observation and continues.
     PARSE_ERROR = "parse_error"
+    # Backend, request, or truncation failure. The model cannot repair it, so
+    # the episode ends as aborted.
+    FATAL_ERROR = "fatal_error"
 
 
 class EpisodeStatus(str, Enum):
@@ -23,14 +30,6 @@ class EpisodeStatus(str, Enum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     ABORTED = "aborted"
     # ESCALATED arrives in part 3.
-
-
-class ToolErrorType(str, Enum):
-    """Failure kinds in the part 1 observation. Part 2 replaces this with a typed channel."""
-
-    TIMEOUT = "timeout"
-    HANDLER_ERROR = "handler_error"
-    NOT_FOUND = "not_found"
 
 
 @dataclass(frozen=True)
@@ -74,20 +73,25 @@ class ModelTurn:
     error_message: str | None = None
     repair_attempts: int = 0
     elapsed_s: float = 0.0
+    raw_output: str | None = None
 
     @classmethod
-    def parse_error(
+    def failure(
         cls,
+        kind: TurnKind,
         code: str,
         message: str,
         *,
+        raw_output: str | None = None,
         repair_attempts: int = 0,
         elapsed_s: float = 0.0,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
     ) -> ModelTurn:
+        if kind not in (TurnKind.PARSE_ERROR, TurnKind.FATAL_ERROR):
+            raise ValueError(f"{kind} is not a failure kind")
         return cls(
-            kind=TurnKind.PARSE_ERROR,
+            kind=kind,
             assistant_message=None,
             tool_calls=(),
             content=None,
@@ -98,6 +102,7 @@ class ModelTurn:
             error_message=message,
             repair_attempts=repair_attempts,
             elapsed_s=elapsed_s,
+            raw_output=raw_output,
         )
 
     def with_call_ids(self, step: int) -> ModelTurn:
@@ -115,33 +120,35 @@ class ModelTurn:
 
 @dataclass(frozen=True)
 class ToolResult:
+    """The outcome of one call: a value, or a typed error from validation or the handler."""
+
     call_id: str
     tool: str
     arguments: str
     arguments_sha256: str | None
     ok: bool
     value: Any = None
-    error_type: ToolErrorType | None = None
-    message: str | None = None
+    error: ErrorObservation | None = None
+    handler_called: bool = False
     elapsed_s: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.ok == (self.error is not None):
+            raise ValueError("A successful result has no error; a failed one needs one")
 
     def observation(self) -> dict[str, Any]:
         """The JSON object the model sees. The success shape is stable across parts."""
         if self.ok:
             return {"ok": True, "value": self.value}
-        return {
-            "ok": False,
-            "error_type": self.error_type.value if self.error_type else None,
-            "tool": self.tool,
-            "message": self.message,
-        }
+        assert self.error is not None
+        return self.error.as_dict()
 
     def content(self) -> str:
         return observation_content(self.observation())
 
 
 def observation_content(observation: Mapping[str, Any]) -> str:
-    """Serialize an observation for a ``tool`` message. Sorted keys keep journals stable."""
+    """Serialize an observation for a message. Sorted keys keep journals stable."""
     return json.dumps(observation, ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
@@ -178,7 +185,6 @@ __all__ = [
     "ModelClient",
     "ModelTurn",
     "ToolCall",
-    "ToolErrorType",
     "ToolResult",
     "TurnKind",
     "observation_content",

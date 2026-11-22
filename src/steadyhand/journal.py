@@ -74,8 +74,9 @@ class EpisodeJournal:
         fixture_sha256: str | None,
         store_sha256: str,
         max_steps: int,
-        tool_timeout_s: float,
         tool_names: Sequence[str],
+        schema_sha256: str,
+        policy_sha256: str,
         messages: Sequence[Mapping[str, Any]],
     ) -> dict[str, Any]:
         return self.append(
@@ -84,8 +85,9 @@ class EpisodeJournal:
             fixture_sha256=fixture_sha256,
             store_sha256=store_sha256,
             max_steps=max_steps,
-            tool_timeout_s=tool_timeout_s,
             tool_names=list(tool_names),
+            schema_sha256=schema_sha256,
+            policy_sha256=policy_sha256,
             messages=[dict(message) for message in messages],
         )
 
@@ -101,6 +103,7 @@ class EpisodeJournal:
             },
             error_code=turn.error_code,
             error_message=turn.error_message,
+            raw_output=turn.raw_output,
             repair_attempts=turn.repair_attempts,
             elapsed_s=round(turn.elapsed_s, 6),
         )
@@ -113,17 +116,32 @@ class EpisodeJournal:
             "arguments": result.arguments,
             "arguments_sha256": result.arguments_sha256,
             "ok": result.ok,
+            "handler_called": result.handler_called,
         }
         if result.ok:
             fields["value"] = result.value
         else:
-            fields["error"] = {
-                "error_type": result.error_type.value if result.error_type else None,
-                "message": result.message,
-            }
+            assert result.error is not None
+            fields["error"] = result.error.as_dict()
         fields["content"] = result.content()
         fields["elapsed_s"] = round(result.elapsed_s, 6)
         return self.append("tool_result", **fields)
+
+    def observation(
+        self,
+        *,
+        step: int,
+        message: Mapping[str, Any],
+        observation: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """A loop-authored message that is not a tool result, such as parse-error feedback."""
+        return self.append(
+            "observation",
+            step=step,
+            role=message["role"],
+            content=message["content"],
+            observation=dict(observation),
+        )
 
     def episode_finished(
         self,

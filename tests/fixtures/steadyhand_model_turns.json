@@ -1,0 +1,107 @@
+{
+  "description": "Hand-built assistant messages in the OpenAI tool-call shape that ToolsmithService returns (ParsedToolCall.to_openai). Fixtures for Steadyhand validation, not live model output.",
+  "turns": [
+    {
+      "name": "unknown_tool",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_unknown_tool",
+            "type": "function",
+            "function": {
+              "name": "refund_order",
+              "arguments": "{\"order_id\": \"ord_1001\", \"amount_inr\": 120}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "extra_property",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_extra_property",
+            "type": "function",
+            "function": {
+              "name": "issue_refund",
+              "arguments": "{\"order_id\": \"ord_1001\", \"amount_inr\": 120, \"reason\": \"Dented lid\", \"unexpected\": true}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative_amount",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_negative_amount",
+            "type": "function",
+            "function": {
+              "name": "issue_refund",
+              "arguments": "{\"order_id\": \"ord_1001\", \"amount_inr\": -120, \"reason\": \"Dented lid\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown_order_id",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_unknown_order_id",
+            "type": "function",
+            "function": {
+              "name": "issue_refund",
+              "arguments": "{\"order_id\": \"ord_9999\", \"amount_inr\": 120, \"reason\": \"Dented lid\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid_json",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_invalid_json",
+            "type": "function",
+            "function": {
+              "name": "issue_refund",
+              "arguments": "{\"order_id\": \"ord_1001\", \"amount_inr\": 120,"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "valid_refund",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_valid_refund",
+            "type": "function",
+            "function": {
+              "name": "issue_refund",
+              "arguments": "{\"order_id\": \"ord_1001\", \"amount_inr\": 120, \"reason\": \"Dented lid\"}"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

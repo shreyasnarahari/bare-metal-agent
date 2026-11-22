@@ -289,6 +289,36 @@ def test_unknown_tool_is_rejected_in_auto_mode():
 
 
 @pytest.mark.parametrize(
+    "content",
+    [
+        '<tool_call>{"name":"unknown","arguments":{}}</tool_call>',
+        '<tool_call>{"name":"get_weather","arguments":{"city":3}}</tool_call>',
+        " \n\t",
+    ],
+)
+def test_model_output_errors_keep_raw_output_out_of_the_http_body(content):
+    service, _, _ = make_service({"content": content})
+
+    with pytest.raises(APIError) as caught:
+        service.chat(request())
+
+    assert caught.value.raw_output == content
+    assert "raw_output" not in json.dumps(caught.value.body())
+
+
+def test_request_and_truncation_errors_have_no_raw_output():
+    truncated, _, _ = make_service(CompletionTruncatedError({"content": "partial"}))
+    with pytest.raises(APIError) as caught:
+        truncated.chat(request())
+    assert caught.value.raw_output is None
+
+    invalid, _, _ = make_service({"content": "unused"})
+    with pytest.raises(APIError) as caught:
+        invalid.chat(request(tool_choice="sometimes"))
+    assert caught.value.raw_output is None
+
+
+@pytest.mark.parametrize(
     "overrides",
     [
         {"chat_template_kwargs": {}},

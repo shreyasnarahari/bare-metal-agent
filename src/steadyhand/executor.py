@@ -1,13 +1,14 @@
-"""Sequential tool execution with one timeout around every handler.
+"""Sequential tool execution, one policy timeout around every handler.
 
-Handlers run after the shim has returned the calls. The FastAPI routes never
-call them. Each call runs on a short-lived daemon thread so a handler that
-blocks is reported as ``timeout`` and cannot wedge the episode or the test run.
+Handlers run after the shim has returned the calls and after ``validate_call``
+accepted them. The FastAPI routes never call them. Each call runs on a
+short-lived daemon thread so a handler that blocks is reported as ``timeout``
+and cannot wedge the episode or the test run.
 
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only
 a deliberately blocking stub reaches the timeout. Such stubs must not touch the
-store. Part 2 replaces the single timeout with per-tool ``ToolPolicy.timeout_s``.
+store.
 """
 
 from __future__ import annotations
@@ -18,75 +19,72 @@ import time
 from typing import Any
 
 from toolsmith.evaluation.models import canonical_hash
-from toolsmith.json_utils import StrictJSONError, strict_json_loads
-from toolsmith.registry import ToolRegistry
 
+from .errors import ErrorObservation
+from .registry import SteadyhandRegistry
 from .store import NotFoundError, Store
-from .types import ToolCall, ToolErrorType, ToolResult
-
-DEFAULT_TOOL_TIMEOUT_S = 5.0
-MAX_MESSAGE_CHARS = 300
+from .types import ToolCall, ToolResult
+from .validate import (
+    decode_arguments,
+    handler_error_observation,
+    not_found_observation,
+    timeout_observation,
+    unknown_tool_observation,
+)
 
 
 class SequentialExecutor:
     """Runs one call at a time against the episode's own store. Stateless, so shareable."""
 
-    def __init__(self, timeout_s: float = DEFAULT_TOOL_TIMEOUT_S) -> None:
-        if timeout_s <= 0:
-            raise ValueError("timeout_s must be positive")
-        self.timeout_s = timeout_s
-
-    def run(self, call: ToolCall, registry: ToolRegistry, store: Store) -> ToolResult:
+    def run(self, call: ToolCall, registry: SteadyhandRegistry, store: Store) -> ToolResult:
         started = time.monotonic()
 
-        def failure(
-            error_type: ToolErrorType,
-            message: str,
-            arguments_sha256: str | None = None,
-        ) -> ToolResult:
+        def failure(error: ErrorObservation, digest: str | None, *, handler_called: bool) -> ToolResult:
             return ToolResult(
                 call_id=call.id,
                 tool=call.name,
                 arguments=call.arguments,
-                arguments_sha256=arguments_sha256,
+                arguments_sha256=digest,
                 ok=False,
-                error_type=error_type,
-                message=one_line(message),
+                error=error,
+                handler_called=handler_called,
                 elapsed_s=time.monotonic() - started,
             )
 
-        try:
-            tool = registry.get(call.name)
-        except KeyError:
-            return failure(ToolErrorType.HANDLER_ERROR, f"No registered tool is named {call.name!r}")
-        if tool.handler is None:
-            return failure(ToolErrorType.HANDLER_ERROR, f"Tool {call.name!r} has no handler")
-        try:
-            arguments = strict_json_loads(call.arguments)
-        except StrictJSONError as exc:
-            return failure(ToolErrorType.HANDLER_ERROR, f"Arguments are not strict JSON: {exc}")
-        if not isinstance(arguments, dict):
-            return failure(ToolErrorType.HANDLER_ERROR, "Arguments must be a JSON object")
-        digest = canonical_hash(arguments)
-
-        finished, value, error = self._call_with_timeout(tool.handler, store, arguments)
-        if not finished:
-            return failure(
-                ToolErrorType.TIMEOUT,
-                f"{call.name} did not finish within {self.timeout_s:g} seconds",
-                digest,
-            )
-        if isinstance(error, NotFoundError):
-            return failure(ToolErrorType.NOT_FOUND, str(error), digest)
+        # Defensive: validate_call has normally rejected these already.
+        if call.name not in registry:
+            return failure(unknown_tool_observation(call.name, registry), None, handler_called=False)
+        arguments, error = decode_arguments(call)
         if error is not None:
-            return failure(ToolErrorType.HANDLER_ERROR, f"{type(error).__name__}: {error}", digest)
+            return failure(error, None, handler_called=False)
+        tool = registry.get(call.name)
+        policy = registry.policy(call.name)
+        digest = canonical_hash(arguments)
+        if tool.handler is None:
+            return failure(
+                handler_error_observation(call.name, "this tool has no handler"),
+                digest,
+                handler_called=False,
+            )
+
+        finished, value, raised = self._call_with_timeout(tool.handler, store, arguments, policy.timeout_s)
+        if not finished:
+            return failure(timeout_observation(call.name, policy), digest, handler_called=True)
+        if isinstance(raised, NotFoundError):
+            return failure(not_found_observation(call.name, raised), digest, handler_called=True)
+        if raised is not None:
+            return failure(
+                handler_error_observation(call.name, f"{type(raised).__name__}: {raised}"),
+                digest,
+                handler_called=True,
+            )
         try:
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError) as exc:
             return failure(
-                ToolErrorType.HANDLER_ERROR,
-                f"{call.name} returned a value that is not JSON: {exc}",
+                handler_error_observation(call.name, f"returned a value that is not JSON: {exc}"),
                 digest,
+                handler_called=True,
             )
         return ToolResult(
             call_id=call.id,
@@ -95,14 +93,16 @@ class SequentialExecutor:
             arguments_sha256=digest,
             ok=True,
             value=value,
+            handler_called=True,
             elapsed_s=time.monotonic() - started,
         )
 
+    @staticmethod
     def _call_with_timeout(
-        self,
         handler: Any,
         store: Store,
         arguments: dict[str, Any],
+        timeout_s: float,
     ) -> tuple[bool, Any, BaseException | None]:
         outcome: dict[str, Any] = {}
 
@@ -114,18 +114,10 @@ class SequentialExecutor:
 
         worker = threading.Thread(target=target, name="steadyhand-tool", daemon=True)
         worker.start()
-        worker.join(self.timeout_s)
+        worker.join(timeout_s)
         if worker.is_alive():
             return False, None, None
         return True, outcome.get("value"), outcome.get("error")
 
 
-def one_line(text: str, limit: int = MAX_MESSAGE_CHARS) -> str:
-    """Collapse whitespace and cap length, so no traceback or wall of text reaches the model."""
-    collapsed = " ".join(str(text).split())
-    if len(collapsed) <= limit:
-        return collapsed
-    return collapsed[: limit - 3] + "..."
-
-
-__all__ = ["DEFAULT_TOOL_TIMEOUT_S", "SequentialExecutor", "one_line"]
+__all__ = ["SequentialExecutor"]

@@ -7,14 +7,17 @@ import pytest
 
 import steadyhand
 from steadyhand import (
+    Effect,
     EpisodeJournal,
     EpisodeStatus,
     LiveConfigError,
     LiveSettings,
     SequentialExecutor,
     SteadyhandClient,
+    SteadyhandRegistry,
     Store,
     ToolCall,
+    ToolPolicy,
     TurnKind,
     build_llama_client,
     build_registry,
@@ -22,13 +25,12 @@ from steadyhand import (
     run_episode,
     worker_service,
 )
-from steadyhand.tools import get_order, tool_from_handler
+from steadyhand.tools import get_order
 from toolsmith.api import APIError, ToolsmithService
 from toolsmith.backends import LlamaCppConnectionError, LlamaCppTimeoutError
 from toolsmith.json_utils import strict_json_loads
 from toolsmith.prompting import ChatPromptRenderer
 from toolsmith.protocols import QWEN3_PROFILE, QWEN35_PROFILE
-from toolsmith.registry import ToolRegistry
 
 NOTEBOOK_PATH = Path(__file__).parent.parent / "notebooks" / "01_toolsmith.ipynb"
 SYSTEM = {"role": "system", "content": "You are a support agent. Use the tools."}
@@ -123,7 +125,7 @@ def test_text_turn_finishes_done_with_zero_tool_executions(tmp_path):
     assert request.chat_template_kwargs == {"enable_thinking": False}
     assert request.response_format is None
     assert request.stream is False
-    assert request.tools == build_registry().to_openai()
+    assert request.tools == build_registry().schemas()
     assert (request.temperature, request.seed) == (0.0, 0)
 
 
@@ -157,29 +159,22 @@ def test_tool_call_then_text_feeds_the_tool_result_into_the_second_request(tmp_p
     ]
 
 
-def test_parse_error_aborts_and_the_journal_keeps_the_code(tmp_path):
-    error = APIError(
-        "Model output failed validation: /order_id: 7 is not of type 'string'",
-        status_code=500,
-        error_type="server_error",
-        code="schema_validation_failed",
-        repair_attempts=1,
-    )
+def test_a_fatal_error_aborts_and_the_journal_keeps_the_code(tmp_path):
+    error = APIError("Assistant call 0 needs a unique non-empty id", code="invalid_message_history")
     result, service, store = episode(tmp_path, error)
 
     assert result.status is EpisodeStatus.ABORTED
-    assert result.error_code == "schema_validation_failed"
+    assert result.error_code == "invalid_message_history"
     assert result.final_content is None
     assert result.messages == [SYSTEM, {"role": "user", "content": "What is the status of ord_1001?"}]
 
     records = journal_records(result.journal_path)
     turn = next(record for record in records if record["event"] == "model_turn")
-    assert turn["kind"] == "parse_error"
-    assert turn["error_code"] == "schema_validation_failed"
-    assert turn["repair_attempts"] == 1
+    assert turn["kind"] == "fatal_error"
+    assert turn["error_code"] == "invalid_message_history"
     assert turn["assistant_message"] is None
     assert records[-1]["status"] == "aborted"
-    assert records[-1]["error_code"] == "schema_validation_failed"
+    assert records[-1]["error_code"] == "invalid_message_history"
 
 
 @pytest.mark.parametrize(
@@ -188,7 +183,7 @@ def test_parse_error_aborts_and_the_journal_keeps_the_code(tmp_path):
         (LlamaCppConnectionError("connection refused"), "backend_connection_error"),
         (LlamaCppTimeoutError("timed out"), "backend_timeout"),
         (APIError("truncated", status_code=500, code="completion_truncated"), "completion_truncated"),
-        (APIError("empty", status_code=500, code="empty_model_response"), "empty_model_response"),
+        (APIError("unsupported", code="unsupported_schema"), "unsupported_schema"),
     ],
 )
 def test_backend_and_truncation_failures_abort(tmp_path, error, code):
@@ -275,12 +270,12 @@ def test_unknown_order_returns_a_not_found_observation(tmp_path):
         completion("I could not find that order."),
     )
 
-    assert json.loads(service.requests[1].messages[3]["content"]) == {
-        "ok": False,
-        "error_type": "not_found",
-        "tool": "get_order",
-        "message": "order 'ord_9999' was not found",
-    }
+    observation = json.loads(service.requests[1].messages[3]["content"])
+    assert observation["error_type"] == "not_found"
+    assert observation["retryable"] is False
+    assert observation["details"] == [
+        {"field": "order_id", "problem": "no order with this id exists", "got": "ord_9999"}
+    ]
 
 
 def slow_lookup(store: Store, order_id: str) -> dict:
@@ -292,14 +287,21 @@ def slow_lookup(store: Store, order_id: str) -> dict:
 RELEASE = threading.Event()
 
 
-def test_a_blocking_handler_is_reported_as_a_timeout():
+def stub_registry(handler, timeout_s=5.0):
+    registry = SteadyhandRegistry()
+    registry.register(handler, ToolPolicy(Effect.READ, timeout_s, idempotent=True))
+    return registry.freeze()
+
+
+def test_a_blocking_handler_is_reported_as_a_timeout_from_its_policy():
     RELEASE.clear()
-    registry = ToolRegistry([tool_from_handler(slow_lookup)])
     store = load_fixture().clone()
     started = time.monotonic()
     try:
-        result = SequentialExecutor(timeout_s=0.05).run(
-            ToolCall("call_a", "slow_lookup", '{"order_id": "ord_1001"}'), registry, store,
+        result = SequentialExecutor().run(
+            ToolCall("call_a", "slow_lookup", '{"order_id": "ord_1001"}'),
+            stub_registry(slow_lookup, timeout_s=0.05),
+            store,
         )
     finally:
         RELEASE.set()
@@ -309,10 +311,40 @@ def test_a_blocking_handler_is_reported_as_a_timeout():
         "ok": False,
         "error_type": "timeout",
         "tool": "slow_lookup",
-        "message": "slow_lookup did not finish within 0.05 seconds",
+        "retryable": True,
+        "hint": "slow_lookup did not finish in time. Calling it again is safe.",
+        "details": [{"problem": "no result within 0.05 seconds"}],
     }
+    assert result.handler_called is True
     assert result.arguments_sha256 is not None
     assert store.snapshot_sha256() == store.fixture_sha256
+
+
+def slow_write(store: Store, order_id: str) -> dict:
+    """Non-idempotent stub that blocks until released. It never touches the store."""
+    RELEASE.wait(5)
+    return {"order_id": order_id}
+
+
+def test_a_timed_out_non_idempotent_write_is_not_retryable_and_points_at_verify():
+    registry = SteadyhandRegistry()
+    registry.register(slow_lookup, ToolPolicy(Effect.READ, 5.0, idempotent=True))
+    registry.register(
+        slow_write,
+        ToolPolicy(Effect.NON_IDEMPOTENT_WRITE, 0.05, idempotent=False, verify="slow_lookup"),
+    )
+    RELEASE.clear()
+    try:
+        result = SequentialExecutor().run(ToolCall("c", "slow_write", '{"order_id": "x"}'), registry, load_fixture())
+    finally:
+        RELEASE.set()
+
+    observation = result.observation()
+    assert observation["retryable"] is False
+    assert observation["hint"] == (
+        "slow_write did not finish in time and may have taken effect. "
+        "Check with slow_lookup before calling it again."
+    )
 
 
 def test_a_timeout_inside_an_episode_reaches_the_model_and_the_episode_continues(tmp_path):
@@ -322,16 +354,13 @@ def test_a_timeout_inside_an_episode_reaches_the_model_and_the_episode_continues
             tmp_path,
             completion(calls=[("call_a", "slow_lookup", {"order_id": "ord_1001"})]),
             completion("The lookup timed out."),
-            registry=ToolRegistry([tool_from_handler(slow_lookup)]),
-            executor=SequentialExecutor(timeout_s=0.05),
+            registry=stub_registry(slow_lookup, timeout_s=0.05),
         )
     finally:
         RELEASE.set()
 
     assert result.status is EpisodeStatus.DONE
     assert json.loads(service.requests[1].messages[3]["content"])["error_type"] == "timeout"
-    started = journal_records(result.journal_path)[0]
-    assert started["tool_timeout_s"] == 0.05
 
 
 def exploding(store: Store, order_id: str) -> dict:
@@ -340,26 +369,25 @@ def exploding(store: Store, order_id: str) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("call", "message"),
+    ("call", "error_type", "problem"),
     [
-        (ToolCall("c", "exploding", '{"order_id": "x"}'), "RuntimeError: boom Traceback (most recent call last): detail"),
-        (ToolCall("c", "exploding", '{"order_id": '), None),
-        (ToolCall("c", "exploding", "[1]"), "Arguments must be a JSON object"),
-        (ToolCall("c", "missing_tool", "{}"), "No registered tool is named 'missing_tool'"),
-        (ToolCall("c", "exploding", '{"wrong": 1}'), None),
+        (ToolCall("c", "exploding", '{"order_id": "x"}'), "handler_error",
+         "RuntimeError: boom Traceback (most recent call last): detail"),
+        (ToolCall("c", "exploding", '{"order_id": '), "parse_error", None),
+        (ToolCall("c", "exploding", "[1]"), "parse_error", "arguments must be a JSON object"),
+        (ToolCall("c", "missing_tool", "{}"), "unknown_tool", "no tool with this name is registered"),
+        (ToolCall("c", "exploding", '{"wrong": 1}'), "handler_error", None),
     ],
 )
-def test_handler_failures_become_one_line_handler_errors(call, message):
-    registry = ToolRegistry([tool_from_handler(exploding)])
-
-    result = SequentialExecutor().run(call, registry, load_fixture().clone())
+def test_the_executor_turns_every_failure_into_a_one_line_typed_error(call, error_type, problem):
+    result = SequentialExecutor().run(call, stub_registry(exploding), load_fixture().clone())
 
     observation = result.observation()
     assert observation["ok"] is False
-    assert observation["error_type"] == "handler_error"
-    assert "\n" not in observation["message"]
-    if message is not None:
-        assert observation["message"] == message
+    assert observation["error_type"] == error_type
+    assert "\n" not in json.dumps(observation)
+    if problem is not None:
+        assert observation["details"][0]["problem"] == problem
 
 
 # Journal
@@ -388,6 +416,7 @@ def test_journal_lines_are_strict_json_with_sequence_numbers(tmp_path):
     assert tool["tool"] == "get_order"
     assert tool["arguments"] == '{"order_id": "ord_1001"}'
     assert tool["ok"] is True and tool["value"]["order_id"] == "ord_1001"
+    assert tool["handler_called"] is True
     assert len(tool["arguments_sha256"]) == 64
     finished = records[-1]
     assert finished["status"] == "done"
@@ -508,16 +537,16 @@ def test_client_carries_reasoning_and_repair_metadata():
 
 
 @pytest.mark.parametrize(
-    ("response", "code"),
+    ("response", "kind", "code"),
     [
-        (completion("   \n"), "empty_model_response"),
-        ({"choices": []}, "invalid_backend_response"),
+        (completion("   \n"), TurnKind.PARSE_ERROR, "empty_model_response"),
+        ({"choices": []}, TurnKind.FATAL_ERROR, "invalid_backend_response"),
     ],
 )
-def test_unusable_completions_are_parse_errors(response, code):
+def test_unusable_completions_are_classified(response, kind, code):
     turn = SteadyhandClient(FakeService(response)).complete([{"role": "user", "content": "hi"}], [])
 
-    assert turn.kind is TurnKind.PARSE_ERROR
+    assert turn.kind is kind
     assert turn.error_code == code
 
 
