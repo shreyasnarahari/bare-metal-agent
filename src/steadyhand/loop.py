@@ -7,6 +7,16 @@ the repeated-call guard, then executed only if both allow it. A blocked call
 never touches the store. A turn that sends an already-blocked call again
 escalates before any of its calls run.
 
+After a call runs (or fails validation), the recovery strategy decides what the
+model sees: the typed observation, a policy-layer retry, a verified write, an
+alternative tool, or an escalation. A successful result that fails a sanity
+check stops the rest of that turn's writes.
+
+Several reads in one assistant message run together on a small per-episode
+pool (at most 4 threads). Validation, the guard, and fault indexes are settled
+in call order first, and results are journaled in call order afterwards, so
+replay stays exact. A message that contains any write runs sequentially.
+
 Endings: ``done`` (visible text), ``budget_exhausted``, ``escalated``, or
 ``aborted`` (backend, request, truncation, or cancellation). For the two
 controller endings, ``final_content`` is rendered from the journal records,
@@ -18,8 +28,9 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from toolsmith.evaluation.models import canonical_hash
@@ -28,13 +39,17 @@ from .controller import (
     DEFAULT_GUARD_LIMIT,
     Budgets,
     EpisodeController,
+    GuardDecision,
     has_visible_character,
     repeated_call_observation,
 )
 from .executor import SequentialExecutor
 from .faults import FaultInjector, FaultSchedule
+from .idempotency import idempotency_key
 from .journal import EpisodeJournal, ReplayMismatch
 from .messages import PARAPHRASE_REQUEST, render_final_message
+from .policy import Effect
+from .recovery import RecoveryBudget, RecoveryContext, RecoveryStrategy, TypedHint, apply_recovery
 from .registry import SteadyhandRegistry
 from .store import Store
 from .types import (
@@ -47,11 +62,46 @@ from .types import (
     TurnKind,
     observation_content,
 )
-from .validate import parse_error_observation, validate_call
+from .validate import Verdict, parse_error_observation, suspicious_result_observation, validate_call
+
+MAX_PARALLEL_READS = 4
+SKIPPED_WRITE_HINT = (
+    "Not run: an earlier result in this turn failed a consistency check. Re-check with the read tools before writing."
+)
 
 
 def observation_message(call: ToolCall, result: ToolResult) -> dict[str, Any]:
     return {"role": "tool", "tool_call_id": call.id, "content": result.content()}
+
+
+@dataclass
+class _Episode:
+    """The per-episode objects every call needs. Never shared between episodes."""
+
+    registry: SteadyhandRegistry
+    store: Store
+    executor: SequentialExecutor
+    controller: EpisodeController
+    journal: EpisodeJournal
+    injector: FaultInjector | None
+    strategy: RecoveryStrategy
+    budget: RecoveryBudget
+    sleep: Callable[[float], None]
+    history: list[dict[str, Any]]
+
+
+@dataclass
+class _Plan:
+    call: ToolCall
+    verdict: Verdict
+    decision: GuardDecision
+    key: str | None = None
+    call_index: int | None = None
+    skipped: bool = False
+
+    @property
+    def runnable(self) -> bool:
+        return self.verdict.ok and not self.decision.blocked and not self.skipped
 
 
 def run_episode(
@@ -68,6 +118,8 @@ def run_episode(
     cancel: threading.Event | None = None,
     paraphrase_final: bool = False,
     faults: FaultSchedule | None = None,
+    recovery: RecoveryStrategy | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> EpisodeResult:
     """Run one episode against ``store``, which the episode owns and mutates.
 
@@ -81,9 +133,13 @@ def run_episode(
 
     ``faults`` injects that schedule's tool-side faults. Each episode gets its
     own injector, so per-tool call indexes always start at 0.
+
+    ``recovery`` picks the strategy (default ``typed_hint``). ``sleep`` is how
+    policy backoff waits; tests and replay pass one that does not sleep.
     """
     budgets = budgets or Budgets()
     executor = executor or SequentialExecutor()
+    strategy = recovery or TypedHint()
     settings = client.settings()
     controller = EpisodeController(
         budgets,
@@ -92,8 +148,19 @@ def run_episode(
         slot_context=settings.get("slot_context"),
         max_tokens=settings.get("max_tokens"),
     )
-    injector = FaultInjector(faults) if faults is not None else None
     history = deepcopy([dict(message) for message in messages])
+    episode = _Episode(
+        registry=registry,
+        store=store,
+        executor=executor,
+        controller=controller,
+        journal=journal,
+        injector=FaultInjector(faults) if faults is not None else None,
+        strategy=strategy,
+        budget=RecoveryBudget(),
+        sleep=sleep,
+        history=history,
+    )
     tools = registry.schemas()
     final_content: str | None = None
 
@@ -108,6 +175,7 @@ def run_episode(
         schema_sha256=registry.schemas_sha256(),
         policy_sha256=registry.policies_sha256(),
         messages=history,
+        recovery_policy=strategy.name,
     )
     try:
         while controller.running:
@@ -147,10 +215,11 @@ def run_episode(
             history.append(turn.assistant_message)
             if _escalate_repeat(turn, controller, journal):
                 break
-            for call in turn.tool_calls:
-                result = _run_call(call, registry, store, executor, controller, journal, injector)
-                history.append(observation_message(call, result))
-                journal.tool_result(step=controller.steps, result=result)
+            reason = _run_tool_turn(turn.tool_calls, episode)
+            if reason is not None:
+                journal.escalated(step=controller.steps, reason=reason)
+                controller.escalate(reason)
+                break
             controller.finish_step()
 
         status = controller.state
@@ -238,50 +307,154 @@ def _escalate_repeat(turn: ModelTurn, controller: EpisodeController, journal: Ep
     return True
 
 
-def _run_call(
-    call: ToolCall,
-    registry: SteadyhandRegistry,
-    store: Store,
-    executor: SequentialExecutor,
-    controller: EpisodeController,
-    journal: EpisodeJournal,
-    injector: FaultInjector | None = None,
-) -> ToolResult:
-    verdict = validate_call(call, registry, store)
-    decision = controller.guard.observe(call)
-    if decision.blocked:
-        last_outcome = controller.guard.last_outcome(decision.key)
+def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
+    """Run one assistant message's calls. Returns an escalation reason, or None to keep going."""
+    registry = episode.registry
+    parallel = len(calls) > 1 and all(
+        call.name in registry and registry.policy(call.name).effect is Effect.READ for call in calls
+    )
+    if parallel:
+        plans = [_plan(call, episode, reserve_fault_index=True) for call in calls]
+        width = min(MAX_PARALLEL_READS, len(plans))
+        with ThreadPoolExecutor(max_workers=width, thread_name_prefix="steadyhand-read") as pool:
+            futures = [pool.submit(_first_attempt, plan, episode) if plan.runnable else None for plan in plans]
+            firsts = [future.result() if future is not None else None for future in futures]
+        for plan, first in zip(plans, firsts):
+            reason, _ = _finish(plan, first, episode)
+            if reason is not None:
+                return reason
+        return None
+
+    skip_writes = False
+    for call in calls:
+        plan = _plan(call, episode, reserve_fault_index=False)
+        if skip_writes and plan.verdict.ok and not plan.decision.blocked and _is_write(call, registry):
+            plan.skipped = True
+        first = _first_attempt(plan, episode) if plan.runnable else None
+        reason, suspicious = _finish(plan, first, episode)
+        if reason is not None:
+            return reason
+        skip_writes = skip_writes or suspicious
+    return None
+
+
+def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool) -> _Plan:
+    verdict = validate_call(call, episode.registry, episode.store)
+    decision = episode.controller.guard.observe(call)
+    plan = _Plan(call=call, verdict=verdict, decision=decision)
+    if not plan.runnable:
+        return plan
+    if episode.strategy.keyed_writes and _is_write(call, episode.registry) and verdict.arguments is not None:
+        plan.key = idempotency_key(episode.journal.episode_id, call.name, verdict.arguments)
+    if reserve_fault_index and episode.injector is not None:
+        plan.call_index = episode.injector.reserve(call.name)
+    return plan
+
+
+def _first_attempt(plan: _Plan, episode: _Episode) -> ToolResult:
+    options: dict[str, Any] = {}
+    if episode.injector is not None:
+        options["injector"] = episode.injector
+    if plan.key is not None:
+        options["idempotency_key"] = plan.key
+    if plan.call_index is not None:
+        options["call_index"] = plan.call_index
+    return episode.executor.run(plan.call, episode.registry, episode.store, **options)
+
+
+def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[str | None, bool]:
+    """Recover, journal, and append one call's observation, in call order."""
+    call, journal, controller = plan.call, episode.journal, episode.controller
+    step = controller.steps
+    escalate_reason: str | None = None
+    suspicious = False
+    if plan.decision.blocked:
+        last_outcome = controller.guard.last_outcome(plan.decision.key)
         journal.guard_tripped(
-            step=controller.steps,
+            step=step,
             action="block",
             tool=call.name,
             tool_call_id=call.id,
             arguments=call.arguments,
-            call_hash=decision.key,
-            count=decision.count,
-            limit=decision.limit,
+            call_hash=plan.decision.key,
+            count=plan.decision.count,
+            limit=plan.decision.limit,
             last_outcome=last_outcome,
         )
         controller.trip_guard()
-        return ToolResult(
+        result = ToolResult(
             call_id=call.id,
             tool=call.name,
             arguments=call.arguments,
-            arguments_sha256=verdict.arguments_sha256,
+            arguments_sha256=plan.verdict.arguments_sha256,
             ok=False,
             error=repeated_call_observation(call.name, last_outcome),
             handler_called=False,
         )
-    if not verdict.ok:
-        result = verdict.rejected(call)
-    elif injector is None:
-        result = executor.run(call, registry, store)
+    elif plan.skipped:
+        result = ToolResult(
+            call_id=call.id,
+            tool=call.name,
+            arguments=call.arguments,
+            arguments_sha256=plan.verdict.arguments_sha256,
+            ok=False,
+            error=suspicious_result_observation(
+                call.name, SKIPPED_WRITE_HINT, "skipped after a suspicious result", retryable=True
+            ),
+            handler_called=False,
+        )
     else:
-        result = executor.run(call, registry, store, injector=injector)
-    if result.fault is not None:
-        journal.injected_fault(step=controller.steps, fault=result.fault.as_dict())
-    controller.guard.record_outcome(decision.key, result)
-    return result
+        if first is None:
+            first = plan.verdict.rejected(call)
+        elif first.fault is not None:
+            journal.injected_fault(step=step, fault=first.fault.as_dict())
+        registry = episode.registry
+        context = RecoveryContext(
+            call=call,
+            arguments=plan.verdict.arguments,
+            policy=registry.policy(call.name) if call.name in registry else None,
+            registry=registry,
+            store=episode.store,
+            executor=episode.executor,
+            injector=episode.injector,
+            journal=journal,
+            step=step,
+            episode_id=journal.episode_id,
+            sleep=episode.sleep,
+            budget=episode.budget,
+            idempotency_key=plan.key,
+        )
+        outcome = apply_recovery(episode.strategy, context, first)
+        result, escalate_reason, suspicious = outcome.result, outcome.escalate_reason, outcome.suspicious
+        if outcome.acted:
+            journal.recovery(
+                step=step,
+                tool_call_id=call.id,
+                tool=call.name,
+                strategy=episode.strategy.name,
+                recovered_by=outcome.recovered_by,
+                escalated=escalate_reason,
+            )
+    if not plan.decision.blocked:
+        controller.guard.record_outcome(plan.decision.key, result)
+    episode.history.append(observation_message(call, result))
+    journal.tool_result(step=step, result=result)
+    return escalate_reason, suspicious
+
+
+def _is_write(call: ToolCall, registry: SteadyhandRegistry) -> bool:
+    return call.name in registry and registry.policy(call.name).effect is not Effect.READ
+
+
+def _answerable(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """History the shim accepts: drop a trailing tool-calling turn whose calls were not all answered."""
+    for index in range(len(history) - 1, -1, -1):
+        message = history[index]
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            ids = {call["id"] for call in message["tool_calls"]}
+            answered = {later.get("tool_call_id") for later in history[index + 1:] if later.get("role") == "tool"}
+            return history if ids <= answered else history[:index]
+    return history
 
 
 def _paraphrase(
@@ -293,11 +466,8 @@ def _paraphrase(
     journal: EpisodeJournal,
 ) -> str:
     """One tool-free sentence from the model. Falls back to the template on any failure."""
-    answerable = history
-    if history and history[-1].get("role") == "assistant" and history[-1].get("tool_calls"):
-        answerable = history[:-1]  # the escalating turn's calls were never run or answered
     request = {"role": "user", "content": PARAPHRASE_REQUEST + template}
-    sent = [*answerable, request]
+    sent = [*_answerable(history), request]
     turn = client.complete(sent, tools, tool_choice="none")
     controller.record_usage(turn)
     history.append(request)
@@ -309,4 +479,4 @@ def _paraphrase(
     return template
 
 
-__all__ = ["observation_message", "run_episode"]
+__all__ = ["MAX_PARALLEL_READS", "observation_message", "run_episode"]

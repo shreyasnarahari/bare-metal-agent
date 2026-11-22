@@ -26,8 +26,12 @@ if TYPE_CHECKING:
 
 SemanticCheck = Callable[["Store", Mapping[str, Any]], list[FieldProblem]]
 
-# Tool names a policy may point at before the tool exists. Part 6 registers these.
+# Tool names a policy may point at that the model-facing registry does not hold.
+# refund_via_ledger lives in the switch strategy's alternatives registry (part 6).
 RESERVED_TOOL_NAMES = frozenset({"refund_via_ledger"})
+# Server-side parameters the executor supplies. Never in the model-facing schema,
+# so a model cannot pass its own idempotency key (the closed schema rejects it).
+SERVER_PARAMETERS = frozenset({"idempotency_key"})
 
 
 def arguments_schema(handler: Callable[..., Any]) -> dict[str, Any]:
@@ -41,7 +45,7 @@ def arguments_schema(handler: Callable[..., Any]) -> dict[str, Any]:
         raise NotImplementedError
 
     arguments_only.__signature__ = signature.replace(  # type: ignore[attr-defined]
-        parameters=parameters[1:],
+        parameters=[parameter for parameter in parameters[1:] if parameter.name not in SERVER_PARAMETERS],
         return_annotation=inspect.Signature.empty,
     )
     return Tool.from_function(arguments_only, name=handler.__name__).parameters

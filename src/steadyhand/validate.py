@@ -234,6 +234,26 @@ def unavailable_observation(tool: str) -> ErrorObservation:
     )
 
 
+def outcome_unknown_observation(tool: str, problem: str) -> ErrorObservation:
+    return ErrorObservation(
+        ErrorType.OUTCOME_UNKNOWN,
+        tool,
+        False,
+        f"Could not confirm whether {tool} took effect. Do not call it again; tell the user it needs checking.",
+        details=(FieldProblem(None, problem),),
+    )
+
+
+def suspicious_result_observation(tool: str, hint: str, problem: str, *, retryable: bool = False) -> ErrorObservation:
+    return ErrorObservation(
+        ErrorType.SUSPICIOUS_RESULT,
+        tool,
+        retryable,
+        hint,
+        details=(FieldProblem(None, problem),),
+    )
+
+
 def handler_error_observation(tool: str, problem: str) -> ErrorObservation:
     return ErrorObservation(
         error_type=ErrorType.HANDLER_ERROR,
@@ -280,8 +300,7 @@ def check_issue_refund(store: Store, arguments: Mapping[str, Any]) -> list[Field
         problems.append(FieldProblem("amount_inr", "must have at most two decimal places", got))
     elif not problems:
         order_id = arguments["order_id"]
-        refunded = sum((Decimal(refund.amount_inr) for refund in store.refunds_for(order_id)), Decimal(0))
-        refundable = Decimal(store.order(order_id).total_inr) - refunded
+        refundable = Decimal(store.order(order_id).total_inr) - store.refunded_total(order_id)
         if amount > refundable:
             problems.append(
                 FieldProblem(
@@ -331,6 +350,8 @@ __all__ = [
     "json_pointer",
     "must_be_future",
     "not_found_observation",
+    "outcome_unknown_observation",
+    "suspicious_result_observation",
     "parse_error_observation",
     "require_existing",
     "schema_problems",

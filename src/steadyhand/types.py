@@ -147,7 +147,7 @@ class ToolResult:
         if self.ok:
             return {"ok": True, "value": self.value}
         assert self.error is not None
-        return self.error.as_dict()
+        return self.error.model_dict()
 
     def content(self) -> str:
         return observation_content(self.observation())

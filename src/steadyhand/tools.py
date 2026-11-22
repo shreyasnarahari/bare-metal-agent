@@ -14,7 +14,6 @@ JSON Schema keywords, so the schemas stay inside the grammar subset.
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from decimal import Decimal
 from typing import Annotated, Any, TypedDict
 
@@ -24,6 +23,7 @@ from .policy import Effect, RetrySpec, ToolPolicy
 from .registry import SemanticCheck, SteadyhandRegistry
 from .store import (
     Customer,
+    LedgerEntry,
     Note,
     Order,
     OrderStatus,
@@ -33,6 +33,7 @@ from .store import (
     Ticket,
     TicketStatus,
     money,
+    public_dict,
 )
 from .validate import check_create_ticket, check_issue_refund, require_existing
 
@@ -43,35 +44,34 @@ TicketId = Annotated[str, Field(description="Support ticket id, for example tkt_
 
 def get_order(store: Store, order_id: OrderId) -> dict[str, Any]:
     """Look up one order: its customer, status, line items, total in INR, and notes."""
-    return asdict(store.order(order_id))
+    return public_dict(store.order(order_id))
 
 
 def get_customer(store: Store, customer_id: CustomerId) -> dict[str, Any]:
     """Look up one customer's name, email, and loyalty tier."""
-    return asdict(store.customer(customer_id))
+    return public_dict(store.customer(customer_id))
 
 
 def list_payments(store: Store, order_id: OrderId) -> dict[str, Any]:
     """List the payments and refunds recorded for one order, with paid and refunded totals."""
     payments = store.payments_for(order_id)
-    refunds = store.refunds_for(order_id)
     captured = sum(
         (Decimal(payment.amount_inr) for payment in payments if payment.status == "captured"),
         start=Decimal(0),
     )
-    refunded = sum((Decimal(refund.amount_inr) for refund in refunds), start=Decimal(0))
     return {
         "order_id": order_id,
-        "payments": [asdict(payment) for payment in payments],
-        "refunds": [asdict(refund) for refund in refunds],
+        "payments": [public_dict(payment) for payment in payments],
+        "refunds": [public_dict(refund) for refund in store.refunds_for(order_id)],
+        "ledger_entries": [public_dict(entry) for entry in store.ledger_for(order_id)],
         "captured_total_inr": money(captured),
-        "refunded_total_inr": money(refunded),
+        "refunded_total_inr": money(store.refunded_total(order_id)),
     }
 
 
 def get_ticket(store: Store, ticket_id: TicketId) -> dict[str, Any]:
     """Look up one support ticket, including its status history."""
-    return asdict(store.ticket(ticket_id))
+    return public_dict(store.ticket(ticket_id))
 
 
 def search_orders(
@@ -104,9 +104,11 @@ def issue_refund(
     order_id: OrderId,
     amount_inr: Annotated[float, Field(description="Refund amount in Indian rupees, for example 120.50.")],
     reason: Annotated[str, Field(description="Short reason recorded on the refund.")],
+    *,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Issue a refund against an order. Every call creates a new refund."""
-    return asdict(store.add_refund(order_id, amount_inr, reason))
+    return public_dict(store.add_refund(order_id, amount_inr, reason, idempotency_key=idempotency_key))
 
 
 def create_ticket(
@@ -117,19 +119,23 @@ def create_ticket(
         str | None,
         Field(description="Order the ticket is about, if any, for example ord_1001."),
     ] = None,
+    *,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Open a new support ticket for a customer. Every call creates a new ticket."""
-    return asdict(store.add_ticket(customer_id, subject, order_id))
+    return public_dict(store.add_ticket(customer_id, subject, order_id, idempotency_key=idempotency_key))
 
 
 def add_order_note(
     store: Store,
     order_id: OrderId,
     note: Annotated[str, Field(description="Text of the note to attach to the order.")],
+    *,
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     """Attach an internal note to an order. Every call appends another note."""
-    created = store.add_note(order_id, note)
-    return {"order_id": order_id, "note": asdict(created)}
+    created = store.add_note(order_id, note, idempotency_key=idempotency_key)
+    return {"order_id": order_id, "note": public_dict(created)}
 
 
 def set_ticket_status(
@@ -138,12 +144,12 @@ def set_ticket_status(
     status: Annotated[TicketStatus, Field(description="New ticket status.")],
 ) -> dict[str, Any]:
     """Set a support ticket's status. Setting the current status again changes nothing."""
-    return asdict(store.set_ticket_status(ticket_id, status))
+    return public_dict(store.set_ticket_status(ticket_id, status))
 
 
 def cancel_order(store: Store, order_id: OrderId) -> dict[str, Any]:
     """Cancel an order that has not shipped. Cancelling a cancelled order changes nothing."""
-    return asdict(store.cancel_order(order_id))
+    return public_dict(store.cancel_order(order_id))
 
 
 READ_HANDLERS = (get_order, get_customer, list_payments, get_ticket, search_orders)
@@ -177,6 +183,7 @@ class PaymentsResult(TypedDict):
     order_id: str
     payments: list[Payment]
     refunds: list[Refund]
+    ledger_entries: list[LedgerEntry]
     captured_total_inr: str
     refunded_total_inr: str
 

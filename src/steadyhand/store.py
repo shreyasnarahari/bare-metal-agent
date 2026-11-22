@@ -4,12 +4,21 @@ Each episode owns its own ``Store`` (``load_fixture()`` once, then ``clone()``
 per episode), so concurrent episodes and later fault schedules never share
 mutations. Ids come from counters seeded by the fixture, and every timestamp
 comes from the fixture's fixed ``clock``, so replays produce identical stores.
+
+The three non-idempotent writes accept a server-side ``idempotency_key``: a
+repeat with the same key returns the original receipt and changes nothing.
+Keys are stored on the rows they created and indexed for lookup. Rows without
+a key serialize exactly as they did before keys existed, so fixture hashes and
+handler outputs are unchanged when no key is used.
+
+A per-store lock lets one episode run independent reads on several threads.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import threading
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -58,6 +67,23 @@ def money(value: Decimal | float | int | str) -> str:
     return str(amount.quantize(_CENT))
 
 
+def public_dict(row: Any) -> Any:
+    """``asdict`` without unset idempotency keys, so keyless rows look as they always did."""
+    return _strip_unset_keys(asdict(row))
+
+
+def _strip_unset_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_unset_keys(item)
+            for key, item in value.items()
+            if not (key == "idempotency_key" and item is None)
+        }
+    if isinstance(value, list):
+        return [_strip_unset_keys(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class Customer:
     customer_id: str
@@ -79,6 +105,7 @@ class Note:
     note_id: str
     text: str
     created_at: str
+    idempotency_key: str | None = None
 
 
 @dataclass
@@ -125,6 +152,7 @@ class Ticket:
     status: str
     created_at: str
     transitions: list[StatusTransition] = field(default_factory=list)
+    idempotency_key: str | None = None
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> Ticket:
@@ -143,10 +171,23 @@ class Refund:
     reason: str
     status: str
     created_at: str
+    idempotency_key: str | None = None
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """A refund recorded through the ledger alternative (part 6), always keyed."""
+
+    entry_id: str
+    order_id: str
+    amount_inr: str
+    reason: str
+    created_at: str
+    idempotency_key: str
 
 
 class Store:
-    """Orders, customers, payments, tickets, and refunds for one episode."""
+    """Orders, customers, payments, tickets, refunds, and ledger entries for one episode."""
 
     def __init__(
         self,
@@ -159,6 +200,7 @@ class Store:
         payments: list[Payment],
         tickets: list[Ticket],
         refunds: list[Refund],
+        ledger: list[LedgerEntry] | None = None,
         fixture_sha256: str | None = None,
     ) -> None:
         unknown = set(counters) - set(_ID_PREFIXES)
@@ -177,6 +219,19 @@ class Store:
         self._payments = _index(payments, "payment_id")
         self._tickets = _index(tickets, "ticket_id")
         self._refunds = _index(refunds, "refund_id")
+        self._ledger = _index(ledger or [], "entry_id")
+        self._idempotency: dict[str, tuple[str, ...]] = {}
+        self._reindex_keys()
+        self.lock = threading.RLock()
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = dict(self.__dict__)
+        state.pop("lock")
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.lock = threading.RLock()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, fixture_sha256: str | None = None) -> Store:
@@ -189,27 +244,32 @@ class Store:
             payments=[Payment(**row) for row in data["payments"]],
             tickets=[Ticket.from_dict(row) for row in data["tickets"]],
             refunds=[Refund(**row) for row in data["refunds"]],
+            ledger=[LedgerEntry(**row) for row in data.get("ledger", [])],
             fixture_sha256=fixture_sha256,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        """The store's public state, in the fixture's own shape."""
-        return {
+        """The store's public state, in the fixture's own shape. ``ledger`` appears once used."""
+        data: dict[str, Any] = {
             "version": self.version,
             "clock": self.clock,
             "counters": dict(self._counters),
-            "customers": [asdict(row) for row in self._customers.values()],
-            "orders": [asdict(row) for row in self._orders.values()],
-            "payments": [asdict(row) for row in self._payments.values()],
-            "tickets": [asdict(row) for row in self._tickets.values()],
-            "refunds": [asdict(row) for row in self._refunds.values()],
+            "customers": [public_dict(row) for row in self._customers.values()],
+            "orders": [public_dict(row) for row in self._orders.values()],
+            "payments": [public_dict(row) for row in self._payments.values()],
+            "tickets": [public_dict(row) for row in self._tickets.values()],
+            "refunds": [public_dict(row) for row in self._refunds.values()],
         }
+        if self._ledger:
+            data["ledger"] = [public_dict(row) for row in self._ledger.values()]
+        return data
 
     def snapshot_sha256(self) -> str:
         return canonical_hash(self.to_dict())
 
     def clone(self) -> Store:
-        return deepcopy(self)
+        with self.lock:
+            return deepcopy(self)
 
     # Reads
 
@@ -238,9 +298,27 @@ class Store:
         self.order(order_id)
         return [refund for refund in self._refunds.values() if refund.order_id == order_id]
 
+    def ledger_for(self, order_id: str) -> list[LedgerEntry]:
+        self.order(order_id)
+        return [entry for entry in self._ledger.values() if entry.order_id == order_id]
+
+    def refunded_total(self, order_id: str) -> Decimal:
+        """Refunds plus ledger entries already recorded against an order."""
+        amounts = [refund.amount_inr for refund in self.refunds_for(order_id)]
+        amounts += [entry.amount_inr for entry in self.ledger_for(order_id)]
+        return sum((Decimal(amount) for amount in amounts), Decimal(0))
+
+    def receipt_for(self, idempotency_key: str) -> tuple[str, ...] | None:
+        """``(kind, id...)`` of the row a key created, or ``None``."""
+        return self._idempotency.get(idempotency_key)
+
     @property
     def refunds(self) -> tuple[Refund, ...]:
         return tuple(self._refunds.values())
+
+    @property
+    def ledger(self) -> tuple[LedgerEntry, ...]:
+        return tuple(self._ledger.values())
 
     @property
     def tickets(self) -> tuple[Ticket, ...]:
@@ -248,8 +326,18 @@ class Store:
 
     # Writes
 
-    def add_refund(self, order_id: str, amount_inr: Decimal | float | str, reason: str) -> Refund:
-        """Append a refund. Non-idempotent: every call creates a new refund row."""
+    def add_refund(
+        self,
+        order_id: str,
+        amount_inr: Decimal | float | str,
+        reason: str,
+        *,
+        idempotency_key: str | None = None,
+    ) -> Refund:
+        """Append a refund. Non-idempotent unless a key is given; a known key returns its refund."""
+        existing = self._existing("refund", idempotency_key)
+        if existing is not None:
+            return self._refunds[existing[1]]
         self.order(order_id)
         amount = Decimal(money(amount_inr))
         if amount <= 0:
@@ -261,12 +349,54 @@ class Store:
             reason=reason,
             status="issued",
             created_at=self.clock,
+            idempotency_key=idempotency_key,
         )
         self._refunds[refund.refund_id] = refund
+        self._remember(idempotency_key, ("refund", refund.refund_id))
         return refund
 
-    def add_ticket(self, customer_id: str, subject: str, order_id: str | None = None) -> Ticket:
-        """Open a ticket under a newly allocated id. Non-idempotent."""
+    def add_ledger_entry(
+        self,
+        order_id: str,
+        amount_inr: Decimal | float | str,
+        reason: str,
+        *,
+        idempotency_key: str,
+    ) -> LedgerEntry:
+        """Record a ledger refund. Idempotent: the same key returns the same entry."""
+        if not idempotency_key:
+            raise ValueError("A ledger entry needs an idempotency key")
+        existing = self._existing("ledger", idempotency_key)
+        if existing is not None:
+            return self._ledger[existing[1]]
+        self.order(order_id)
+        amount = Decimal(money(amount_inr))
+        if amount <= 0:
+            raise ValueError("Ledger amount must be greater than zero")
+        entry = LedgerEntry(
+            entry_id=f"led_{len(self._ledger) + 1}",
+            order_id=order_id,
+            amount_inr=money(amount),
+            reason=reason,
+            created_at=self.clock,
+            idempotency_key=idempotency_key,
+        )
+        self._ledger[entry.entry_id] = entry
+        self._remember(idempotency_key, ("ledger", entry.entry_id))
+        return entry
+
+    def add_ticket(
+        self,
+        customer_id: str,
+        subject: str,
+        order_id: str | None = None,
+        *,
+        idempotency_key: str | None = None,
+    ) -> Ticket:
+        """Open a ticket under a newly allocated id. Non-idempotent unless a key is given."""
+        existing = self._existing("ticket", idempotency_key)
+        if existing is not None:
+            return self._tickets[existing[1]]
         self.customer(customer_id)
         if order_id is not None and self.order(order_id).customer_id != customer_id:
             raise StoreConflictError(f"Order {order_id!r} does not belong to {customer_id!r}")
@@ -278,15 +408,27 @@ class Store:
             status="open",
             created_at=self.clock,
             transitions=[StatusTransition(status="open", at=self.clock)],
+            idempotency_key=idempotency_key,
         )
         self._tickets[ticket.ticket_id] = ticket
+        self._remember(idempotency_key, ("ticket", ticket.ticket_id))
         return ticket
 
-    def add_note(self, order_id: str, text: str) -> Note:
-        """Append a note to an order. Non-idempotent: repeating it duplicates the note."""
+    def add_note(self, order_id: str, text: str, *, idempotency_key: str | None = None) -> Note:
+        """Append a note to an order. Repeating it duplicates the note, unless keyed."""
+        existing = self._existing("note", idempotency_key)
+        if existing is not None:
+            _, note_order, note_id = existing
+            return next(note for note in self.order(note_order).notes if note.note_id == note_id)
         order = self.order(order_id)
-        note = Note(note_id=self._next_id("note"), text=text, created_at=self.clock)
+        note = Note(
+            note_id=self._next_id("note"),
+            text=text,
+            created_at=self.clock,
+            idempotency_key=idempotency_key,
+        )
         order.notes.append(note)
+        self._remember(idempotency_key, ("note", order_id, note.note_id))
         return note
 
     def set_ticket_status(self, ticket_id: str, status: str) -> Ticket:
@@ -316,6 +458,29 @@ class Store:
         number = self._counters[kind]
         self._counters[kind] = number + 1
         return f"{_ID_PREFIXES[kind]}_{number}"
+
+    def _existing(self, kind: str, key: str | None) -> tuple[str, ...] | None:
+        if key is None:
+            return None
+        existing = self._idempotency.get(key)
+        if existing is not None and existing[0] != kind:
+            raise StoreConflictError(f"Idempotency key already used for a {existing[0]}")
+        return existing
+
+    def _remember(self, key: str | None, receipt: tuple[str, ...]) -> None:
+        if key is not None:
+            self._idempotency[key] = receipt
+
+    def _reindex_keys(self) -> None:
+        for refund in self._refunds.values():
+            self._remember(refund.idempotency_key, ("refund", refund.refund_id))
+        for entry in self._ledger.values():
+            self._remember(entry.idempotency_key, ("ledger", entry.entry_id))
+        for ticket in self._tickets.values():
+            self._remember(ticket.idempotency_key, ("ticket", ticket.ticket_id))
+        for order in self._orders.values():
+            for note in order.notes:
+                self._remember(note.idempotency_key, ("note", order.order_id, note.note_id))
 
 
 def load_fixture(path: str | Path | None = None) -> Store:
@@ -350,6 +515,7 @@ __all__ = [
     "CANCELLABLE_STATUSES",
     "Customer",
     "FIXTURE_PATH",
+    "LedgerEntry",
     "LineItem",
     "Note",
     "NotFoundError",
@@ -366,4 +532,5 @@ __all__ = [
     "TicketStatus",
     "load_fixture",
     "money",
+    "public_dict",
 ]

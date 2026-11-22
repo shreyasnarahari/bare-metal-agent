@@ -20,6 +20,14 @@ SYSTEM_PROMPT = (
     "ticket ids (like tkt_9001), and refund amounts. Never invent them: "
     "if one is missing, ask the user for it instead of calling a tool."
 )
+# Part 6 ablation: appended to the system prompt for system_prompt_variant="failure_aware".
+FAILURE_AWARE_ADDENDUM = (
+    "When a tool result has ok false, read its error_type and hint before acting. "
+    "If retryable is true and error_type is invalid_arguments, fix the listed fields and call again. "
+    "If error_type is repeated_call, stop repeating that call: change the arguments, use another tool, "
+    "or ask the user. If retryable is false, do not send the same call again."
+)
+PROMPT_VARIANTS = {"plain": "", "failure_aware": FAILURE_AWARE_ADDENDUM}
 PARAPHRASE_REQUEST = (
     "Stop working on the task now. Without calling any tool, tell the user in one or two "
     "sentences that you could not finish it, using only this summary:\n"
@@ -34,10 +42,23 @@ _MAX_GOAL_CHARS = 160
 _MAX_ARGUMENT_CHARS = 120
 
 
-def initial_messages(user_goal: str, *, system_prompt: str = SYSTEM_PROMPT) -> list[dict[str, Any]]:
-    """The opening conversation for a mock-store episode."""
+def system_prompt_for(variant: str = "plain", *, base: str = SYSTEM_PROMPT) -> str:
+    try:
+        addendum = PROMPT_VARIANTS[variant]
+    except KeyError:
+        raise ValueError(f"Unknown system prompt variant {variant!r}; choose one of {sorted(PROMPT_VARIANTS)}") from None
+    return f"{base}\n\n{addendum}" if addendum else base
+
+
+def initial_messages(
+    user_goal: str,
+    *,
+    system_prompt: str = SYSTEM_PROMPT,
+    variant: str = "plain",
+) -> list[dict[str, Any]]:
+    """The opening conversation for a mock-store episode. ``variant`` adds a prompt addendum."""
     return [
-        {"role": "system", "content": system_prompt},
+        {"role": "system", "content": system_prompt_for(variant, base=system_prompt)},
         {"role": "user", "content": user_goal},
     ]
 
@@ -85,6 +106,8 @@ def _tried_line(records: Sequence[Mapping[str, Any]]) -> str:
         if record.get("event") == "tool_result":
             outcome = "ok" if record.get("ok") else (record.get("error") or {}).get("error_type", "error")
             key = (str(record.get("tool")), str(outcome))
+        elif record.get("event") == "policy_attempt":
+            key = (str(record.get("tool")), "ok" if record.get("ok") else str(record.get("error_type")))
         elif record.get("event") == "observation" and (record.get("observation") or {}).get("error_type"):
             key = ("unparsed model output", str(record["observation"]["error_type"]))
         else:
@@ -128,4 +151,12 @@ def _last(records: Sequence[Mapping[str, Any]], event: str, predicate: Any) -> M
     return None
 
 
-__all__ = ["PARAPHRASE_REQUEST", "SYSTEM_PROMPT", "initial_messages", "render_final_message"]
+__all__ = [
+    "FAILURE_AWARE_ADDENDUM",
+    "PARAPHRASE_REQUEST",
+    "PROMPT_VARIANTS",
+    "SYSTEM_PROMPT",
+    "initial_messages",
+    "render_final_message",
+    "system_prompt_for",
+]

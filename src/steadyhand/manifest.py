@@ -29,6 +29,7 @@ from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from . import __version__ as STEADYHAND_VERSION
 from .faults import FaultSchedule
 from .journal import JOURNAL_VERSION, JournalFormatError, ReplayMismatch
+from .messages import PROMPT_VARIANTS
 from .registry import SteadyhandRegistry
 from .store import Store
 
@@ -52,6 +53,8 @@ IDENTITY_FIELDS = (
     "task_sha256",
     "fault_schedule_sha256",
     "run_label",
+    "recovery_policy",
+    "system_prompt_variant",
 )
 SERVER_FIELDS = ("server_parallel", "context_size", "per_slot_context")
 
@@ -82,6 +85,9 @@ class EpisodeManifest:
     run_label: str | None = None  # distinguishes deliberate repeats of the same task
     # The full schedule, overlay pins included, so replay rebuilds rather than re-rolls it.
     fault_schedule: dict[str, Any] | None = None
+    # Part 6. Absent in older manifests, which ran the default strategy and prompt.
+    recovery_policy: str = "typed_hint"
+    system_prompt_variant: str = "plain"
     server_parallel: int | None = None
     context_size: int | None = None
     per_slot_context: int | None = None
@@ -126,9 +132,12 @@ def build_manifest(
     server_parallel: int | None = None,
     context_size: int | None = None,
     fault_schedule: FaultSchedule | None = None,
+    recovery_policy: str = "typed_hint",
+    system_prompt_variant: str = "plain",
 ) -> EpisodeManifest:
     """The manifest for an episode about to start on ``store`` (hashed before any write)."""
     task = [dict(message) for message in messages]
+    _check_prompt_variant(task, system_prompt_variant)
     values: dict[str, Any] = {
         "journal_version": JOURNAL_VERSION,
         "profile": settings.get("profile"),
@@ -149,6 +158,8 @@ def build_manifest(
         "task_sha256": canonical_hash(task),
         "fault_schedule_sha256": fault_schedule.sha256 if fault_schedule is not None else None,
         "run_label": run_label,
+        "recovery_policy": recovery_policy,
+        "system_prompt_variant": system_prompt_variant,
     }
     return EpisodeManifest(
         episode_id=episode_id_for(values),
@@ -160,6 +171,19 @@ def build_manifest(
         fault_schedule=fault_schedule.as_dict() if fault_schedule is not None else None,
         **values,
     )
+
+
+def _check_prompt_variant(messages: Sequence[Mapping[str, Any]], variant: str) -> None:
+    """The variant label must describe the system prompt actually sent."""
+    if variant not in PROMPT_VARIANTS:
+        raise ValueError(f"Unknown system prompt variant {variant!r}")
+    addendum = PROMPT_VARIANTS[variant]
+    system = next((m.get("content") or "" for m in messages if m.get("role") == "system"), "")
+    if addendum and not system.endswith(addendum):
+        raise ValueError(f"The system prompt does not carry the {variant!r} addendum")
+    for name, other in PROMPT_VARIANTS.items():
+        if other and name != variant and system.endswith(other):
+            raise ValueError(f"The system prompt carries the {name!r} addendum but is labeled {variant!r}")
 
 
 def load_manifest(path: str | Path) -> EpisodeManifest:

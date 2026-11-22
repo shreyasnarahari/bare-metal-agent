@@ -256,6 +256,12 @@ class FaultInjector:
     def next_index(self, tool: str) -> int:
         return self._counts.get(tool, 0)
 
+    def reserve(self, tool: str) -> int:
+        """Claim the next index now, in call order, for a call that will run later (parallel reads)."""
+        call_index = self._counts.get(tool, 0)
+        self._counts[tool] = call_index + 1
+        return call_index
+
     def apply(
         self,
         call: ToolCall,
@@ -266,10 +272,11 @@ class FaultInjector:
         result_schema: Mapping[str, Any] | None = None,
         arguments_sha256: str | None = None,
         via: str = "model",
+        call_index: int | None = None,
     ) -> ToolResult:
         """Run ``call`` through the schedule. ``invoke(target)`` runs the real handler on ``target``."""
-        call_index = self._counts.get(call.name, 0)
-        self._counts[call.name] = call_index + 1
+        if call_index is None:
+            call_index = self.reserve(call.name)
         spec = self.schedule.lookup(call.name, call_index)
         if spec is None:
             return invoke(store)

@@ -33,7 +33,8 @@ class ErrorType(str, Enum):
     RATE_LIMIT = "rate_limit"
     SERVER_ERROR = "server_error"
     PERMANENT_UNAVAILABLE = "permanent_unavailable"
-    # Part 6 adds outcome_unknown and suspicious_result.
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    SUSPICIOUS_RESULT = "suspicious_result"
 
 
 class _Missing:
@@ -70,6 +71,8 @@ class ErrorObservation:
     hint: str
     details: tuple[FieldProblem, ...] = ()
     previous_output: str | None = None
+    # The raw_error baseline shows the model a bare string instead of this shape.
+    raw: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "hint", one_line(self.hint))
@@ -89,6 +92,16 @@ class ErrorObservation:
         if self.previous_output is not None:
             observation["previous_output"] = self.previous_output
         return observation
+
+    def model_dict(self) -> dict[str, Any]:
+        """What the model sees: the typed shape, or for the raw_error baseline only a string."""
+        if not self.raw:
+            return self.as_dict()
+        return {"ok": False, "error": self.raw_text()}
+
+    def raw_text(self) -> str:
+        parts = [f"{detail.field}: {detail.problem}" if detail.field else detail.problem for detail in self.details]
+        return one_line("; ".join(parts) if parts else self.error_type.value.replace("_", " "))
 
 
 def cap_problems(

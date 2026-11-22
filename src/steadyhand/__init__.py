@@ -24,6 +24,7 @@ from .journal import EpisodeJournal, new_episode_id
 from .loop import observation_message, run_episode
 from .messages import SYSTEM_PROMPT, initial_messages, render_final_message
 from .policy import Effect, PolicyError, RetrySpec, ToolPolicy
+from .recovery import STRATEGIES, RecoveryAction, RecoveryStrategy, strategy_for
 from .registry import SteadyhandRegistry
 from .store import NotFoundError, Store, StoreConflictError, load_fixture
 from .tools import build_registry
@@ -60,7 +61,10 @@ __all__ = [
     "NotFoundError",
     "PolicyError",
     "RandomOverlay",
+    "RecoveryAction",
+    "RecoveryStrategy",
     "RetrySpec",
+    "STRATEGIES",
     "SYSTEM_PROMPT",
     "SequentialExecutor",
     "SteadyhandClient",
@@ -81,6 +85,7 @@ __all__ = [
     "observation_message",
     "render_final_message",
     "run_episode",
+    "strategy_for",
     "transition",
     "validate_call",
     "worker_service",

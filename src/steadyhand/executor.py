@@ -17,10 +17,12 @@ store.
 
 from __future__ import annotations
 
+import inspect
 import json
 import threading
 import time
 from dataclasses import replace
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 from toolsmith.evaluation.models import canonical_hash
@@ -53,7 +55,11 @@ class SequentialExecutor:
         *,
         injector: FaultInjector | None = None,
         via: str = "model",
+        idempotency_key: str | None = None,
+        call_index: int | None = None,
     ) -> ToolResult:
+        """``idempotency_key`` reaches handlers that accept one (the server side of strategy d).
+        ``call_index`` is an injector index reserved earlier, for parallel reads."""
         started = time.monotonic()
 
         def refused(error: ErrorObservation, digest: str | None) -> ToolResult:
@@ -80,8 +86,12 @@ class SequentialExecutor:
         if tool.handler is None:
             return refused(handler_error_observation(call.name, "this tool has no handler"), digest)
 
+        handler_arguments = dict(arguments)
+        if idempotency_key is not None and _accepts_key(tool.handler):
+            handler_arguments["idempotency_key"] = idempotency_key
+
         def invoke(target: Store) -> ToolResult:
-            return self._invoke(call, tool.handler, policy, arguments, digest, target, started)
+            return self._invoke(call, tool.handler, policy, handler_arguments, digest, target, started)
 
         if injector is None:
             return invoke(store)
@@ -93,6 +103,7 @@ class SequentialExecutor:
             result_schema=registry.result_schema(call.name),
             arguments_sha256=digest,
             via=via,
+            call_index=call_index,
         )
         return result if result.elapsed_s else replace(result, elapsed_s=time.monotonic() - started)
 
@@ -153,7 +164,8 @@ class SequentialExecutor:
 
         def target() -> None:
             try:
-                outcome["value"] = handler(store, **arguments)
+                with store.lock:  # one handler at a time per episode store
+                    outcome["value"] = handler(store, **arguments)
             except BaseException as exc:  # reported to the model, never re-raised here
                 outcome["error"] = exc
 
@@ -163,6 +175,11 @@ class SequentialExecutor:
         if worker.is_alive():
             return False, None, None
         return True, outcome.get("value"), outcome.get("error")
+
+
+@lru_cache(maxsize=None)
+def _accepts_key(handler: Any) -> bool:
+    return "idempotency_key" in inspect.signature(handler).parameters
 
 
 __all__ = ["SequentialExecutor"]

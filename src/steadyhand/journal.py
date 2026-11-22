@@ -9,7 +9,9 @@ The event schema is frozen at ``JOURNAL_VERSION``. ``read_journal`` refuses
 unknown events, unexpected or missing fields, and any gap or duplicate in
 ``seq``. Changing a field means bumping the version. Adding a new event type
 does not: files written before it still read correctly (``injected_fault``
-arrived in part 5 this way).
+arrived in part 5 this way, the recovery events in part 6). An optional field
+is written only when it differs from its default, which a reader assumes when
+the field is absent (``recovery_policy`` defaults to ``typed_hint``).
 
 A journal built with ``expected=`` records is in verify mode: each appended
 record is compared with the recorded line at the same ``seq`` instead of
@@ -66,6 +68,13 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "limit", "last_outcome",
     }),
     "escalated": frozenset({"step", "reason"}),
+    # Policy-layer calls made by a recovery strategy (retry, verify, switch).
+    "policy_attempt": frozenset({
+        "step", "tool_call_id", "purpose", "tool", "arguments", "ok", "error_type",
+        "handler_called", "idempotency_key", "waited_s",
+    }),
+    "sanity_checked": frozenset({"step", "tool_call_id", "tool", "passed", "problem"}),
+    "recovery": frozenset({"step", "tool_call_id", "tool", "strategy", "recovered_by", "escalated"}),
     # Tool-side faults only. Model-output failures stay on model_turn.
     "injected_fault": frozenset({
         "step", "tool", "tool_call_id", "call_index", "mode", "pinned_mode", "committed",
@@ -78,6 +87,8 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
 }
 # Fields an event carries in exactly one of its forms.
 ONE_OF_FIELDS: dict[str, frozenset[str]] = {"tool_result": frozenset({"value", "error"})}
+# Fields written only when they differ from the default a reader assumes.
+OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint"}}
 # Timing differs on every run, so it never takes part in replay equality.
 VOLATILE_FIELDS: dict[str, frozenset[str]] = {
     "model_turn": frozenset({"elapsed_s"}),
@@ -186,9 +197,10 @@ def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
         )
     required = COMMON_FIELDS | EVENT_FIELDS[event]
     one_of = ONE_OF_FIELDS.get(event, frozenset())
+    optional = set(OPTIONAL_FIELDS.get(event, {}))
     keys = set(record)
     missing = required - keys
-    unexpected = keys - required - one_of
+    unexpected = keys - required - one_of - optional
     if missing or unexpected:
         problem = f"missing {sorted(missing)}" if missing else f"unexpected {sorted(unexpected)}"
         raise JournalFormatError(f"{event} has {problem}", seq=expected_seq, field="fields")
@@ -284,9 +296,12 @@ class EpisodeJournal:
         schema_sha256: str,
         policy_sha256: str,
         messages: Sequence[Mapping[str, Any]],
+        recovery_policy: str = "typed_hint",
     ) -> dict[str, Any]:
+        optional = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
         return self.append(
             "episode_started",
+            **optional,
             journal_version=JOURNAL_VERSION,
             settings=dict(settings),
             fixture_sha256=fixture_sha256,
@@ -395,6 +410,62 @@ class EpisodeJournal:
 
     def escalated(self, *, step: int, reason: str) -> dict[str, Any]:
         return self.append("escalated", step=step, reason=reason)
+
+    def policy_attempt(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        purpose: str,
+        tool: str,
+        arguments: str,
+        ok: bool,
+        error_type: str | None,
+        handler_called: bool,
+        idempotency_key: str | None,
+        waited_s: float,
+    ) -> dict[str, Any]:
+        """A call the recovery strategy made itself; ``tool_call_id`` is the model call it serves."""
+        return self.append(
+            "policy_attempt",
+            step=step,
+            tool_call_id=tool_call_id,
+            purpose=purpose,
+            tool=tool,
+            arguments=arguments,
+            ok=ok,
+            error_type=error_type,
+            handler_called=handler_called,
+            idempotency_key=idempotency_key,
+            waited_s=waited_s,
+        )
+
+    def sanity_checked(
+        self, *, step: int, tool_call_id: str, tool: str, passed: bool, problem: str | None,
+    ) -> dict[str, Any]:
+        return self.append(
+            "sanity_checked", step=step, tool_call_id=tool_call_id, tool=tool, passed=passed, problem=problem,
+        )
+
+    def recovery(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        tool: str,
+        strategy: str,
+        recovered_by: str | None,
+        escalated: str | None,
+    ) -> dict[str, Any]:
+        return self.append(
+            "recovery",
+            step=step,
+            tool_call_id=tool_call_id,
+            tool=tool,
+            strategy=strategy,
+            recovered_by=recovered_by,
+            escalated=escalated,
+        )
 
     def injected_fault(self, *, step: int, fault: Mapping[str, Any]) -> dict[str, Any]:
         """The scorer's record of a tool-side fault; the model never sees it."""

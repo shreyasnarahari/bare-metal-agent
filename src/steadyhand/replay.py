@@ -49,6 +49,7 @@ from .manifest import (
     require_match,
     try_claim,
 )
+from .recovery import RecoveryStrategy, no_sleep, strategy_for
 from .registry import SteadyhandRegistry
 from .store import Store, load_fixture
 from .tools import build_registry
@@ -217,8 +218,14 @@ def replay_episode(
     registry: SteadyhandRegistry | None = None,
     store: Store | None = None,
     executor: SequentialExecutor | None = None,
+    recovery: RecoveryStrategy | None = None,
 ) -> EpisodeResult:
-    """Re-run a finished journal on CPU and check every event. Writes nothing."""
+    """Re-run a finished journal on CPU and check every event. Writes nothing.
+
+    The recovery strategy comes from the manifest unless ``recovery`` overrides
+    it; a strategy that differs from the recorded one is refused. Policy waits
+    are not slept; their recorded lengths are compared instead.
+    """
     path = Path(path)
     records = read_journal(path)
     if records[-1]["event"] != "episode_finished":
@@ -228,6 +235,13 @@ def replay_episode(
     started = records[0]
     if manifest.episode_id != started["episode_id"]:
         raise ReplayMismatch("The manifest belongs to another episode", field="episode_id")
+    recorded_policy = started.get("recovery_policy", "typed_hint")
+    if manifest.recovery_policy != recorded_policy:
+        raise ReplayMismatch(
+            f"The manifest says {manifest.recovery_policy!r} but the journal ran {recorded_policy!r}",
+            field="recovery_policy",
+        )
+    strategy = recovery or strategy_for(manifest.recovery_policy)
     registry = registry or build_registry()
     store = (store or load_fixture()).clone()
     faults = _recorded_schedule(manifest.fault_schedule, manifest.fault_schedule_sha256)
@@ -243,6 +257,8 @@ def replay_episode(
         server_parallel=manifest.server_parallel,
         context_size=manifest.context_size,
         fault_schedule=faults,
+        recovery_policy=strategy.name,
+        system_prompt_variant=manifest.system_prompt_variant,
     )
     require_match(manifest, current)
 
@@ -262,6 +278,8 @@ def replay_episode(
         cancel=ReplayCancel(budget_checks) if finished["error_code"] == "cancelled" else None,  # type: ignore[arg-type]
         paraphrase_final=started["paraphrase_final"],
         faults=faults,
+        recovery=strategy,
+        sleep=no_sleep,
     )
     journal.verify_complete()
     return result
@@ -285,6 +303,9 @@ def run_claimed_episode(
     clock: Callable[[], float] = time.monotonic,
     cancel: Any = None,
     faults: FaultSchedule | None = None,
+    recovery: RecoveryStrategy | None = None,
+    system_prompt_variant: str = "plain",
+    sleep: Callable[[float], None] = time.sleep,
 ) -> EpisodeResult | None:
     """Claim, run (or resume), and complete one episode. ``None`` means nothing to do here.
 
@@ -306,6 +327,8 @@ def run_claimed_episode(
         server_parallel=server_parallel,
         context_size=context_size,
         fault_schedule=faults,
+        recovery_policy=recovery.name if recovery is not None else "typed_hint",
+        system_prompt_variant=system_prompt_variant,
     )
     journal_path = Path(directory) / f"{manifest.episode_id}.jsonl"
     manifest_file = manifest_path_for(journal_path)
@@ -345,6 +368,8 @@ def run_claimed_episode(
             cancel=cancel,
             paraphrase_final=paraphrase_final,
             faults=faults,
+            recovery=recovery,
+            sleep=sleep,
         )
         mark_completed(manifest_file)
         return result
