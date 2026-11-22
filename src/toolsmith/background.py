@@ -40,10 +40,21 @@ _ON_PROCESS: contextvars.ContextVar[Callable[[subprocess.Popen], None] | None] =
 
 class CommandFailed(RuntimeError):
     def __init__(self, command: Sequence[str], returncode: int, tail: str) -> None:
-        super().__init__(f"Command failed with exit {returncode}: {' '.join(command)}\n{tail}")
+        super().__init__(f"Command failed with exit {returncode}: {' '.join(command)[:500]}\n{tail}")
         self.command = list(command)
         self.returncode = returncode
         self.tail = tail
+
+
+class CommandStalled(CommandFailed):
+    """The command wrote nothing for too long, or ran past its time limit; it was killed."""
+
+    def __init__(self, command: Sequence[str], reason: str, tail: str) -> None:
+        RuntimeError.__init__(self, f"Command killed ({reason}): {' '.join(command)[:500]}\n{tail}")
+        self.command = list(command)
+        self.returncode = -1
+        self.tail = tail
+        self.reason = reason
 
 
 def say(message: str) -> None:
@@ -109,12 +120,17 @@ def run_logged(
     nice: int = 0,
     poll_seconds: float = 30.0,
     progress: Callable[[Path], None] | None = None,
+    stall_seconds: float | None = None,
+    timeout: float | None = None,
 ) -> None:
     """Run ``command`` with its output in ``log_path`` (default: the current job's log).
 
     The process gets its own session so cancelling kills the whole tree (nvcc,
     compilers). ``nice`` lowers its CPU priority for background builds. On a
-    non-zero exit, raises :class:`CommandFailed` with the log tail.
+    non-zero exit, raises :class:`CommandFailed` with the log tail. If the log
+    does not grow for ``stall_seconds``, or the command runs past ``timeout``,
+    the process tree is killed and :class:`CommandStalled` is raised, so a hung
+    clone or build never blocks a notebook forever.
     """
     command = [str(part) for part in command]
     if nice and shutil.which("nice"):
@@ -134,13 +150,32 @@ def run_logged(
     hook = _ON_PROCESS.get()
     if hook is not None:
         hook(process)
+    started = last_progress = last_change = time.monotonic()
+    last_size = -1
+    check_seconds = min(5.0, poll_seconds)
     while True:
         try:
-            returncode = process.wait(timeout=poll_seconds)
+            returncode = process.wait(timeout=check_seconds)
             break
         except subprocess.TimeoutExpired:
-            if progress is not None:
+            now = time.monotonic()
+            try:
+                size = log_path.stat().st_size
+            except OSError:
+                size = last_size
+            if size != last_size:
+                last_size, last_change = size, now
+            if progress is not None and now - last_progress >= poll_seconds:
                 progress(log_path)
+                last_progress = now
+            reason = None
+            if stall_seconds is not None and now - last_change >= stall_seconds:
+                reason = f"no output for {stall_seconds:g}s"
+            elif timeout is not None and now - started >= timeout:
+                reason = f"still running after {timeout:g}s"
+            if reason is not None:
+                _stop_process(process)
+                raise CommandStalled(command, reason, tail(log_path))
     if returncode != 0:
         raise CommandFailed(command, returncode, tail(log_path))
 
@@ -234,9 +269,24 @@ class BackgroundJobs:
         except KeyError:
             raise KeyError(f"No background job named {name!r}; run the cell that starts it") from None
 
-    def wait(self, name: str, *, poll_seconds: float = 30.0, quiet: bool = False) -> Any:
-        """The job's result. Prints progress while waiting; a failure is re-raised with the log tail."""
+    def wait(
+        self,
+        name: str,
+        *,
+        poll_seconds: float = 30.0,
+        quiet: bool = False,
+        timeout: float | None = None,
+        silence_seconds: float = 900.0,
+    ) -> Any:
+        """The job's result. Prints progress while waiting; a failure is re-raised with the log tail.
+
+        If the job's log has not changed for ``silence_seconds``, says once that it
+        may be stuck. With ``timeout``, gives up waiting (the job keeps running)
+        and raises ``TimeoutError``.
+        """
         job = self.job(name)
+        waited_from = time.monotonic()
+        warned = False
         while True:
             try:
                 return job.future.result(timeout=poll_seconds)
@@ -244,6 +294,22 @@ class BackgroundJobs:
                 if not quiet:
                     elapsed = int(time.monotonic() - job.started)
                     print(f"[{name}] still running after {elapsed}s: {last_progress(job.log_path) or 'no output yet'}", flush=True)
+                try:
+                    silent_for = time.time() - job.log_path.stat().st_mtime
+                except OSError:
+                    silent_for = 0.0
+                if silence_seconds and silent_for >= silence_seconds and not warned:
+                    warned = True
+                    print(
+                        f"[{name}] has written nothing for {int(silent_for)}s and may be stuck. Log: {job.log_path}\n"
+                        f"{tail(job.log_path, 10)}\nBACKGROUND.cancel_all() stops it; rerunning its cell starts it again.",
+                        flush=True,
+                    )
+                if timeout is not None and time.monotonic() - waited_from >= timeout:
+                    raise TimeoutError(
+                        f"Background job {name!r} did not finish within {timeout:g}s; it is still running. "
+                        f"Log: {job.log_path}"
+                    )
             except Exception as error:
                 raise RuntimeError(
                     f"Background job {name!r} failed: {error}\n--- {job.log_path} ---\n{tail(job.log_path)}"
@@ -305,6 +371,7 @@ class BackgroundJobs:
 __all__ = [
     "BackgroundJobs",
     "CommandFailed",
+    "CommandStalled",
     "Job",
     "current_log_path",
     "file_logger",

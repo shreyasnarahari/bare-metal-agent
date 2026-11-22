@@ -384,3 +384,13 @@ def test_day10_runs_restart_a_failed_server_once_and_start_it_only_when_needed()
     assert "Day10Client(profile, 'own', mode)" in helpers and "Day10Client(profile, 'bfcl', mode)" in pilot
     assert "active = start_day10_runtime(profile)" not in helpers + pilot
     assert "if DAY10_ACTIVE.get('profile') != self.profile:" in helpers  # a dead server is not silently restarted
+
+
+def test_long_cells_check_drive_and_network_calls_cannot_hang():
+    setup = "".join(notebook_cell("day10-eval-setup")["source"])
+    hardware = "".join(notebook_cell("hardware")["source"])
+
+    for cell_id in ("day10-own-qwen3", "day10-bfcl-qwen35", "day10-schema-coverage", "day10-maskbench"):
+        assert "".join(notebook_cell(cell_id)["source"]).startswith("ensure_drive()"), cell_id
+    assert setup.count("check=True, timeout=1800)") == 2
+    assert "'HF_HUB_DOWNLOAD_TIMEOUT': '60'" in hardware and "'GIT_HTTP_LOW_SPEED_TIME': '60'" in hardware

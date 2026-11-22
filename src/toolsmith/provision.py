@@ -35,6 +35,10 @@ from .hardware import build_jobs_for, total_ram_mib, visible_cpus
 LLAMA_CPP_GIT = "https://github.com/ggml-org/llama.cpp.git"
 DEFAULT_STAGING = "/content/llama.cpp-runtime-staging"
 DISK_HEADROOM = 2 * 1024**3
+CLONE_STALL_SECONDS = 600  # a clone that prints nothing for 10 minutes is stuck
+BUILD_STALL_SECONDS = 1200  # one CUDA object can take minutes on 2 vCPUs, never 20
+# git aborts a transfer that stays under 1 KB/s for a minute instead of hanging on a dead connection.
+GIT_ENVIRONMENT = {"GIT_HTTP_LOW_SPEED_LIMIT": "1000", "GIT_HTTP_LOW_SPEED_TIME": "60"}
 
 Defer = Callable[..., Any]  # BackgroundJobs.submit(name, fn)
 
@@ -290,21 +294,22 @@ def build_from_source(
         say(f"[llama.cpp {runtime.ref}] building with {jobs} jobs: {last_progress(path) or 'starting'}")
 
     say(f"Building llama.cpp {runtime.ref} for sm_{runtime.compute_cap or 'native'} with {jobs} jobs; log: {log_path}")
+    git = {"log_path": log_path, "env": {**os.environ, **GIT_ENVIRONMENT}, "stall_seconds": CLONE_STALL_SECONDS}
     if not (runtime.source / ".git").exists():
-        run_logged(["git", "clone", "--filter=blob:none", LLAMA_CPP_GIT, runtime.source], log_path=log_path)
-    run_logged(["git", "-C", runtime.source, "fetch", "--depth", "1", "origin", "tag", runtime.ref], log_path=log_path)
-    run_logged(["git", "-C", runtime.source, "checkout", "--detach", runtime.ref], log_path=log_path)
+        run_logged(["git", "clone", "--progress", "--filter=blob:none", LLAMA_CPP_GIT, runtime.source], **git)
+    run_logged(["git", "-C", runtime.source, "fetch", "--progress", "--depth", "1", "origin", "tag", runtime.ref], **git)
+    run_logged(["git", "-C", runtime.source, "checkout", "--detach", runtime.ref], **git)
     cuda_arch = [f"-DCMAKE_CUDA_ARCHITECTURES={runtime.compute_cap}"] if runtime.compute_cap else []
     run_logged(
         [
             "cmake", "-S", runtime.source, "-B", runtime.build,
             "-DGGML_CUDA=ON", *cuda_arch, "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=ON",
         ],
-        log_path=log_path, nice=nice, progress=progress,
+        log_path=log_path, nice=nice, progress=progress, stall_seconds=BUILD_STALL_SECONDS,
     )
     run_logged(
         ["cmake", "--build", runtime.build, "--target", "llama-server", "-j", str(jobs)],
-        log_path=log_path, nice=nice, progress=progress,
+        log_path=log_path, nice=nice, progress=progress, stall_seconds=BUILD_STALL_SECONDS,
     )
 
 

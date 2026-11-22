@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 import sys
 import threading
 import time
@@ -173,3 +174,44 @@ def test_long_commands_are_shortened_in_the_log(tmp_path):
 
     first = log.read_text().splitlines()[0]
     assert len(first) < 2100 and "(503 arguments)" in first
+
+
+def test_a_command_that_goes_quiet_is_killed():
+    from toolsmith.background import CommandStalled
+
+    started = time.monotonic()
+    with pytest.raises(CommandStalled, match="no output for 1s") as caught:
+        run_logged(
+            [sys.executable, "-c", "print('cloning', flush=True); import time; time.sleep(60)"],
+            log_path=Path(caught_log := f"/tmp/stall-{time.monotonic_ns()}.log"), stall_seconds=1, poll_seconds=0.2,
+        )
+    assert time.monotonic() - started < 15
+    assert "cloning" in caught.value.tail
+    Path(caught_log).unlink(missing_ok=True)
+
+
+def test_a_command_past_its_time_limit_is_killed(tmp_path):
+    from toolsmith.background import CommandStalled
+
+    chatty = "import time\nwhile True:\n    print('working', flush=True)\n    time.sleep(0.1)\n"
+    with pytest.raises(CommandStalled, match="still running after 1s"):
+        run_logged([sys.executable, "-c", chatty], log_path=tmp_path / "chatty.log", timeout=1, poll_seconds=0.2)
+
+
+def test_wait_warns_about_a_silent_job_and_can_give_up(tmp_path, capsys):
+    import os
+
+    jobs = BackgroundJobs(tmp_path)
+    release = threading.Event()
+    jobs.submit("silent", release.wait, 10)
+    deadline = time.monotonic() + 5
+    while "silent started" not in (tmp_path / "silent.log").read_text() and time.monotonic() < deadline:
+        time.sleep(0.02)  # the job's own first line must not refresh the timestamp set below
+    old = time.time() - 3600
+    os.utime(tmp_path / "silent.log", (old, old))
+
+    with pytest.raises(TimeoutError, match="still running"):
+        jobs.wait("silent", poll_seconds=0.1, timeout=0.3, silence_seconds=60, quiet=True)
+    assert capsys.readouterr().out.count("may be stuck") == 1  # said once, not every poll
+    release.set()
+    jobs.wait("silent", quiet=True)

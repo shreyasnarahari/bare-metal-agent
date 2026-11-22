@@ -269,6 +269,9 @@ def test_build_uses_the_given_jobs_nice_level_and_a_log(tmp_path, monkeypatch):
     assert compile_[0][-2:] == ["-j", "2"] and compile_[1]["nice"] == 10
     assert all(options["log_path"] == tmp_path / "build.log" for _, options in commands)
     assert not any(command[1] == "clone" for command, _ in commands)  # the source checkout is reused
+    assert all(options["stall_seconds"] for _, options in commands)  # nothing can hang forever
+    fetch = next(options for command, options in commands if "fetch" in command)
+    assert fetch["env"]["GIT_HTTP_LOW_SPEED_LIMIT"] == "1000" and fetch["env"]["GIT_HTTP_LOW_SPEED_TIME"] == "60"
 
 
 def test_default_build_jobs_follow_cpus_and_memory(monkeypatch):
