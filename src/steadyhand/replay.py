@@ -224,7 +224,8 @@ def replay_episode(
 
     The recovery strategy comes from the manifest unless ``recovery`` overrides
     it; a strategy that differs from the recorded one is refused. Policy waits
-    are not slept; their recorded lengths are compared instead.
+    are not slept; their recorded lengths are compared instead. Pass ``store``
+    (a fresh fixture clone) to keep the replayed final store; it is mutated.
     """
     path = Path(path)
     records = read_journal(path)
@@ -243,7 +244,7 @@ def replay_episode(
         )
     strategy = recovery or strategy_for(manifest.recovery_policy)
     registry = registry or build_registry()
-    store = (store or load_fixture()).clone()
+    store = store if store is not None else load_fixture().clone()
     faults = _recorded_schedule(manifest.fault_schedule, manifest.fault_schedule_sha256)
     current = build_manifest(
         started["settings"],

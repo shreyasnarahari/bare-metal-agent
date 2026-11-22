@@ -313,6 +313,10 @@ class Store:
         return self._idempotency.get(idempotency_key)
 
     @property
+    def orders(self) -> tuple[Order, ...]:
+        return tuple(self._orders.values())
+
+    @property
     def refunds(self) -> tuple[Refund, ...]:
         return tuple(self._refunds.values())
 

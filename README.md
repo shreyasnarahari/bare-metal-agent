@@ -19,6 +19,14 @@ git diff --check
 
 The single canonical Toolsmith notebook is `notebooks/01_toolsmith.ipynb`. On a fresh Colab L4, run the entire notebook top-to-bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
 
+## Steadyhand: the agent loop
+
+`src/steadyhand/` is the agent loop that runs on top of the Toolsmith shim. The design notes are in `Steadyhand/`. It sends a conversation and tool schemas through `ToolsmithService.chat`, validates each native tool call, and runs it against an in-memory mock store. On a tool failure it applies one of six recovery policies, and it writes one append-only journal per episode. CPU replay of a journal reproduces the episode exactly.
+
+The boundary is unchanged: **handlers run in Steadyhand, after the shim returns. The shim and its FastAPI routes never execute a tool.**
+
+**Status:** the 60-task suite, the fault injector, the policies, replay, and the report generator are implemented. They are checked on CPU with a scripted model and golden journals. **The live sweep has not been run.** No Steadyhand accuracy, duplicate-effect, or throughput number is claimed. Once a sweep runs, `results/steadyhand/RESULTS.md` is generated from its journals by `steadyhand.eval.report`. This section will cite only the measured cells, with their manifests.
+
 ## Architecture
 
 | Layer | Implementation | Responsibility |
