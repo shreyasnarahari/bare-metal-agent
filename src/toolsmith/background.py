@@ -121,8 +121,11 @@ def run_logged(
         command = ["nice", "-n", str(nice), *command]
     log_path = Path(log_path or current_log_path() or Path("/tmp") / f"toolsmith-command-{os.getpid()}.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    shown = " ".join(command)
+    if len(shown) > 2000:  # a MaskBench run lists a thousand schema files
+        shown = shown[:2000] + f" ... ({len(command)} arguments)"
     with log_path.open("ab") as output:
-        output.write(f"$ {' '.join(command)}\n".encode())
+        output.write(f"$ {shown}\n".encode())
         output.flush()
         process = subprocess.Popen(
             command, stdout=output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -246,16 +249,20 @@ class BackgroundJobs:
                     f"Background job {name!r} failed: {error}\n--- {job.log_path} ---\n{tail(job.log_path)}"
                 ) from error
 
+    def _snapshot(self) -> list[tuple[str, Job]]:
+        with self._lock:  # runtime stamps read this from worker threads while cells submit
+            return sorted(self._jobs.items())
+
     def active(self) -> list[str]:
-        return sorted(name for name, job in self._jobs.items() if not job.future.done())
+        return [name for name, job in self._snapshot() if not job.future.done()]
 
     def status(self) -> dict[str, str]:
-        return {name: job.state for name, job in sorted(self._jobs.items())}
+        return {name: job.state for name, job in self._snapshot()}
 
     def drain(self, timeout: float) -> dict[str, str]:
         """Wait up to ``timeout`` seconds for every job; returns the jobs that did not finish cleanly."""
         deadline = time.monotonic() + timeout
-        for job in list(self._jobs.values()):
+        for _, job in self._snapshot():
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
@@ -268,15 +275,22 @@ class BackgroundJobs:
         return {name: state for name, state in self.status().items() if state != "done"}
 
     def cancel_all(self) -> list[str]:
-        """Stop every running job's processes and drop jobs that have not started. Returns the names hit."""
+        """Kill running jobs' processes and drop jobs that have not started; returns the names stopped.
+
+        A job running pure Python (a Drive copy) cannot be interrupted; it is not
+        listed and finishes on its own (copies are atomic, so a cut-off one is redone).
+        """
         stopped = []
-        for name, job in list(self._jobs.items()):
+        for name, job in self._snapshot():
             if job.future.done():
                 continue
-            job.future.cancel()
+            killed = False
             for process in list(job.processes):
-                _stop_process(process)
-            stopped.append(name)
+                if process.poll() is None:
+                    _stop_process(process)
+                    killed = True
+            if job.future.cancel() or killed:
+                stopped.append(name)
         return stopped
 
 

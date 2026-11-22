@@ -155,3 +155,21 @@ def test_drain_returns_what_did_not_finish(tmp_path):
 def test_waiting_for_an_unknown_job_names_the_cell_to_run(tmp_path):
     with pytest.raises(KeyError, match="run the cell that starts it"):
         BackgroundJobs(tmp_path).wait("nothing")
+
+
+def test_cancel_all_does_not_claim_to_stop_a_python_job(tmp_path):
+    jobs = BackgroundJobs(tmp_path)
+    release = threading.Event()
+    jobs.submit("drive copy", release.wait, 5)
+
+    assert jobs.cancel_all() == []  # nothing to kill; it finishes on its own
+    release.set()
+    jobs.wait("drive copy", quiet=True)
+
+
+def test_long_commands_are_shortened_in_the_log(tmp_path):
+    log = tmp_path / "command.log"
+    run_logged([sys.executable, "-c", "pass", *[f"schema-{index}.json" for index in range(500)]], log_path=log)
+
+    first = log.read_text().splitlines()[0]
+    assert len(first) < 2100 and "(503 arguments)" in first
