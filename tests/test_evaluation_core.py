@@ -49,6 +49,17 @@ def test_deterministic_subset_is_sorted_reproducible_and_bounded():
     assert deterministic_subset(values, 0, seed=17) == []
 
 
+def test_deterministic_subset_uses_attribute_identity_for_paths(tmp_path):
+    files = [tmp_path / f"split---{index:03d}.json" for index in range(5, 0, -1)]
+    for file in files:
+        file.write_text("{}")
+
+    selected = deterministic_subset(files, 2, seed=10, id_key="name")
+
+    assert selected == deterministic_subset(files, 2, seed=10, id_key="name")
+    assert [file.name for file in selected] == sorted(file.name for file in selected)
+
+
 def test_checkpoint_resume_and_manifest_mismatch(tmp_path):
     path = tmp_path / "results.jsonl"
     runner = CheckpointRunner(path, "hash")

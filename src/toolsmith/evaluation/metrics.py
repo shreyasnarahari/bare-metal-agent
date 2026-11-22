@@ -4,7 +4,7 @@ import json
 import math
 import random
 from collections import Counter
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .models import CaseResult
@@ -121,6 +121,12 @@ def summarize_results(results: Iterable[CaseResult]) -> dict[str, Any]:
     }
 
 
+def _subset_identity(value: Any, id_key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value[id_key]
+    return getattr(value, id_key)
+
+
 def deterministic_subset(
     values: Sequence[Any],
     count: int,
@@ -130,11 +136,11 @@ def deterministic_subset(
 ) -> list[Any]:
     if count < 0:
         raise ValueError("Subset count cannot be negative")
-    ordered = sorted(values, key=lambda value: value[id_key])
+    ordered = sorted(values, key=lambda value: _subset_identity(value, id_key))
     randomizer = random.Random(seed)
     randomizer.shuffle(ordered)
     selected = ordered[:count]
-    return sorted(selected, key=lambda value: value[id_key])
+    return sorted(selected, key=lambda value: _subset_identity(value, id_key))
 
 
 __all__ = [
