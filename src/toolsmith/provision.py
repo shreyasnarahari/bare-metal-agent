@@ -5,9 +5,16 @@ so the two notebooks restore, build, and cache the same way. Builds and models
 are cached on Drive and copied to local disk before use; every executable is
 checked with ``--version`` and every GGUF by magic bytes and exact size.
 
-This module imports only the standard library and ``toolsmith.artifacts`` at
-import time, so a notebook can use ``read_env_file`` before ``pip install``.
-``huggingface_hub`` is imported only by the functions that need it.
+Every function may run inside a :class:`toolsmith.background.BackgroundJobs`
+job: messages go through ``say`` and commands through ``run_logged``, so a
+background build or download writes to its job log instead of the notebook.
+Pass ``defer=BACKGROUND.submit`` to move the slow Drive write-back off the
+critical path once the local copy is validated.
+
+This module imports only the standard library and other stdlib-only toolsmith
+modules at import time, so a notebook can use ``read_env_file`` before
+``pip install``. ``huggingface_hub`` is imported only by the functions that
+need it.
 """
 
 from __future__ import annotations
@@ -22,9 +29,14 @@ from pathlib import Path
 from typing import Any
 
 from .artifacts import copy_file_atomic, is_gguf
+from .background import last_progress, run_logged, say
+from .hardware import build_jobs_for, total_ram_mib, visible_cpus
 
 LLAMA_CPP_GIT = "https://github.com/ggml-org/llama.cpp.git"
 DEFAULT_STAGING = "/content/llama.cpp-runtime-staging"
+DISK_HEADROOM = 2 * 1024**3
+
+Defer = Callable[..., Any]  # BackgroundJobs.submit(name, fn)
 
 
 def read_env_file(path: str | Path) -> dict[str, str]:
@@ -103,12 +115,12 @@ def server_works(root: Path) -> bool:
             timeout=120,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"Server validation failed for {binary}: {error}")
+        say(f"Server validation failed for {binary}: {error}")
         return False
     if result.returncode != 0:
-        print(f"Server validation failed for {binary}: {result.stderr.strip()}")
+        say(f"Server validation failed for {binary}: {result.stderr.strip()}")
         return False
-    print(result.stdout.strip() or result.stderr.strip())
+    say(result.stdout.strip() or result.stderr.strip())
     return True
 
 
@@ -117,10 +129,7 @@ def runtime_matches_gpu(root: Path, compute_cap: str) -> bool:
     recorded = marker.read_text().strip() if marker.is_file() else ""
     if recorded == compute_cap:
         return True
-    print(
-        f"{root} was built for CUDA architecture {recorded or 'unknown'}, but this GPU is {compute_cap}.",
-        flush=True,
-    )
+    say(f"{root} was built for CUDA architecture {recorded or 'unknown'}, but this GPU is {compute_cap}.")
     return False
 
 
@@ -155,7 +164,7 @@ def _list_directory(path: Path) -> list[Path]:
     except FileNotFoundError:
         return []
     except OSError as error:
-        print(f"Could not list {path}: {error}", flush=True)
+        say(f"Could not list {path}: {error}")
         return []
 
 
@@ -166,20 +175,19 @@ def _usable_cache(runtime: LlamaCppRuntime) -> bool:
     _list_directory(candidate / "bin")
     marker = candidate / ".complete"
     if marker.is_file() and marker.read_text() != runtime.ref + "\n":
-        print(f"Ignoring {candidate}: completion marker does not match {runtime.ref}", flush=True)
+        say(f"Ignoring {candidate}: completion marker does not match {runtime.ref}")
         return False
     binary = candidate / "bin" / "llama-server"
     if not binary.is_file():
-        print(f"No cached llama-server at {binary}", flush=True)
+        say(f"No cached llama-server at {binary}")
         return False
     if runtime.compute_cap:
         cap_marker = candidate / ".compute-cap"
         recorded = cap_marker.read_text().strip() if cap_marker.is_file() else ""
         if recorded != runtime.compute_cap:
-            print(
+            say(
                 f"Ignoring {candidate}: CUDA architecture {recorded or 'unknown'} "
-                f"does not match this GPU ({runtime.compute_cap}).",
-                flush=True,
+                f"does not match this GPU ({runtime.compute_cap})."
             )
             return False
     return True
@@ -217,11 +225,11 @@ def restore_cached_build(runtime: LlamaCppRuntime) -> bool:
         return False
     staging = runtime.staging_dir()
     remove_directory(staging)
-    print(f"Restoring runtime from {runtime.cache}", flush=True)
+    say(f"Restoring runtime from {runtime.cache}")
     _copy_cached_runtime(runtime.cache, staging)
     if not server_works(staging):
         remove_directory(staging)
-        print("Cached runtime is invalid; rebuilding locally.")
+        say("Cached runtime is invalid; rebuilding locally.")
         return False
     remove_directory(runtime.build)
     staging.rename(runtime.build)
@@ -248,26 +256,55 @@ def cache_local_build(runtime: LlamaCppRuntime) -> None:
     (staging / ".complete").write_text(runtime.ref + "\n")
     remove_directory(runtime.cache)
     staging.rename(runtime.cache)
-    print(f"Cached validated runtime at {runtime.cache}")
+    say(f"Cached validated runtime at {runtime.cache}")
 
 
-def build_from_source(runtime: LlamaCppRuntime, *, jobs: int = 8) -> None:
+def default_build_jobs() -> int:
+    return build_jobs_for(visible_cpus(), total_ram_mib())
+
+
+def build_log_path(runtime: LlamaCppRuntime) -> Path:
+    return runtime.build.with_name(runtime.build.name + ".log")
+
+
+def build_from_source(
+    runtime: LlamaCppRuntime,
+    *,
+    jobs: int | None = None,
+    nice: int = 0,
+    log_path: Path | None = None,
+) -> None:
+    """Clone, configure, and compile ``llama-server`` for this GPU's architecture only.
+
+    ``jobs`` defaults to one per vCPU capped at one per 2 GiB of RAM, so a 2-vCPU,
+    13 GB T4 runtime compiles with two nvcc jobs instead of running out of memory.
+    Output goes to ``log_path``; progress is reported every 30 seconds.
+    """
+    jobs = jobs or default_build_jobs()
+    log_path = Path(log_path or build_log_path(runtime))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("")
     remove_directory(runtime.build)
+
+    def progress(path: Path) -> None:
+        say(f"[llama.cpp {runtime.ref}] building with {jobs} jobs: {last_progress(path) or 'starting'}")
+
+    say(f"Building llama.cpp {runtime.ref} for sm_{runtime.compute_cap or 'native'} with {jobs} jobs; log: {log_path}")
     if not (runtime.source / ".git").exists():
-        subprocess.run(["git", "clone", "--filter=blob:none", LLAMA_CPP_GIT, str(runtime.source)], check=True)
-    subprocess.run(["git", "-C", str(runtime.source), "fetch", "--depth", "1", "origin", "tag", runtime.ref], check=True)
-    subprocess.run(["git", "-C", str(runtime.source), "checkout", "--detach", runtime.ref], check=True)
+        run_logged(["git", "clone", "--filter=blob:none", LLAMA_CPP_GIT, runtime.source], log_path=log_path)
+    run_logged(["git", "-C", runtime.source, "fetch", "--depth", "1", "origin", "tag", runtime.ref], log_path=log_path)
+    run_logged(["git", "-C", runtime.source, "checkout", "--detach", runtime.ref], log_path=log_path)
     cuda_arch = [f"-DCMAKE_CUDA_ARCHITECTURES={runtime.compute_cap}"] if runtime.compute_cap else []
-    subprocess.run(
+    run_logged(
         [
-            "cmake", "-S", str(runtime.source), "-B", str(runtime.build),
+            "cmake", "-S", runtime.source, "-B", runtime.build,
             "-DGGML_CUDA=ON", *cuda_arch, "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=ON",
         ],
-        check=True,
+        log_path=log_path, nice=nice, progress=progress,
     )
-    subprocess.run(
-        ["cmake", "--build", str(runtime.build), "--target", "llama-server", "-j", str(jobs)],
-        check=True,
+    run_logged(
+        ["cmake", "--build", runtime.build, "--target", "llama-server", "-j", str(jobs)],
+        log_path=log_path, nice=nice, progress=progress,
     )
 
 
@@ -275,15 +312,33 @@ def _matches(runtime: LlamaCppRuntime, root: Path) -> bool:
     return runtime.compute_cap is None or runtime_matches_gpu(root, runtime.compute_cap)
 
 
-def ensure_llama_server(runtime: LlamaCppRuntime) -> Path:
-    """A validated local llama-server: reuse it, else restore from Drive, else build and cache it."""
+def ensure_llama_server(
+    runtime: LlamaCppRuntime,
+    *,
+    jobs: int | None = None,
+    nice: int = 0,
+    defer: Defer | None = None,
+) -> Path:
+    """A validated local llama-server: reuse it, else restore from Drive, else build and cache it.
+
+    With ``defer`` (``BACKGROUND.submit``), a fresh build is cached to Drive in
+    the background and this returns as soon as the local build validates.
+    """
     if server_works(runtime.build) and _matches(runtime, runtime.build):
-        print(f"Using validated local build: {runtime.server_bin}")
+        say(f"Using validated local build: {runtime.server_bin}")
     elif not restore_cached_build(runtime):
-        build_from_source(runtime)
+        build_from_source(runtime, jobs=jobs, nice=nice)
         if not server_works(runtime.build):
-            raise RuntimeError("The local build finished but llama-server failed runtime validation.")
-        cache_local_build(runtime)
+            raise RuntimeError(
+                "The local build finished but llama-server failed runtime validation. "
+                f"Build log: {build_log_path(runtime)}"
+            )
+        if runtime.compute_cap:
+            (runtime.build / ".compute-cap").write_text(runtime.compute_cap + "\n")
+        if defer is None:
+            cache_local_build(runtime)
+        else:
+            defer(f"cache llama.cpp {runtime.ref} to Drive", cache_local_build, runtime)
     if not (server_works(runtime.build) and _matches(runtime, runtime.build)):
         raise RuntimeError(f"llama-server is not usable for this GPU at {runtime.server_bin}")
     return runtime.server_bin
@@ -342,10 +397,37 @@ def _copy_with_progress(source: Path, destination: Path, expected_size: int) -> 
         percent = int(copied * 100 / total) if total else 100
         step = percent // 20
         if step != state["last_step"]:
-            print(f"{destination.name}: {percent}% ({copied:,}/{total:,} bytes)", flush=True)
+            say(f"{destination.name}: {percent}% ({copied:,}/{total:,} bytes)")
             state["last_step"] = step
 
     return copy_file_atomic(source, destination, expected_size=expected_size, progress=report)
+
+
+def _free_bytes(path: Path) -> int:
+    target = Path(path)
+    while not target.exists() and target != target.parent:
+        target = target.parent
+    return shutil.disk_usage(target).free
+
+
+def require_disk(path: Path, needed: int) -> None:
+    """Fail before a copy or download that cannot fit, instead of halfway through it."""
+    free = _free_bytes(path)
+    if free < needed + DISK_HEADROOM:
+        raise RuntimeError(
+            f"Not enough disk at {path}: {free / 1024**3:.1f} GiB free, {(needed + DISK_HEADROOM) / 1024**3:.1f} GiB "
+            "needed. Delete unused files under /content or use a runtime with a larger disk."
+        )
+
+
+def _move_into_place(source: Path, destination: Path, expected_size: int) -> None:
+    """Rename when possible (same filesystem, no second copy); copy and delete otherwise."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.replace(source, destination)
+    except OSError:
+        _copy_with_progress(source, destination, expected_size)
+        source.unlink(missing_ok=True)
 
 
 def ensure_gguf(
@@ -356,26 +438,33 @@ def ensure_gguf(
     token: str | None,
     cache_dir: str,
     download: Callable[..., str] | None = None,
+    defer: Defer | None = None,
 ) -> Path:
-    """A validated local GGUF: copied from the Drive cache, or downloaded (re-downloaded once if corrupt)."""
+    """A validated local GGUF: copied from the Drive cache, or downloaded (re-downloaded once if corrupt).
+
+    A download lands in ``cache_dir`` (``local_dir`` mode) and is renamed onto
+    ``local_path``, so the 5-6 GB file is never stored twice on local disk.
+    With ``defer``, the copy back to Drive runs in the background.
+    """
     if download is None:
         from huggingface_hub import hf_hub_download as download
     local_path, drive_path = Path(local_path), Path(drive_path)
     try:
         list(drive_path.parent.iterdir())  # a fresh Drive mount can hide files until listed
     except OSError as error:
-        print(f"Could not list {drive_path.parent}: {error}", flush=True)
+        say(f"Could not list {drive_path.parent}: {error}")
     if not is_gguf(local_path, gguf.size):
+        require_disk(local_path.parent, gguf.size)
         if is_gguf(drive_path, gguf.size):
-            print(f"Copying cached GGUF from {drive_path}", flush=True)
+            say(f"Copying cached GGUF from {drive_path}")
             _copy_with_progress(drive_path, local_path, gguf.size)
         else:
-            print(f"Downloading {gguf.filename} at revision {gguf.revision}", flush=True)
+            say(f"Downloading {gguf.filename} at revision {gguf.revision}")
             options = {
                 "repo_id": gguf.repo,
                 "filename": gguf.filename,
                 "revision": gguf.revision,
-                "cache_dir": cache_dir,
+                "local_dir": cache_dir,
                 "token": token,
             }
             downloaded = Path(download(**options))
@@ -383,12 +472,15 @@ def ensure_gguf(
                 downloaded = Path(download(**options, force_download=True))
             if not is_gguf(downloaded, gguf.size):
                 raise RuntimeError(f"Downloaded model failed GGUF validation: {downloaded}")
-            _copy_with_progress(downloaded, local_path, gguf.size)
-    if not is_gguf(drive_path, gguf.size):
-        print(f"Caching validated GGUF in {drive_path}", flush=True)
-        _copy_with_progress(local_path, drive_path, gguf.size)
+            _move_into_place(downloaded, local_path, gguf.size)
     if not is_gguf(local_path, gguf.size):
         raise RuntimeError(f"Local GGUF validation failed: {local_path}")
+    if not is_gguf(drive_path, gguf.size):
+        say(f"Caching validated GGUF in {drive_path}")
+        if defer is None:
+            _copy_with_progress(local_path, drive_path, gguf.size)
+        else:
+            defer(f"cache {drive_path.name} to Drive", _copy_with_progress, local_path, drive_path, gguf.size)
     return local_path
 
 
@@ -397,8 +489,10 @@ __all__ = [
     "GgufFile",
     "LlamaCppRuntime",
     "build_from_source",
+    "build_log_path",
     "cache_dir_for",
     "cache_local_build",
+    "default_build_jobs",
     "ensure_gguf",
     "ensure_llama_server",
     "free_port",
@@ -406,6 +500,7 @@ __all__ = [
     "q4_k_m_language_file",
     "read_env_file",
     "remove_directory",
+    "require_disk",
     "resolve_gguf",
     "restore_cached_build",
     "runtime_matches_gpu",

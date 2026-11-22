@@ -271,7 +271,7 @@ def test_the_overlap_check_uses_the_server_cells_profile_and_renderer(tmp_path, 
     ("qwen35/wide", "b8233", "0123456789ab-Qwen3.5-9B-Q4_K_M.gguf"),
     ("qwen3/tall", "b5401", "Qwen3-8B-Q4_K_M.gguf"),
 ])
-def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp_path, monkeypatch, phase, ref, drive_name):
+def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp_path, monkeypatch, sync_jobs, phase, ref, drive_name):
     import os
 
     import toolsmith.provision as provision
@@ -288,7 +288,7 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
     monkeypatch.setattr(provision, "ensure_gguf", lambda gguf, **options: calls.append(options) or options["local_path"])
     monkeypatch.setattr(ChatPromptRenderer, "from_pretrained", classmethod(lambda cls, *a, **k: PromptEchoRenderer()))
     namespace = {
-        "Path": Path, "os": os, "json": json, "HF_TOKEN": "hf-test", "HARDWARE": L4,
+        "Path": Path, "os": os, "json": json, "HF_TOKEN": "hf-test", "HARDWARE": L4, "BACKGROUND": sync_jobs,
         "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
     }
 
@@ -302,7 +302,7 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
 
 
 @pytest.mark.parametrize(("output", "family"), [("Tesla T4, 7.5, 15360\n", "T4"), ("NVIDIA L4, 8.9, 23034\n", "L4")])
-def test_the_hardware_cell_detects_the_runtime(monkeypatch, output, family):
+def test_the_hardware_cell_detects_the_runtime(monkeypatch, background_logs, output, family):
     import toolsmith.hardware as hardware
 
     monkeypatch.setattr(hardware, "query_gpus", lambda: output)
@@ -312,9 +312,13 @@ def test_the_hardware_cell_detects_the_runtime(monkeypatch, output, family):
 
     assert namespace["GPU_FAMILY"] == family and namespace["HARDWARE"].family == family
     assert namespace["CPU_COUNT"] == namespace["HARDWARE"].cpu_count
+    jobs = namespace["BACKGROUND"]
+    assert jobs.log_dir == background_logs
+    exec(compile(notebook_source("hardware"), str(NOTEBOOK_PATH), "exec"), namespace)
+    assert namespace["BACKGROUND"] is jobs  # a rerun keeps the running jobs
 
 
-def test_the_hardware_cell_fails_fast_without_a_gpu(monkeypatch):
+def test_the_hardware_cell_fails_fast_without_a_gpu(monkeypatch, background_logs):
     import toolsmith.hardware as hardware
 
     monkeypatch.setattr(hardware, "query_gpus", lambda: "")

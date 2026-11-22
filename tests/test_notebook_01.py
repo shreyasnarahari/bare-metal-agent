@@ -250,14 +250,14 @@ def run_cell_with_stubbed_provisioning(cell_id, namespace, monkeypatch):
     return calls
 
 
-def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch):
+def test_setup_cells_use_the_shared_provisioning_module(tmp_path, monkeypatch, sync_jobs):
     import os
 
     namespace = {
         "Path": Path, "os": os, "json": json,
         "DRIVE_BUILD_CACHE": tmp_path / "builds", "DRIVE_MODEL_CACHE": tmp_path / "models",
         "HF_TOKEN": "hf-test", "QWEN35_GGUF_REPO": "unsloth/Qwen3.5-9B-GGUF",
-        "HARDWARE": Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000),
+        "HARDWARE": Hardware("NVIDIA L4", "89", 23034, 8, 54000, 200_000), "BACKGROUND": sync_jobs,
     }
 
     build = run_cell_with_stubbed_provisioning("build-llama-cpp", namespace, monkeypatch)

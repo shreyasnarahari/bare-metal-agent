@@ -1,5 +1,6 @@
 import socket
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -110,7 +111,7 @@ def test_ensure_llama_server_reuses_a_valid_local_build(tmp_path, monkeypatch):
     local_build = tmp_path / "local-build"
     write_executable(local_build / "bin" / "llama-server", "print('ok')\n")
     (local_build / ".compute-cap").write_text("89\n")
-    monkeypatch.setattr(provision, "build_from_source", lambda runtime: pytest.fail("must not build"))
+    monkeypatch.setattr(provision, "build_from_source", lambda runtime, **options: pytest.fail("must not build"))
     runtime = LlamaCppRuntime("b5401", tmp_path / "source", local_build, tmp_path / "cache", "89")
 
     assert ensure_llama_server(runtime) == local_build / "bin" / "llama-server"
@@ -121,7 +122,7 @@ def test_ensure_llama_server_builds_and_caches_when_nothing_is_cached(tmp_path, 
                               staging=tmp_path / "staging")
     built = []
 
-    def fake_build(target):
+    def fake_build(target, **options):
         built.append(target.ref)
         write_executable(target.server_bin, "print('built')\n")
 
@@ -136,7 +137,7 @@ def test_ensure_llama_server_builds_and_caches_when_nothing_is_cached(tmp_path, 
 def test_ensure_llama_server_refuses_a_build_for_another_gpu(tmp_path, monkeypatch):
     runtime = LlamaCppRuntime("b8233", tmp_path / "source", tmp_path / "local-build", tmp_path / "cache", "89",
                               staging=tmp_path / "staging")
-    monkeypatch.setattr(provision, "build_from_source", lambda target: write_executable(target.server_bin, "raise SystemExit(1)\n"))
+    monkeypatch.setattr(provision, "build_from_source", lambda target, **options: write_executable(target.server_bin, "raise SystemExit(1)\n"))
 
     with pytest.raises(RuntimeError, match="failed runtime validation"):
         ensure_llama_server(runtime)
@@ -240,7 +241,88 @@ def test_free_port_skips_a_port_in_use():
 
 
 def test_provision_imports_only_the_standard_library_up_front():
-    source = provision.__file__
-    with open(source, encoding="utf-8") as handle:
-        top = [line for line in handle if line.startswith(("import ", "from "))]
-    assert not any("huggingface_hub" in line or "httpx" in line for line in top)
+    import toolsmith.background as background
+    import toolsmith.hardware as hardware
+
+    allowed_local = {"from .artifacts", "from .background", "from .hardware"}
+    for module in (provision, background, hardware):
+        with open(module.__file__, encoding="utf-8") as handle:
+            top = [line for line in handle if line.startswith(("import ", "from "))]
+        assert not any("huggingface_hub" in line or "httpx" in line for line in top), module.__name__
+        local = {" ".join(line.split()[:2]) for line in top if line.startswith("from .")}
+        assert local <= allowed_local, module.__name__
+
+
+# T4-safe builds and background write-back
+
+
+def test_build_uses_the_given_jobs_nice_level_and_a_log(tmp_path, monkeypatch):
+    commands = []
+    monkeypatch.setattr(provision, "run_logged", lambda command, **options: commands.append((command, options)))
+    (tmp_path / "source" / ".git").mkdir(parents=True)
+    runtime = LlamaCppRuntime("b8233", tmp_path / "source", tmp_path / "build", tmp_path / "cache", "75")
+
+    provision.build_from_source(runtime, jobs=2, nice=10)
+
+    configure, compile_ = commands[-2], commands[-1]
+    assert "-DCMAKE_CUDA_ARCHITECTURES=75" in configure[0]
+    assert compile_[0][-2:] == ["-j", "2"] and compile_[1]["nice"] == 10
+    assert all(options["log_path"] == tmp_path / "build.log" for _, options in commands)
+    assert not any(command[1] == "clone" for command, _ in commands)  # the source checkout is reused
+
+
+def test_default_build_jobs_follow_cpus_and_memory(monkeypatch):
+    monkeypatch.setattr(provision, "visible_cpus", lambda: 2)
+    monkeypatch.setattr(provision, "total_ram_mib", lambda: 13000)
+    assert provision.default_build_jobs() == 2
+    monkeypatch.setattr(provision, "visible_cpus", lambda: 8)
+    monkeypatch.setattr(provision, "total_ram_mib", lambda: 6 * 1024)
+    assert provision.default_build_jobs() == 3
+
+
+def test_a_fresh_build_is_cached_through_defer(tmp_path, monkeypatch):
+    runtime = LlamaCppRuntime("b8233", tmp_path / "source", tmp_path / "local-build", tmp_path / "cache", "89",
+                              staging=tmp_path / "staging")
+    deferred = []
+    monkeypatch.setattr(provision, "build_from_source",
+                        lambda target, **options: write_executable(target.server_bin, "print('built')\n"))
+
+    assert ensure_llama_server(runtime, defer=lambda name, fn, *args: deferred.append((name, fn, args))) == runtime.server_bin
+
+    assert not runtime.cache.exists()  # nothing written to Drive yet
+    assert (runtime.build / ".compute-cap").read_text() == "89\n"
+    name, fn, args = deferred[0]
+    assert name == "cache llama.cpp b8233 to Drive" and fn is cache_local_build
+    fn(*args)
+    assert (runtime.cache / ".complete").read_text() == "b8233\n"
+
+
+def test_ensure_gguf_downloads_into_place_without_a_second_copy(tmp_path):
+    gguf = GgufFile("repo", "model.gguf", "rev", 64)
+    seen = {}
+
+    def download(**options):
+        seen.update(options)
+        return str(write_gguf(Path(options["local_dir"]) / options["filename"], 64))
+
+    deferred = []
+    local = ensure_gguf(gguf, local_path=tmp_path / "local.gguf", drive_path=tmp_path / "drive" / "model.gguf",
+                        token="t", cache_dir=str(tmp_path / "download"), download=download,
+                        defer=lambda name, fn, *args: deferred.append((name, fn, args)))
+
+    assert seen["local_dir"] == str(tmp_path / "download") and "cache_dir" not in seen
+    assert local.stat().st_size == 64 and not (tmp_path / "download" / "model.gguf").exists()
+    assert not (tmp_path / "drive" / "model.gguf").exists()  # the Drive copy was deferred
+    name, fn, args = deferred[0]
+    assert name == "cache model.gguf to Drive"
+    fn(*args)
+    assert (tmp_path / "drive" / "model.gguf").stat().st_size == 64
+
+
+def test_ensure_gguf_refuses_a_download_that_cannot_fit(tmp_path, monkeypatch):
+    monkeypatch.setattr(provision, "_free_bytes", lambda path: 1024**3)
+
+    with pytest.raises(RuntimeError, match="Not enough disk"):
+        ensure_gguf(GgufFile("repo", "m.gguf", "rev", 5 * 1024**3), local_path=tmp_path / "l.gguf",
+                    drive_path=tmp_path / "d" / "m.gguf", token=None, cache_dir="c",
+                    download=lambda **options: pytest.fail("must not download"))
