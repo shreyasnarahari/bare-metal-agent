@@ -510,12 +510,16 @@ class JournalCopier:
         self.destination = Path(destination)
         self.copied: list[Path] = []
         self.errors: list[tuple[Path, str]] = []
-        self._queue: queue.Queue[Path | None] = queue.Queue(maxsize=depth)
+        self._queue: queue.Queue[Path | tuple[Path, Path] | None] = queue.Queue(maxsize=depth)
         self._thread = threading.Thread(target=self._run, name="steadyhand-copier", daemon=True)
         self._thread.start()
 
     def submit(self, journal_path: str | Path) -> None:
         self._queue.put(Path(journal_path))
+
+    def submit_file(self, source: str | Path, destination: str | Path) -> None:
+        """Copy any file (a sweep's scores, its manifest) to an exact destination, in queue order."""
+        self._queue.put((Path(source), Path(destination)))
 
     def close(self) -> None:
         self._queue.put(None)
@@ -529,14 +533,18 @@ class JournalCopier:
 
     def _run(self) -> None:
         while True:
-            journal_path = self._queue.get()
-            if journal_path is None:
+            item = self._queue.get()
+            if item is None:
                 return
-            for source in (journal_path, manifest_path_for(journal_path)):
+            if isinstance(item, tuple):
+                pairs = [item]
+            else:
+                pairs = [(source, self.destination / source.name) for source in (item, manifest_path_for(item))]
+            for source, destination in pairs:
                 if not source.exists():
                     continue
                 try:
-                    self.copied.append(copy_file_atomic(source, self.destination / source.name))
+                    self.copied.append(copy_file_atomic(source, destination))
                 except Exception as exc:  # recorded, so one bad copy cannot stop the queue
                     self.errors.append((source, f"{type(exc).__name__}: {exc}"))
 

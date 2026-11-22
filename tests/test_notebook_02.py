@@ -42,7 +42,8 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
 
     assert ids == [
         "introduction", "environment", "drive-and-secrets", "install-project", "hardware",
-        "steadyhand-sweep-notes", "steadyhand-cpu-gate", "steadyhand-runtime-notes", "steadyhand-runtime",
+        # Provisioning starts in the background first, so the CPU gate runs while it downloads.
+        "steadyhand-runtime-notes", "steadyhand-runtime", "steadyhand-sweep-notes", "steadyhand-cpu-gate",
         "steadyhand-server", "steadyhand-notes", "steadyhand-bare-loop", "steadyhand-smoke",
         "steadyhand-sweep", "steadyhand-server-stop", "cleanup",
     ]
@@ -96,7 +97,8 @@ def test_no_secrets_or_destructive_commands_in_the_source():
 def test_the_runtime_cell_provisions_through_the_shared_module():
     runtime = notebook_source("steadyhand-runtime")
 
-    assert "ensure_llama_server(" in runtime and "ensure_gguf(" in runtime and "resolve_gguf(" in runtime
+    assert "ensure_llama_server, steadyhand_llama_runtime" in runtime  # submitted as a background job
+    assert "ensure_gguf(" in runtime and "resolve_gguf(" in runtime and "jobs=HARDWARE.build_jobs()" in runtime
     assert "'llama_cpp_ref': 'b5401'" in runtime and "'llama_cpp_ref': 'b8233'" in runtime
     assert "select=q4_k_m_language_file" in runtime
     assert "cache_dir_for(DRIVE_BUILD_CACHE" in runtime  # the same Drive cache as the Toolsmith notebook
@@ -131,9 +133,13 @@ def test_the_live_cells_keep_one_model_and_fill_the_slots():
 
     assert "os.environ['TOOLSMITH_BASE_URL'] = steadyhand_server.base_url" in server
     assert "stop_steadyhand_runtime()" in server and "free_port('127.0.0.1', 8090)" in server
-    assert "steadyhand_preset.shrink()" in server and "server_extra_args(" in server
-    assert "STEADYHAND_RUNTIME" in server and "server_environment(steadyhand_runtime['build'])" in server
+    assert "fit_server(" in server and "kv_ladder(steadyhand_help)" in server and "server_extra_args(" in server
+    assert "probe=probe_decode_speed" in server and "vram_mib=steadyhand_gpu['memory_total_mib']" in server
+    assert "STEADYHAND_RUNTIME = collect_steadyhand_runtime()" in server
+    assert "server_environment(steadyhand_runtime['build'])" in server
     assert "workers=steadyhand_preset.parallel" in sweep and "JournalCopier(" in sweep
+    assert "mirror_dir=steadyhand_drive / 'sweeps'" in sweep and "steadyhand_active['kv_cache']" in sweep
+    assert "'q8_0'" not in sweep  # the KV type comes from the rung the server cell kept
     assert "render_report(" in sweep and "slot_context=steadyhand_preset.per_slot_context" in sweep
     assert "max_workers=steadyhand_parallel" in smoke and "/slots" in smoke
     assert notebook_source("cleanup").startswith("if 'stop_steadyhand_runtime' in globals():")
@@ -294,11 +300,15 @@ def test_the_runtime_cell_provisions_the_phase_model_with_shared_cache_names(tmp
 
     exec(compile(notebook_source("steadyhand-runtime"), str(NOTEBOOK_PATH), "exec"), namespace)
 
-    runtime = namespace["STEADYHAND_RUNTIME"]
+    # The cell only starts the jobs; the server cell collects them after the CPU gate.
+    assert namespace["STEADYHAND_RUNTIME"] is None
+    assert [name.split("-")[1] for name in sync_jobs.submitted] == ["llama.cpp", "gguf", "renderer"]
+    runtime = namespace["collect_steadyhand_runtime"]()
     assert runtime["profile_name"] == phase.split("/")[0] and runtime["llama_cpp_ref"] == ref
     assert calls[0].cache == tmp_path / "builds" / f"llama.cpp-{ref}-cuda-sm89-runtime-v2"
     assert calls[1]["drive_path"] == tmp_path / "models" / drive_name
     assert runtime["server_bin"] == calls[0].server_bin and runtime["model"] == calls[1]["local_path"]
+    assert isinstance(runtime["renderer"], PromptEchoRenderer) and runtime["gpu"] == "NVIDIA L4"
 
 
 @pytest.mark.parametrize(("output", "family"), [("Tesla T4, 7.5, 15360\n", "T4"), ("NVIDIA L4, 8.9, 23034\n", "L4")])

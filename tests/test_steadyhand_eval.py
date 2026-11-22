@@ -226,7 +226,7 @@ def test_a_sweep_resumes_after_the_first_journal_is_complete(tmp_path):
 
     with pytest.raises(RuntimeError):
         run_sweep(spec, two, dies_on_the_second, journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
-    assert len((tmp_path / "sweeps" / "two-task.scores.jsonl").read_text().splitlines()) == 1
+    assert len(scored_lines(tmp_path / "sweeps" / "two-task.scores.jsonl")) == 1
 
     calls.clear()
     scores = run_sweep(spec, two, lambda unit: calls.append(unit.key) or ScriptedTaskModel(unit.task),
@@ -237,6 +237,10 @@ def test_a_sweep_resumes_after_the_first_journal_is_complete(tmp_path):
     assert all(s.task_success for s in scores)
     manifest = json.loads((tmp_path / "sweeps" / "two-task.json").read_text())
     assert manifest["policies"] == ["idempotent_verify"] and manifest["code"]["journal"] == 1
+
+
+def scored_lines(path):
+    return [line for line in path.read_text().splitlines() if '"episode_scored"' in line]
 
 
 def test_a_sweep_refuses_a_changed_policy_list(tmp_path):
@@ -259,7 +263,7 @@ def test_a_sweep_can_fill_several_workers(tmp_path):
                        journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
 
     assert len(scores) == 4 and all(s.task_success for s in scores)
-    assert len((tmp_path / "sweeps" / "four-task.scores.jsonl").read_text().splitlines()) == 4
+    assert len(scored_lines(tmp_path / "sweeps" / "four-task.scores.jsonl")) == 4
 
 
 # Report
@@ -384,7 +388,7 @@ def test_presets_set_context_and_parallel_as_a_pair():
     smaller = l4.shrink()
     assert (smaller.parallel, smaller.context_size, smaller.per_slot_context) == (3, 49152, 16384)
     with pytest.raises(LookupError):
-        preset_for("NVIDIA A100", "qwen35", "wide")
+        preset_for("NVIDIA A100", "qwen35", "wide")  # no VRAM given: nothing to fall back on
 
 
 @pytest.mark.parametrize(
@@ -413,3 +417,183 @@ def test_probe_parsing_reads_memory_and_slots():
     assert row == {"name": "NVIDIA L4", "memory_total_mib": 23034, "memory_used_mib": 22500, "utilization_gpu": 97}
     assert needs_smaller_shape(row) is True
     assert slots_busy([{"id": 0, "is_processing": True}, {"id": 1, "is_processing": False}]) == (1, 2)
+
+
+# Running on a T4 or another card
+
+
+def test_presets_cover_a_t4_and_fall_back_by_vram():
+    from steadyhand.eval.serving import preset_family
+
+    assert preset_for("Tesla T4", "qwen35", "tall").per_slot_context == 16384
+    a100 = preset_for("NVIDIA A100-SXM4-40GB", "qwen35", "wide", vram_mib=40960)
+    v100 = preset_for("Tesla V100-SXM2-16GB", "qwen3", "wide", vram_mib=16160)
+    assert (a100.gpu, v100.gpu) == ("L4", "T4")
+    assert preset_family("Tesla T4", vram_mib=99999) == "T4"  # a named family wins
+    with pytest.raises(LookupError):
+        preset_for("Small GPU", "qwen3", "wide", vram_mib=8192)
+
+
+def test_the_kv_ladder_tries_the_smallest_cache_first_and_ends_without_flash_attention():
+    from steadyhand.eval.serving import kv_ladder
+
+    value_style = "  -fa,   --flash-attn [on|off|auto]  set Flash Attention use"
+    assert kv_ladder(value_style) == [
+        {"kv_cache": "q8_0", "flash_attn": True},
+        {"kv_cache": "f16", "flash_attn": True},
+        {"kv_cache": "f16", "flash_attn": False},
+    ]
+    assert kv_ladder("  -c, --ctx-size N") == [{"kv_cache": "f16", "flash_attn": False}]
+    assert flash_attention_args(value_style, enabled=False) == ["--flash-attn", "off"]  # explicit when default is auto
+    assert flash_attention_args("  -fa,   --flash-attn   enable", enabled=False) == []
+    off = server_extra_args(value_style, cpu_count=2, kv_cache="f16", flash_attn=False)
+    assert off[:4] == ["--cache-type-k", "f16", "--cache-type-v", "f16"] and off[4:6] == ["--flash-attn", "off"]
+
+
+def test_decode_speed_prefers_server_timings():
+    from steadyhand.eval.serving import decode_speed, is_out_of_memory
+
+    assert decode_speed({"timings": {"predicted_per_second": 31.5}}, 9.0) == 31.5
+    assert decode_speed({"tokens_predicted": 64}, 2.0) == 32.0
+    assert decode_speed({}, 1.0) is None
+    assert is_out_of_memory("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 2048 MiB: cudaMalloc failed: out of memory")
+    assert not is_out_of_memory("llama-server exited: unsupported flash attention head size")
+
+
+class FakeServer:
+    def __init__(self, preset, extra_args):
+        self.preset, self.extra_args, self.stopped = preset, extra_args, False
+
+    def stop(self, timeout):
+        self.stopped = True
+
+
+def fit(preset, rungs, outcomes, *, free_mib=4000):
+    """Run fit_server with scripted outcomes keyed by (kv_cache, flash_attn, parallel)."""
+    from steadyhand.eval.serving import fit_server
+
+    started = []
+
+    def start(current, extra_args):
+        key = (extra_args[1], "--flash-attn" in extra_args, current.parallel)
+        outcome = outcomes.get(key, 40.0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        server = FakeServer(current, extra_args)
+        server.speed = outcome
+        started.append(server)
+        return server
+
+    def extra_args_for(rung):
+        return ["--cache-type-k", rung["kv_cache"], *(["--flash-attn", "on"] if rung["flash_attn"] else [])]
+
+    result = fit_server(
+        preset, rungs, start=start, extra_args_for=extra_args_for,
+        query_gpu=lambda: {"memory_total_mib": 15360, "memory_used_mib": 15360 - free_mib},
+        probe=lambda server: server.speed, log=lambda message: None,
+    )
+    return result, started
+
+
+LADDER = [{"kv_cache": "q8_0", "flash_attn": True}, {"kv_cache": "f16", "flash_attn": True},
+          {"kv_cache": "f16", "flash_attn": False}]
+
+
+def test_fit_server_takes_the_first_rung_that_decodes_at_gpu_speed():
+    t4 = preset_for("Tesla T4", "qwen3", "wide")
+
+    result, started = fit(t4, LADDER, {("q8_0", True, 4): 1.2})  # q8_0 + FA falls back to CPU here
+
+    assert result.rung == {"kv_cache": "f16", "flash_attn": True} and result.preset.parallel == 4
+    assert started[0].stopped and not started[-1].stopped
+    assert [attempt["result"] for attempt in result.attempts] == ["next_rung", "ok"]
+    assert "1.2 tok/s" in result.attempts[0]["reason"]
+
+
+def test_fit_server_drops_a_slot_on_out_of_memory_but_skips_a_rung_on_other_failures():
+    t4 = preset_for("Tesla T4", "qwen3", "wide")
+    oom = RuntimeError("cudaMalloc failed: out of memory")
+    crash = RuntimeError("llama-server exited before becoming healthy: GGML_ASSERT unsupported")
+
+    result, _ = fit(t4, LADDER, {("q8_0", True, 4): crash, ("f16", True, 4): oom, ("f16", True, 3): oom})
+
+    assert (result.rung["kv_cache"], result.preset.parallel) == ("f16", 2)
+    assert result.preset.per_slot_context == t4.per_slot_context
+    assert [a["result"] for a in result.attempts] == ["next_rung", "shrink", "shrink", "ok"]
+
+
+def test_fit_server_gives_up_with_every_attempt_listed():
+    from steadyhand.eval.serving import fit_server
+
+    single = preset_for("Tesla T4", "qwen3", "tall").shrink()  # one slot
+    with pytest.raises(RuntimeError, match="No server configuration fits"):
+        fit_server(
+            single, LADDER[:1], start=lambda preset, args: (_ for _ in ()).throw(RuntimeError("out of memory")),
+            extra_args_for=lambda rung: [], query_gpu=lambda: {}, probe=lambda server: None, log=lambda m: None,
+        )
+
+
+def test_a_sweep_resumes_with_a_different_slot_count_but_not_a_different_gpu(tmp_path):
+    two = [BY_ID["sh_write_01"], BY_ID["sh_write_02"]]
+    shape = {"gpu": "Tesla T4", "preset": "T4/qwen3/wide", "per_slot_context": 8192, "kv_cache_type": "q8_0"}
+    first = dataclasses.replace(spec_for(two, ["typed_hint"]), server={**shape, "parallel": 4, "context_size": 32768})
+    run_sweep(first, two, lambda unit: ScriptedTaskModel(unit.task),
+              journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
+
+    shrunk = dataclasses.replace(first, server={**shape, "parallel": 3, "context_size": 24576})
+    scores = run_sweep(shrunk, two, lambda unit: pytest.fail("everything is already scored"),
+                       journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
+    assert len(scores) == 2
+
+    other_gpu = dataclasses.replace(first, server={**shape, "gpu": "NVIDIA L4"})
+    with pytest.raises(SweepMismatch) as caught:
+        run_sweep(other_gpu, two, lambda unit: ScriptedTaskModel(unit.task),
+                  journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
+    assert caught.value.field == "server"
+    segments = [json.loads(line) for line in (tmp_path / "sweeps" / f"{first.sweep_id}.scores.jsonl").read_text().splitlines()
+                if '"sweep_segment"' in line]
+    assert [segment["parallel"] for segment in segments] == [4]  # the second run had nothing pending
+
+
+def test_a_sweep_restores_from_its_drive_mirror_after_a_disconnect(tmp_path):
+    from steadyhand.journal import JournalCopier
+
+    two = [BY_ID["sh_write_01"], BY_ID["sh_write_02"]]
+    spec = spec_for(two, ["typed_hint"], sweep_id="mirrored")
+    drive = tmp_path / "drive" / "sweeps"
+
+    def dies_on_the_second(unit):
+        if unit.task.task_id == "sh_write_02":
+            raise RuntimeError("runtime disconnected")
+        return ScriptedTaskModel(unit.task)
+
+    with JournalCopier(tmp_path / "drive" / "journals") as copier, pytest.raises(RuntimeError):
+        run_sweep(spec, two, dies_on_the_second, journal_dir=tmp_path / "local1" / "journals",
+                  sweep_dir=tmp_path / "local1" / "sweeps", copier=copier, mirror_dir=drive)
+    assert len(scored_lines(drive / "mirrored.scores.jsonl")) == 1  # copied when the run stopped
+
+    calls = []
+    scores = run_sweep(spec, two, lambda unit: calls.append(unit.key) or ScriptedTaskModel(unit.task),
+                       journal_dir=tmp_path / "local2" / "journals", sweep_dir=tmp_path / "local2" / "sweeps",
+                       mirror_dir=drive)
+
+    assert calls == ["sh_write_02|clean|typed_hint|plain"]  # a fresh runtime resumed from Drive
+    assert sorted(s.task_id for s in scores) == ["sh_write_01", "sh_write_02"]
+    assert len(scored_lines(drive / "mirrored.scores.jsonl")) == 2
+
+
+def test_a_scores_copy_cut_mid_line_loses_only_that_episode(tmp_path):
+    from steadyhand.eval.suite import load_scores
+
+    two = [BY_ID["sh_write_01"], BY_ID["sh_write_02"]]
+    spec = spec_for(two, ["typed_hint"], sweep_id="cut")
+    run_sweep(spec, two, lambda unit: ScriptedTaskModel(unit.task),
+              journal_dir=tmp_path / "journals", sweep_dir=tmp_path / "sweeps")
+    path = tmp_path / "sweeps" / "cut.scores.jsonl"
+    text = path.read_text()
+    path.write_text(text[: len(text) - 40])  # the last record is cut off, as a mid-write copy can be
+
+    assert len(load_scores(path)) == 1
+    path.write_text("not json\n" + text)
+    with pytest.raises(ValueError):
+        load_scores(path)  # corruption anywhere else is still an error

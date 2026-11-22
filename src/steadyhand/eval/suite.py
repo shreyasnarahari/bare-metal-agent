@@ -22,6 +22,7 @@ import json
 import multiprocessing
 import os
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -31,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import toolsmith
+from toolsmith.artifacts import copy_file_atomic
 from toolsmith.evaluation.models import canonical_hash
 from toolsmith.evaluation.runner import atomic_write_json
 from toolsmith.json_utils import strict_json_loads
@@ -705,6 +707,44 @@ class SweepSpec:
         return units
 
 
+# The slot count may differ between resumes (the probe shrinks it when VRAM is short); episodes
+# do not depend on it. Per-slot context, KV cache type, GPU and model still must match.
+SWEEP_SHAPE_KEYS = ("parallel", "context_size")
+
+
+def sweep_identity(spec_dict: Mapping[str, Any]) -> dict[str, Any]:
+    """The manifest fields a resumed sweep must match: everything but the slot count."""
+    value = dict(spec_dict)
+    if isinstance(value.get("server"), Mapping):
+        value["server"] = {key: item for key, item in value["server"].items() if key not in SWEEP_SHAPE_KEYS}
+    return value
+
+
+def load_scores(path: str | Path) -> dict[str, EpisodeScore]:
+    """Scored units from a sweep's scores file, skipping segment events.
+
+    A copy taken mid-write (from Drive after a disconnect) can end in a partial
+    line; that line is dropped and its episode simply runs again.
+    """
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    done: dict[str, EpisodeScore] = {}
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        try:
+            record = strict_json_loads(line)
+        except ValueError:
+            if index == len(lines) - 1 and not text.endswith("\n"):
+                break
+            raise
+        if record.get("event", "episode_scored") != "episode_scored":
+            continue
+        done[record["unit"]] = EpisodeScore.from_dict(record)
+    return done
+
+
 def run_sweep(
     spec: SweepSpec,
     tasks: Sequence[Task],
@@ -717,33 +757,54 @@ def run_sweep(
     sleep: Callable[[float], None] = no_sleep,
     budgets: Budgets | None = None,
     secrets: Sequence[str] = (),
+    mirror_dir: str | Path | None = None,
+    mirror_seconds: float = 30.0,
 ) -> list[EpisodeScore]:
     """Run every unit of ``spec`` not already scored, ``workers`` at a time.
 
     Scores are appended to ``<sweep_id>.scores.jsonl`` as each episode ends, so
-    a rerun resumes. A sweep manifest that differs from ``spec`` stops the run.
+    a rerun resumes. A sweep manifest that differs from ``spec`` (other than in
+    slot count) stops the run.
+
+    With ``mirror_dir`` (on Drive), a missing local manifest and scores file
+    are restored from it first, so a sweep resumes on a fresh runtime after a
+    disconnect, and the scores file is copied back at most every
+    ``mirror_seconds`` (through ``copier`` when given) and once at the end.
     """
     if spec.dataset_sha256 != dataset_sha256([task for task in tasks if task.task_id in set(spec.task_ids)]):
         raise SweepMismatch("dataset_sha256", spec.dataset_sha256, "the tasks given")
     sweep_dir = Path(sweep_dir)
     manifest_path = sweep_dir / f"{spec.sweep_id}.json"
     scores_path = sweep_dir / f"{spec.sweep_id}.scores.jsonl"
+    mirror = Path(mirror_dir) if mirror_dir is not None else None
+    if mirror is not None and not manifest_path.exists() and (mirror / manifest_path.name).is_file():
+        copy_file_atomic(mirror / manifest_path.name, manifest_path)
+        if (mirror / scores_path.name).is_file():
+            copy_file_atomic(mirror / scores_path.name, scores_path)
     if manifest_path.exists():
-        recorded = json.loads(manifest_path.read_text(encoding="utf-8"))
-        current = spec.as_dict()
+        recorded = sweep_identity(json.loads(manifest_path.read_text(encoding="utf-8")))
+        current = sweep_identity(spec.as_dict())
         for key in sorted(set(recorded) | set(current)):
             if recorded.get(key) != current.get(key):
                 raise SweepMismatch(key, recorded.get(key), current.get(key))
     else:
         atomic_write_json(manifest_path, spec.as_dict())
 
-    done: dict[str, EpisodeScore] = {}
-    if scores_path.exists():
-        for line in scores_path.read_text(encoding="utf-8").splitlines():
-            record = strict_json_loads(line)
-            done[record["unit"]] = EpisodeScore.from_dict(record)
+    done = load_scores(scores_path) if scores_path.exists() else {}
     recorder = JsonlRecorder(scores_path, secrets=secrets)
     lock = threading.Lock()
+    last_mirror = [time.monotonic()]
+
+    def mirror_scores(force: bool = False) -> None:
+        if mirror is None or not scores_path.exists():
+            return
+        if not force and time.monotonic() - last_mirror[0] < mirror_seconds:
+            return
+        last_mirror[0] = time.monotonic()
+        if copier is not None:
+            copier.submit_file(scores_path, mirror / scores_path.name)
+        else:
+            copy_file_atomic(scores_path, mirror / scores_path.name)
 
     def work(unit: SweepUnit) -> EpisodeScore | None:
         score = run_task(
@@ -754,16 +815,32 @@ def run_sweep(
             return None
         with lock:
             recorder.append({"event": "episode_scored", "unit": unit.key, **score.as_dict()})
+            mirror_scores()
         if copier is not None:
             copier.submit(score.journal_path)
         return score
 
     pending = [unit for unit in spec.units(tasks) if unit.key not in done]
-    if workers <= 1:
-        fresh = [work(unit) for unit in pending]
-    else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="steadyhand-sweep") as pool:
-            fresh = list(pool.map(work, pending))
+    if pending:
+        with lock:
+            recorder.append({
+                "event": "sweep_segment", "workers": workers, "pending": len(pending), "done": len(done),
+                **{key: spec.server.get(key) for key in SWEEP_SHAPE_KEYS},
+            })
+    if mirror is not None:
+        if copier is not None:
+            copier.submit_file(manifest_path, mirror / manifest_path.name)
+        else:
+            copy_file_atomic(manifest_path, mirror / manifest_path.name)
+    try:
+        if workers <= 1:
+            fresh = [work(unit) for unit in pending]
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="steadyhand-sweep") as pool:
+                fresh = list(pool.map(work, pending))
+    finally:
+        with lock:
+            mirror_scores(force=True)
     return [*done.values(), *[score for score in fresh if score is not None]]
 
 
