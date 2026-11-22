@@ -7,6 +7,7 @@ import pytest
 
 import steadyhand
 from steadyhand import (
+    Budgets,
     Effect,
     EpisodeJournal,
     EpisodeStatus,
@@ -116,7 +117,9 @@ def test_text_turn_finishes_done_with_zero_tool_executions(tmp_path):
     assert result.steps == 0
     assert (result.prompt_tokens, result.completion_tokens) == (10, 5)
     assert result.messages[-1] == {"role": "assistant", "content": "Order ord_1001 was delivered."}
-    assert events(result.journal_path) == ["episode_started", "model_turn", "episode_finished"]
+    assert events(result.journal_path) == [
+        "episode_started", "budget_checked", "model_turn", "episode_finished",
+    ]
     assert store.snapshot_sha256() == store.fixture_sha256
 
     request = service.requests[0]
@@ -155,7 +158,8 @@ def test_tool_call_then_text_feeds_the_tool_result_into_the_second_request(tmp_p
     assert result.messages[:4] == second
     assert result.messages[4]["content"] == "Order ord_1001 was delivered."
     assert events(result.journal_path) == [
-        "episode_started", "model_turn", "tool_result", "model_turn", "episode_finished",
+        "episode_started", "budget_checked", "model_turn", "tool_result",
+        "budget_checked", "model_turn", "episode_finished",
     ]
 
 
@@ -198,32 +202,35 @@ def test_step_budget_stops_after_the_last_allowed_step(tmp_path):
         tmp_path,
         completion(calls=[("call_a", "get_order", {"order_id": "ord_1001"})]),
         completion("never requested"),
-        max_steps=1,
+        budgets=Budgets(max_steps=1),
     )
 
     assert result.status is EpisodeStatus.BUDGET_EXHAUSTED
     assert result.steps == 1
     assert len(service.requests) == 1
-    assert result.final_content is None
+    assert result.final_content.startswith("Stopped: step budget exhausted (1/1 steps, ")
     assert events(result.journal_path) == [
-        "episode_started", "model_turn", "tool_result", "episode_finished",
+        "episode_started", "budget_checked", "model_turn", "tool_result",
+        "budget_checked", "episode_finished",
     ]
 
 
 def test_a_runaway_model_stops_at_the_default_step_ceiling(tmp_path):
+    # Distinct arguments, so the repeated-call guard never trips before the step ceiling.
+    orders = ["ord_1001", "ord_1002", "ord_1003", "ord_1004", "ord_1005"]
     responses = [
-        completion(calls=[(f"call_{index}", "get_order", {"order_id": "ord_1001"})])
+        completion(calls=[(f"call_{index}", "get_order", {"order_id": orders[index % 5]})])
         for index in range(20)
     ]
     result, service, _ = episode(tmp_path, *responses)
 
     assert result.status is EpisodeStatus.BUDGET_EXHAUSTED
-    assert result.steps == steadyhand.DEFAULT_MAX_STEPS == 8
+    assert result.steps == Budgets().max_steps == 8
     assert len(service.requests) == 8
 
 
 def test_zero_steps_never_calls_the_model(tmp_path):
-    result, service, _ = episode(tmp_path, max_steps=0)
+    result, service, _ = episode(tmp_path, budgets=Budgets(max_steps=0))
 
     assert result.status is EpisodeStatus.BUDGET_EXHAUSTED
     assert service.requests == []
@@ -409,10 +416,11 @@ def test_journal_lines_are_strict_json_with_sequence_numbers(tmp_path):
     started = records[0]
     assert started["profile"] == "qwen3"
     assert started["seed"] == 0
-    assert started["max_steps"] == 8
+    assert started["budgets"]["max_steps"] == 8
+    assert started["guard_limit"] == 3
     assert started["fixture_sha256"] == load_fixture().fixture_sha256
     assert started["use_grammars"] is True and started["enable_thinking"] is False
-    tool = records[2]
+    tool = next(record for record in records if record["event"] == "tool_result")
     assert tool["tool"] == "get_order"
     assert tool["arguments"] == '{"order_id": "ord_1001"}'
     assert tool["ok"] is True and tool["value"]["order_id"] == "ord_1001"

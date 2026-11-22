@@ -44,6 +44,9 @@ class EpisodeJournal:
         self.episode_id = episode_id
         self._recorder = JsonlRecorder(self.path, secrets=(*secrets, *environment))
         self._seq = 0
+        # Redacted snapshots of every appended line, so the controller can render
+        # its final message from exactly what the file holds.
+        self.records: list[dict[str, Any]] = []
 
     @classmethod
     def create(
@@ -65,6 +68,7 @@ class EpisodeJournal:
         record = {"event": event, "episode_id": self.episode_id, "seq": self._seq, **fields}
         snapshot = self._recorder.append(record)
         self._seq += 1
+        self.records.append(snapshot)
         return snapshot
 
     def episode_started(
@@ -73,7 +77,8 @@ class EpisodeJournal:
         settings: Mapping[str, Any],
         fixture_sha256: str | None,
         store_sha256: str,
-        max_steps: int,
+        budgets: Mapping[str, Any],
+        guard_limit: int,
         tool_names: Sequence[str],
         schema_sha256: str,
         policy_sha256: str,
@@ -84,7 +89,8 @@ class EpisodeJournal:
             **dict(settings),
             fixture_sha256=fixture_sha256,
             store_sha256=store_sha256,
-            max_steps=max_steps,
+            budgets=dict(budgets),
+            guard_limit=guard_limit,
             tool_names=list(tool_names),
             schema_sha256=schema_sha256,
             policy_sha256=policy_sha256,
@@ -143,6 +149,40 @@ class EpisodeJournal:
             observation=dict(observation),
         )
 
+    def budget_checked(self, *, step: int, check: Mapping[str, Any]) -> dict[str, Any]:
+        """The numbers behind one continue-or-stop decision before a model call."""
+        return self.append("budget_checked", step=step, **dict(check))
+
+    def guard_tripped(
+        self,
+        *,
+        step: int,
+        action: str,
+        tool: str,
+        tool_call_id: str,
+        arguments: str,
+        call_hash: str,
+        count: int,
+        limit: int,
+        last_outcome: str | None,
+    ) -> dict[str, Any]:
+        """``action`` is ``block`` (handler skipped) or ``escalate`` (the episode stops)."""
+        return self.append(
+            "guard_tripped",
+            step=step,
+            action=action,
+            tool=tool,
+            tool_call_id=tool_call_id,
+            arguments=arguments,
+            call_hash=call_hash,
+            count=count,
+            limit=limit,
+            last_outcome=last_outcome,
+        )
+
+    def escalated(self, *, step: int, reason: str) -> dict[str, Any]:
+        return self.append("escalated", step=step, reason=reason)
+
     def episode_finished(
         self,
         *,
@@ -153,6 +193,7 @@ class EpisodeJournal:
         completion_tokens: int,
         error_code: str | None,
         store_sha256: str,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         return self.append(
             "episode_finished",
@@ -162,6 +203,7 @@ class EpisodeJournal:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             error_code=error_code,
+            error_message=error_message,
             store_sha256=store_sha256,
         )
 

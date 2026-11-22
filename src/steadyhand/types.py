@@ -28,8 +28,8 @@ class EpisodeStatus(str, Enum):
     RUNNING = "running"
     DONE = "done"
     BUDGET_EXHAUSTED = "budget_exhausted"
+    ESCALATED = "escalated"
     ABORTED = "aborted"
-    # ESCALATED arrives in part 3.
 
 
 @dataclass(frozen=True)

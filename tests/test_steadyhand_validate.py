@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from steadyhand import (
+    Budgets,
     Effect,
     EpisodeJournal,
     EpisodeStatus,
@@ -620,7 +621,7 @@ def test_quoted_bad_output_is_bounded(tmp_path):
 def test_repeated_parse_errors_stop_at_the_step_budget(tmp_path):
     errors = [model_output_error("invalid_tool_call", "Could not parse model output", "<tool_call>") for _ in range(5)]
 
-    result, service, _, _ = episode(tmp_path, *errors, max_steps=3)
+    result, service, _, _ = episode(tmp_path, *errors, budgets=Budgets(max_steps=3))
 
     assert result.status is EpisodeStatus.BUDGET_EXHAUSTED
     assert result.steps == 3

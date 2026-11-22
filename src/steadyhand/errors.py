@@ -29,8 +29,9 @@ class ErrorType(str, Enum):
     NOT_FOUND = "not_found"
     TIMEOUT = "timeout"
     HANDLER_ERROR = "handler_error"
-    # Later parts add repeated_call, rate_limit, server_error,
-    # permanent_unavailable, outcome_unknown, and suspicious_result.
+    REPEATED_CALL = "repeated_call"
+    # Later parts add rate_limit, server_error, permanent_unavailable,
+    # outcome_unknown, and suspicious_result.
 
 
 class _Missing:

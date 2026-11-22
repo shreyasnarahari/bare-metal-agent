@@ -35,6 +35,7 @@ from toolsmith.prompting import ChatPromptRenderer
 from toolsmith.protocols import ModelProfile
 from toolsmith.validation import StructuredOutputValidationError, ToolCallValidationError
 
+from .controller import has_visible_character
 from .types import ModelTurn, ToolCall, TurnKind
 
 DEFAULT_MAX_TOKENS = 256
@@ -57,9 +58,12 @@ class SteadyhandClient:
         temperature: float = 0.0,
         seed: int | None = 0,
         enable_thinking: bool | None = None,
+        slot_context: int | None = None,
     ) -> None:
         if max_tokens < 1:
             raise ValueError("max_tokens must be positive")
+        if slot_context is not None and slot_context <= max_tokens:
+            raise ValueError("slot_context must be larger than max_tokens")
         if temperature < 0:
             raise ValueError("temperature must not be negative")
         use_grammars = bool(service.use_grammars)
@@ -76,6 +80,8 @@ class SteadyhandClient:
         self.temperature = temperature
         self.seed = seed
         self.enable_thinking = enable_thinking
+        # Tokens one llama-server slot holds (-c divided by --parallel), when known.
+        self.slot_context = slot_context
 
     @property
     def profile(self) -> ModelProfile:
@@ -92,6 +98,7 @@ class SteadyhandClient:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "seed": self.seed,
+            "slot_context": self.slot_context,
         }
 
     def complete(
@@ -115,10 +122,13 @@ class SteadyhandClient:
         try:
             response = self.service.chat(request)
         except APIError as exc:
+            message = str(exc)
+            if exc.code == "completion_truncated" and self.slot_context is not None:
+                message += f" (server slot holds {self.slot_context} tokens; max_tokens {self.max_tokens})"
             return ModelTurn.failure(
                 TurnKind.PARSE_ERROR if is_model_output_error(exc) else TurnKind.FATAL_ERROR,
                 exc.code,
-                str(exc),
+                message,
                 raw_output=getattr(exc, "raw_output", None),
                 repair_attempts=exc.repair_attempts,
                 elapsed_s=time.perf_counter() - started,
@@ -158,7 +168,7 @@ def classify_completion(response: Mapping[str, Any], *, elapsed_s: float = 0.0) 
     reasoning = message.get("reasoning_content")
     if calls:
         kind = TurnKind.TOOL_CALLS
-    elif isinstance(content, str) and content.strip():
+    elif isinstance(content, str) and has_visible_character(content):
         kind = TurnKind.TEXT
     else:
         return ModelTurn.failure(

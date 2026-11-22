@@ -7,10 +7,19 @@ from .client import (
     build_llama_client,
     worker_service,
 )
+from .controller import (
+    Budgets,
+    ControllerError,
+    EpisodeController,
+    Event,
+    LoopGuard,
+    transition,
+)
 from .errors import ErrorObservation, ErrorType, FieldProblem
 from .executor import SequentialExecutor
 from .journal import EpisodeJournal, new_episode_id
-from .loop import DEFAULT_MAX_STEPS, observation_message, run_episode
+from .loop import observation_message, run_episode
+from .messages import SYSTEM_PROMPT, initial_messages, render_final_message
 from .policy import Effect, PolicyError, RetrySpec, ToolPolicy
 from .registry import SteadyhandRegistry
 from .store import NotFoundError, Store, StoreConflictError, load_fixture
@@ -26,20 +35,25 @@ from .types import (
 from .validate import Verdict, validate_call
 
 __all__ = [
-    "DEFAULT_MAX_STEPS",
+    "Budgets",
+    "ControllerError",
     "Effect",
+    "EpisodeController",
     "EpisodeJournal",
     "EpisodeResult",
     "EpisodeStatus",
     "ErrorObservation",
     "ErrorType",
+    "Event",
     "FieldProblem",
     "LiveConfigError",
     "LiveSettings",
+    "LoopGuard",
     "ModelTurn",
     "NotFoundError",
     "PolicyError",
     "RetrySpec",
+    "SYSTEM_PROMPT",
     "SequentialExecutor",
     "SteadyhandClient",
     "SteadyhandRegistry",
@@ -52,10 +66,13 @@ __all__ = [
     "Verdict",
     "build_llama_client",
     "build_registry",
+    "initial_messages",
     "load_fixture",
     "new_episode_id",
     "observation_message",
+    "render_final_message",
     "run_episode",
+    "transition",
     "validate_call",
     "worker_service",
 ]
