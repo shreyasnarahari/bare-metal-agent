@@ -17,7 +17,7 @@ import json
 import os
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, fields, replace
+from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,7 @@ from toolsmith.evaluation.runner import atomic_write_json
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 
 from . import __version__ as STEADYHAND_VERSION
+from .faults import FaultSchedule
 from .journal import JOURNAL_VERSION, JournalFormatError, ReplayMismatch
 from .registry import SteadyhandRegistry
 from .store import Store
@@ -77,8 +78,10 @@ class EpisodeManifest:
     policy_sha256: str
     system_prompt_sha256: str
     task_sha256: str
-    fault_schedule_sha256: str | None = None  # part 5
+    fault_schedule_sha256: str | None = None
     run_label: str | None = None  # distinguishes deliberate repeats of the same task
+    # The full schedule, overlay pins included, so replay rebuilds rather than re-rolls it.
+    fault_schedule: dict[str, Any] | None = None
     server_parallel: int | None = None
     context_size: int | None = None
     per_slot_context: int | None = None
@@ -92,8 +95,10 @@ class EpisodeManifest:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> EpisodeManifest:
+        """Unknown keys are refused; optional fields may be absent (older manifests)."""
         known = {item.name for item in fields(cls)}
-        missing, unexpected = known - set(value), set(value) - known
+        required = {item.name for item in fields(cls) if item.default is MISSING}
+        missing, unexpected = required - set(value), set(value) - known
         if missing or unexpected:
             problem = f"missing {sorted(missing)}" if missing else f"unexpected {sorted(unexpected)}"
             raise JournalFormatError(f"Manifest has {problem}", field="manifest")
@@ -120,7 +125,7 @@ def build_manifest(
     run_label: str | None = None,
     server_parallel: int | None = None,
     context_size: int | None = None,
-    fault_schedule_sha256: str | None = None,
+    fault_schedule: FaultSchedule | None = None,
 ) -> EpisodeManifest:
     """The manifest for an episode about to start on ``store`` (hashed before any write)."""
     task = [dict(message) for message in messages]
@@ -142,7 +147,7 @@ def build_manifest(
         "policy_sha256": registry.policies_sha256(),
         "system_prompt_sha256": system_prompt_sha256(task),
         "task_sha256": canonical_hash(task),
-        "fault_schedule_sha256": fault_schedule_sha256,
+        "fault_schedule_sha256": fault_schedule.sha256 if fault_schedule is not None else None,
         "run_label": run_label,
     }
     return EpisodeManifest(
@@ -152,6 +157,7 @@ def build_manifest(
         server_parallel=server_parallel,
         context_size=context_size,
         per_slot_context=settings.get("slot_context"),
+        fault_schedule=fault_schedule.as_dict() if fault_schedule is not None else None,
         **values,
     )
 

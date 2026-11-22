@@ -31,6 +31,7 @@ from toolsmith.evaluation.models import canonical_hash
 
 from .controller import DEFAULT_GUARD_LIMIT, Budgets
 from .executor import SequentialExecutor
+from .faults import FaultSchedule
 from .journal import (
     EpisodeJournal,
     JournalFormatError,
@@ -229,6 +230,7 @@ def replay_episode(
         raise ReplayMismatch("The manifest belongs to another episode", field="episode_id")
     registry = registry or build_registry()
     store = (store or load_fixture()).clone()
+    faults = _recorded_schedule(manifest.fault_schedule, manifest.fault_schedule_sha256)
     current = build_manifest(
         started["settings"],
         registry,
@@ -240,7 +242,7 @@ def replay_episode(
         run_label=manifest.run_label,
         server_parallel=manifest.server_parallel,
         context_size=manifest.context_size,
-        fault_schedule_sha256=manifest.fault_schedule_sha256,
+        fault_schedule=faults,
     )
     require_match(manifest, current)
 
@@ -259,6 +261,7 @@ def replay_episode(
         clock=ReplayClock.from_records(records),
         cancel=ReplayCancel(budget_checks) if finished["error_code"] == "cancelled" else None,  # type: ignore[arg-type]
         paraphrase_final=started["paraphrase_final"],
+        faults=faults,
     )
     journal.verify_complete()
     return result
@@ -281,6 +284,7 @@ def run_claimed_episode(
     executor: SequentialExecutor | None = None,
     clock: Callable[[], float] = time.monotonic,
     cancel: Any = None,
+    faults: FaultSchedule | None = None,
 ) -> EpisodeResult | None:
     """Claim, run (or resume), and complete one episode. ``None`` means nothing to do here.
 
@@ -301,6 +305,7 @@ def run_claimed_episode(
         run_label=run_label,
         server_parallel=server_parallel,
         context_size=context_size,
+        fault_schedule=faults,
     )
     journal_path = Path(directory) / f"{manifest.episode_id}.jsonl"
     manifest_file = manifest_path_for(journal_path)
@@ -339,6 +344,7 @@ def run_claimed_episode(
             clock=run_clock,
             cancel=cancel,
             paraphrase_final=paraphrase_final,
+            faults=faults,
         )
         mark_completed(manifest_file)
         return result
@@ -370,6 +376,20 @@ def _replay_one(path: str) -> ReplayOutcome:
     except Exception as exc:
         return ReplayOutcome(path=path, ok=False, status=None, error=f"{type(exc).__name__}: {exc}")
     return ReplayOutcome(path=path, ok=True, status=result.status.value, error=None)
+
+
+def _recorded_schedule(value: Mapping[str, Any] | None, expected_sha256: str | None) -> FaultSchedule | None:
+    """Rebuild the recorded schedule and check it against the manifest hash before re-executing it."""
+    if value is None:
+        if expected_sha256 is not None:
+            raise ReplayMismatch("The manifest hashes a fault schedule it does not include", field="fault_schedule")
+        return None
+    schedule = FaultSchedule.from_dict(value)
+    if schedule.sha256 != expected_sha256:
+        raise ReplayMismatch(
+            "The recorded fault schedule does not match its manifest hash", field="fault_schedule_sha256"
+        )
+    return schedule
 
 
 def _refuse_redacted(records: Sequence[Mapping[str, Any]]) -> None:

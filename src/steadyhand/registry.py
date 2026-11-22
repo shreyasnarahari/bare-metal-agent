@@ -53,6 +53,7 @@ class SteadyhandRegistry:
         self._policies: dict[str, ToolPolicy] = {}
         self._semantics: dict[str, SemanticCheck] = {}
         self._validators: dict[str, Draft202012Validator] = {}
+        self._result_schemas: dict[str, dict[str, Any]] = {}
         self._reserved = frozenset(reserved_names)
         self._frozen = False
 
@@ -61,7 +62,9 @@ class SteadyhandRegistry:
         function: Callable[..., Any],
         policy: ToolPolicy,
         semantic: SemanticCheck | None = None,
+        result_schema: Mapping[str, Any] | None = None,
     ) -> Tool:
+        """Register a handler. ``result_schema`` describes its return value; the model never sees it."""
         if self._frozen:
             raise RuntimeError("The registry is frozen; register every tool before sharing it")
         name = function.__name__
@@ -76,6 +79,9 @@ class SteadyhandRegistry:
         self._validators[name] = Draft202012Validator(tool.parameters)
         if semantic is not None:
             self._semantics[name] = semantic
+        if result_schema is not None:
+            Draft202012Validator.check_schema(dict(result_schema))
+            self._result_schemas[name] = dict(result_schema)
         return tool
 
     def freeze(self) -> SteadyhandRegistry:
@@ -97,6 +103,9 @@ class SteadyhandRegistry:
 
     def semantic(self, name: str) -> SemanticCheck | None:
         return self._semantics.get(name)
+
+    def result_schema(self, name: str) -> dict[str, Any] | None:
+        return self._result_schemas.get(name)
 
     def validator(self, name: str) -> Draft202012Validator:
         try:

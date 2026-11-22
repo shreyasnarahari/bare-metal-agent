@@ -8,9 +8,12 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .errors import ErrorObservation
+
+if TYPE_CHECKING:
+    from .faults import InjectedFault
 
 
 class TurnKind(str, Enum):
@@ -131,6 +134,9 @@ class ToolResult:
     error: ErrorObservation | None = None
     handler_called: bool = False
     elapsed_s: float = 0.0
+    # Set when the fault injector touched this call. Journaled as its own
+    # injected_fault event; never part of what the model sees.
+    fault: InjectedFault | None = None
 
     def __post_init__(self) -> None:
         if self.ok == (self.error is not None):

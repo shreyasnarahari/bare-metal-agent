@@ -30,8 +30,10 @@ class ErrorType(str, Enum):
     TIMEOUT = "timeout"
     HANDLER_ERROR = "handler_error"
     REPEATED_CALL = "repeated_call"
-    # Later parts add rate_limit, server_error, permanent_unavailable,
-    # outcome_unknown, and suspicious_result.
+    RATE_LIMIT = "rate_limit"
+    SERVER_ERROR = "server_error"
+    PERMANENT_UNAVAILABLE = "permanent_unavailable"
+    # Part 6 adds outcome_unknown and suspicious_result.
 
 
 class _Missing:

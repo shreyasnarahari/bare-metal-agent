@@ -1,0 +1,26 @@
+{
+  "description": "Pinned Steadyhand tool-side faults. Each entry is the pin list for one scenario; call_index counts calls that reach the injector (after validation and the loop guard), per tool and per episode.",
+  "pins": {
+    "refund_explicit_transient": [
+      {"tool": "issue_refund", "call_index": 0, "mode": "explicit_transient", "error_type": "rate_limit"}
+    ],
+    "refund_explicit_permanent": [
+      {"tool": "issue_refund", "call_index": 0, "mode": "explicit_permanent"}
+    ],
+    "refund_implicit_transient": [
+      {"tool": "issue_refund", "call_index": 0, "mode": "implicit_transient", "implicit_patch": null}
+    ],
+    "refund_implicit_permanent": [
+      {"tool": "issue_refund", "call_index": 0, "mode": "implicit_permanent", "implicit_patch": {"amount_inr": "1200.00"}}
+    ],
+    "refund_lost_acknowledgment": [
+      {"tool": "issue_refund", "call_index": 0, "mode": "lost_acknowledgment"}
+    ],
+    "get_order_zero_total": [
+      {"tool": "get_order", "call_index": 0, "mode": "implicit_transient", "implicit_patch": {"total_inr": "0.00"}}
+    ],
+    "list_payments_hidden_refund": [
+      {"tool": "list_payments", "call_index": 0, "mode": "implicit_transient", "implicit_patch": {"refunds": [], "refunded_total_inr": "0.00"}}
+    ]
+  }
+}

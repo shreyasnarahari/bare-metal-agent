@@ -19,6 +19,7 @@ from .controller import (
 )
 from .errors import ErrorObservation, ErrorType, FieldProblem
 from .executor import SequentialExecutor
+from .faults import FaultInjector, FaultMode, FaultSchedule, FaultSpec, RandomOverlay, build_schedule
 from .journal import EpisodeJournal, new_episode_id
 from .loop import observation_message, run_episode
 from .messages import SYSTEM_PROMPT, initial_messages, render_final_message
@@ -47,6 +48,10 @@ __all__ = [
     "ErrorObservation",
     "ErrorType",
     "Event",
+    "FaultInjector",
+    "FaultMode",
+    "FaultSchedule",
+    "FaultSpec",
     "FieldProblem",
     "LiveConfigError",
     "LiveSettings",
@@ -54,6 +59,7 @@ __all__ = [
     "ModelTurn",
     "NotFoundError",
     "PolicyError",
+    "RandomOverlay",
     "RetrySpec",
     "SYSTEM_PROMPT",
     "SequentialExecutor",
@@ -68,6 +74,7 @@ __all__ = [
     "Verdict",
     "build_llama_client",
     "build_registry",
+    "build_schedule",
     "initial_messages",
     "load_fixture",
     "new_episode_id",

@@ -16,13 +16,24 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from decimal import Decimal
-from typing import Annotated, Any
+from typing import Annotated, Any, TypedDict
 
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 from .policy import Effect, RetrySpec, ToolPolicy
 from .registry import SemanticCheck, SteadyhandRegistry
-from .store import OrderStatus, Store, TicketStatus, money
+from .store import (
+    Customer,
+    Note,
+    Order,
+    OrderStatus,
+    Payment,
+    Refund,
+    Store,
+    Ticket,
+    TicketStatus,
+    money,
+)
 from .validate import check_create_ticket, check_issue_refund, require_existing
 
 OrderId = Annotated[str, Field(description="Order id, for example ord_1001.")]
@@ -162,6 +173,63 @@ def _non_idempotent(verify: str, alternatives: tuple[str, ...] = ()) -> ToolPoli
     )
 
 
+class PaymentsResult(TypedDict):
+    order_id: str
+    payments: list[Payment]
+    refunds: list[Refund]
+    captured_total_inr: str
+    refunded_total_inr: str
+
+
+class OrderSummary(TypedDict):
+    order_id: str
+    status: OrderStatus
+    placed_at: str
+    total_inr: str
+
+
+class SearchResult(TypedDict):
+    customer_id: str
+    status: OrderStatus | None
+    orders: list[OrderSummary]
+
+
+class NoteResult(TypedDict):
+    order_id: str
+    note: Note
+
+
+def result_schema(result_type: Any) -> dict[str, Any]:
+    """A closed JSON Schema for a handler's return value. Used to check fabricated values."""
+    return _closed(TypeAdapter(result_type).json_schema())
+
+
+def _closed(schema: Any) -> Any:
+    if isinstance(schema, dict):
+        closed = {key: _closed(value) for key, value in schema.items()}
+        if "properties" in closed:
+            closed["additionalProperties"] = False
+        return closed
+    if isinstance(schema, list):
+        return [_closed(item) for item in schema]
+    return schema
+
+
+RESULT_TYPES: dict[str, Any] = {
+    "get_order": Order,
+    "get_customer": Customer,
+    "list_payments": PaymentsResult,
+    "get_ticket": Ticket,
+    "search_orders": SearchResult,
+    "issue_refund": Refund,
+    "create_ticket": Ticket,
+    "add_order_note": NoteResult,
+    "set_ticket_status": Ticket,
+    "cancel_order": Order,
+}
+RESULT_SCHEMAS: dict[str, dict[str, Any]] = {name: result_schema(kind) for name, kind in RESULT_TYPES.items()}
+
+
 # (handler, policy, semantic check). Reads come first: a write's verify tool
 # must already be registered.
 TOOL_SPECS: tuple[tuple[Any, ToolPolicy, SemanticCheck | None], ...] = (
@@ -182,7 +250,7 @@ def build_registry() -> SteadyhandRegistry:
     """A frozen registry of the ten tools with their policies. Safe to share across workers."""
     registry = SteadyhandRegistry()
     for handler, policy, semantic in TOOL_SPECS:
-        registry.register(handler, policy, semantic)
+        registry.register(handler, policy, semantic, RESULT_SCHEMAS[handler.__name__])
     return registry.freeze()
 
 
@@ -193,6 +261,7 @@ __all__ = [
     "NON_IDEMPOTENT_WRITE_HANDLERS",
     "READ_HANDLERS",
     "READ_POLICY",
+    "RESULT_SCHEMAS",
     "SAFE_RETRY",
     "TOOL_SPECS",
     "TOOL_TIMEOUT_S",

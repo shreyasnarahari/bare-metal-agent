@@ -214,6 +214,26 @@ def timeout_observation(tool: str, policy: ToolPolicy) -> ErrorObservation:
     )
 
 
+def transient_failure_observation(tool: str, error_type: str, policy: ToolPolicy) -> ErrorObservation:
+    """A transient tool failure. An injected one is worded exactly like a real one."""
+    if error_type == ErrorType.TIMEOUT.value:
+        return timeout_observation(tool, policy)
+    if error_type == ErrorType.RATE_LIMIT.value:
+        return ErrorObservation(ErrorType.RATE_LIMIT, tool, True, f"{tool} is rate limited. A retry may succeed.")
+    if error_type == ErrorType.SERVER_ERROR.value:
+        return ErrorObservation(ErrorType.SERVER_ERROR, tool, True, f"{tool} had a server error. A retry may succeed.")
+    raise ValueError(f"Not a transient error type: {error_type!r}")
+
+
+def unavailable_observation(tool: str) -> ErrorObservation:
+    return ErrorObservation(
+        ErrorType.PERMANENT_UNAVAILABLE,
+        tool,
+        False,
+        "This tool is unavailable. Use a different tool or tell the user.",
+    )
+
+
 def handler_error_observation(tool: str, problem: str) -> ErrorObservation:
     return ErrorObservation(
         error_type=ErrorType.HANDLER_ERROR,
@@ -315,6 +335,8 @@ __all__ = [
     "require_existing",
     "schema_problems",
     "timeout_observation",
+    "transient_failure_observation",
+    "unavailable_observation",
     "unknown_tool_observation",
     "validate_call",
 ]

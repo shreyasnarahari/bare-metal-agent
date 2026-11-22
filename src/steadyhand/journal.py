@@ -7,7 +7,9 @@ added to the secret list. Parallel episodes never share a file.
 
 The event schema is frozen at ``JOURNAL_VERSION``. ``read_journal`` refuses
 unknown events, unexpected or missing fields, and any gap or duplicate in
-``seq``. Changing a field means bumping the version.
+``seq``. Changing a field means bumping the version. Adding a new event type
+does not: files written before it still read correctly (``injected_fault``
+arrived in part 5 this way).
 
 A journal built with ``expected=`` records is in verify mode: each appended
 record is compared with the recorded line at the same ``seq`` instead of
@@ -64,6 +66,11 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "limit", "last_outcome",
     }),
     "escalated": frozenset({"step", "reason"}),
+    # Tool-side faults only. Model-output failures stay on model_turn.
+    "injected_fault": frozenset({
+        "step", "tool", "tool_call_id", "call_index", "mode", "pinned_mode", "committed",
+        "error_type", "note", "via", "schedule_sha256",
+    }),
     "episode_finished": frozenset({
         "status", "steps", "final_content", "prompt_tokens", "completion_tokens",
         "error_code", "error_message", "store_sha256",
@@ -388,6 +395,10 @@ class EpisodeJournal:
 
     def escalated(self, *, step: int, reason: str) -> dict[str, Any]:
         return self.append("escalated", step=step, reason=reason)
+
+    def injected_fault(self, *, step: int, fault: Mapping[str, Any]) -> dict[str, Any]:
+        """The scorer's record of a tool-side fault; the model never sees it."""
+        return self.append("injected_fault", step=step, **dict(fault))
 
     def episode_finished(
         self,

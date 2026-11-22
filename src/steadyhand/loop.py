@@ -32,6 +32,7 @@ from .controller import (
     repeated_call_observation,
 )
 from .executor import SequentialExecutor
+from .faults import FaultInjector, FaultSchedule
 from .journal import EpisodeJournal, ReplayMismatch
 from .messages import PARAPHRASE_REQUEST, render_final_message
 from .registry import SteadyhandRegistry
@@ -66,6 +67,7 @@ def run_episode(
     clock: Callable[[], float] = time.monotonic,
     cancel: threading.Event | None = None,
     paraphrase_final: bool = False,
+    faults: FaultSchedule | None = None,
 ) -> EpisodeResult:
     """Run one episode against ``store``, which the episode owns and mutates.
 
@@ -76,6 +78,9 @@ def run_episode(
     ``paraphrase_final`` asks the model for one ``tool_choice="none"`` sentence
     after ``budget_exhausted`` or ``escalated``. It is off by default; the
     controller's template is then the final content and no extra call is made.
+
+    ``faults`` injects that schedule's tool-side faults. Each episode gets its
+    own injector, so per-tool call indexes always start at 0.
     """
     budgets = budgets or Budgets()
     executor = executor or SequentialExecutor()
@@ -87,6 +92,7 @@ def run_episode(
         slot_context=settings.get("slot_context"),
         max_tokens=settings.get("max_tokens"),
     )
+    injector = FaultInjector(faults) if faults is not None else None
     history = deepcopy([dict(message) for message in messages])
     tools = registry.schemas()
     final_content: str | None = None
@@ -142,7 +148,7 @@ def run_episode(
             if _escalate_repeat(turn, controller, journal):
                 break
             for call in turn.tool_calls:
-                result = _run_call(call, registry, store, executor, controller, journal)
+                result = _run_call(call, registry, store, executor, controller, journal, injector)
                 history.append(observation_message(call, result))
                 journal.tool_result(step=controller.steps, result=result)
             controller.finish_step()
@@ -239,6 +245,7 @@ def _run_call(
     executor: SequentialExecutor,
     controller: EpisodeController,
     journal: EpisodeJournal,
+    injector: FaultInjector | None = None,
 ) -> ToolResult:
     verdict = validate_call(call, registry, store)
     decision = controller.guard.observe(call)
@@ -265,7 +272,14 @@ def _run_call(
             error=repeated_call_observation(call.name, last_outcome),
             handler_called=False,
         )
-    result = executor.run(call, registry, store) if verdict.ok else verdict.rejected(call)
+    if not verdict.ok:
+        result = verdict.rejected(call)
+    elif injector is None:
+        result = executor.run(call, registry, store)
+    else:
+        result = executor.run(call, registry, store, injector=injector)
+    if result.fault is not None:
+        journal.injected_fault(step=controller.steps, fault=result.fault.as_dict())
     controller.guard.record_outcome(decision.key, result)
     return result
 

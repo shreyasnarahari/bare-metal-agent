@@ -181,8 +181,13 @@ class LoopGuard:
     def count(self, call: ToolCall) -> int:
         return self._counts.get(self.key(call), 0)
 
-    def observe(self, call: ToolCall) -> GuardDecision:
+    def observe(self, call: ToolCall, *, via: str = "model") -> GuardDecision:
+        """Count a model-issued call. ``via="policy"`` retries (part 6) are seen but never counted."""
         key = self.key(call)
+        if via == "policy":
+            return GuardDecision(blocked=False, key=key, count=self._counts.get(key, 0), limit=self.limit)
+        if via != "model":
+            raise ValueError(f"via must be 'model' or 'policy', not {via!r}")
         count = self._counts.get(key, 0) + 1
         self._counts[key] = count
         blocked = count >= self.limit
