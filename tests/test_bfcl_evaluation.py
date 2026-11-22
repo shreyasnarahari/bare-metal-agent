@@ -106,6 +106,31 @@ class FakeOpenAI:
         self.chat = type("Chat", (), {"completions": FakeCompletions()})()
 
 
+def test_score_entries_keep_failed_ids_for_full_runs():
+    from toolsmith.evaluation.bfcl_runner import score_entries
+
+    success = CaseResult(
+        "simple_python_0", "simple_python", "m", "thinking", "success",
+        metadata={"bfcl_result": {"id": "simple_python_0", "result": []}},
+    )
+    failed = CaseResult(
+        "simple_python_1", "simple_python", "m", "thinking", "error",
+        error={"code": "backend_error", "message": "timed out"},
+    )
+    unsupported = CaseResult(
+        "simple_python_2", "simple_python", "m", "grammar", "constraint_unsupported",
+    )
+
+    full = score_entries([success, failed, unsupported], full=True)
+    partial = score_entries([success, failed, unsupported], full=False)
+
+    assert [entry["id"] for entry in full] == [
+        "simple_python_0", "simple_python_1", "simple_python_2",
+    ]
+    assert full[1]["result"] == "[toolsmith generation failed]"
+    assert [entry["id"] for entry in partial] == ["simple_python_0", "simple_python_1"]
+
+
 def test_bfcl_runner_records_case_errors_without_aborting():
     class Broken:
         def create(self, **kwargs):

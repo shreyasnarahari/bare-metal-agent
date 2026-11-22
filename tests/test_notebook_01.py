@@ -299,6 +299,51 @@ def test_notebook_cell_ids_and_python_sources_are_valid():
             ast.parse("".join(cell["source"]), filename=f"{NOTEBOOK_PATH}:{cell['id']}")
 
 
+def test_notebook_functions_declare_module_state_they_reassign():
+    # Assigning an ALL_CAPS notebook global inside a function without `global`
+    # makes it local for the whole function, so earlier reads raise UnboundLocalError.
+    notebook = json.loads(NOTEBOOK_PATH.read_text())
+    module_state = set()
+    functions = []
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        tree = ast.parse("".join(cell["source"]))
+        for node in tree.body:
+            targets = node.targets if isinstance(node, ast.Assign) else []
+            module_state.update(
+                target.id for target in targets
+                if isinstance(target, ast.Name) and target.id.isupper()
+            )
+        functions.extend(
+            (cell["id"], node) for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        )
+    undeclared = []
+    for cell_id, function in functions:
+        declared = {
+            name for node in ast.walk(function)
+            if isinstance(node, (ast.Global, ast.Nonlocal)) for name in node.names
+        }
+        assigned = {
+            node.id for node in ast.walk(function)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+        }
+        undeclared.extend(
+            f"{cell_id}:{function.name}:{name}"
+            for name in sorted((assigned & module_state) - declared)
+        )
+    assert not undeclared
+
+
+def test_notebook_bfcl_pilot_checkpoints_do_not_collide_with_full_runs():
+    source = "".join(notebook_cell("day10-bfcl-pilot")["source"])
+
+    assert "suffix = '' if limit is None else f'-pilot{limit}'" in source
+    assert "{mode.value}{suffix}.jsonl'" in source
+    assert "-repair{suffix}.jsonl'" in source
+
+
 def test_notebook_day09_offline_replay_records_protocol_masks_and_repair(tmp_path):
     records = tmp_path / "records"
     namespace = {

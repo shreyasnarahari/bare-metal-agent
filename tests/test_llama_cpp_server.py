@@ -108,6 +108,7 @@ def test_server_client_completion_and_shutdown_end_to_end(tmp_path):
         server.start()
         assert server.is_running
         assert server.settings()["jinja"] is True
+        assert server.settings()["parallel"] == 1
         assert "test-key" not in json.dumps(server.settings())
 
         with LlamaCppClient(server.base_url, "test-key", timeout=2.0) as client:

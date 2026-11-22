@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import uuid
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from .models import CaseResult, RunConfig
+
+# Match the Day 10 llama.cpp slot count. One GPU can decode a few sequences at once.
+EVAL_WORKERS = 4
 
 
 class ManifestMismatchError(ValueError):
@@ -49,19 +54,45 @@ class CheckpointRunner:
         self,
         cases: Iterable[dict[str, Any]],
         execute: Callable[[dict[str, Any]], CaseResult],
+        *,
+        workers: int = EVAL_WORKERS,
     ) -> list[CaseResult]:
-        results = []
+        if workers < 1:
+            raise ValueError("workers must be positive")
+        ordered_ids: list[Any] = []
+        pending: list[tuple[Any, dict[str, Any]]] = []
         for case in cases:
             case_id = case.get("case_id", case.get("id"))
-            if case_id in self.completed:
-                results.append(self.completed[case_id])
-                continue
+            ordered_ids.append(case_id)
+            if case_id not in self.completed:
+                pending.append((case_id, case))
+        if pending:
+            self._execute_pending(pending, execute, workers)
+        return [self.completed[case_id] for case_id in ordered_ids]
+
+    def _execute_pending(
+        self,
+        pending: list[tuple[Any, dict[str, Any]]],
+        execute: Callable[[dict[str, Any]], CaseResult],
+        workers: int,
+    ) -> None:
+        def run_one(item: tuple[Any, dict[str, Any]]) -> None:
+            case_id, case = item
             result = execute(case)
             if result.case_id != case_id:
                 raise ValueError(f"Executor returned {result.case_id} for {case_id}")
-            self.append(result)
-            results.append(result)
-        return results
+            with lock:
+                self.append(result)
+
+        lock = threading.Lock()
+        if workers == 1 or len(pending) == 1:
+            for item in pending:
+                run_one(item)
+            return
+        with ThreadPoolExecutor(max_workers=min(workers, len(pending))) as pool:
+            futures = [pool.submit(run_one, item) for item in pending]
+            for future in futures:
+                future.result()
 
 
 def atomic_write_json(path: str | Path, value: Any) -> Path:
@@ -79,4 +110,9 @@ def atomic_write_json(path: str | Path, value: Any) -> Path:
     return destination
 
 
-__all__ = ["CheckpointRunner", "ManifestMismatchError", "atomic_write_json"]
+__all__ = [
+    "EVAL_WORKERS",
+    "CheckpointRunner",
+    "ManifestMismatchError",
+    "atomic_write_json",
+]

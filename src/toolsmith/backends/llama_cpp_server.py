@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import signal
 import socket
 import stat
 import subprocess
@@ -26,6 +28,7 @@ class LlamaCppServer:
         port: int = 8080,
         context_size: int = 16384,
         gpu_layers: int = 99,
+        parallel: int = 1,
         extra_args: Sequence[str] = (),
     ) -> None:
         if not api_key:
@@ -34,6 +37,8 @@ class LlamaCppServer:
             raise ValueError("port must be between 1 and 65535")
         if context_size < 1:
             raise ValueError("context_size must be positive")
+        if parallel < 1:
+            raise ValueError("parallel must be positive")
 
         self.executable = Path(executable)
         self.model = Path(model)
@@ -43,6 +48,7 @@ class LlamaCppServer:
         self.port = port
         self.context_size = context_size
         self.gpu_layers = gpu_layers
+        self.parallel = parallel
         self.extra_args = tuple(extra_args)
         self._process: subprocess.Popen[bytes] | None = None
         self._log_file: BinaryIO | None = None
@@ -67,6 +73,7 @@ class LlamaCppServer:
             "port": self.port,
             "context_size": self.context_size,
             "gpu_layers": self.gpu_layers,
+            "parallel": self.parallel,
             "jinja": True,
             "extra_args": list(self.extra_args),
         }
@@ -102,6 +109,8 @@ class LlamaCppServer:
             str(self.gpu_layers),
             "-c",
             str(self.context_size),
+            "--parallel",
+            str(self.parallel),
             "--host",
             self.host,
             "--port",
@@ -181,13 +190,20 @@ class LlamaCppServer:
 
     def stop(self, timeout: float = 20.0) -> None:
         try:
-            if self.is_running and self._process is not None:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait()
+            process = self._process
+            if process is not None and process.poll() is None:
+                # llama-server can fork after start_new_session; signal the group.
+                for action in (signal.SIGTERM, signal.SIGKILL):
+                    if process.poll() is not None:
+                        break
+                    try:
+                        os.killpg(process.pid, action)
+                    except ProcessLookupError:
+                        process.terminate() if action == signal.SIGTERM else process.kill()
+                    try:
+                        process.wait(timeout=timeout if action == signal.SIGTERM else 5)
+                    except subprocess.TimeoutExpired:
+                        continue
         finally:
             if self._log_file is not None:
                 self._log_file.close()

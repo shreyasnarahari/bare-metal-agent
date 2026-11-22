@@ -1,4 +1,5 @@
 import json
+import threading
 
 import pytest
 
@@ -73,6 +74,24 @@ def test_checkpoint_resume_and_manifest_mismatch(tmp_path):
         CheckpointRunner(path, "different")
     with pytest.raises(ValueError, match="already checkpointed"):
         runner.append(result())
+
+
+def test_checkpoint_run_keeps_input_order_when_work_overlaps(tmp_path):
+    path = tmp_path / "results.jsonl"
+    runner = CheckpointRunner(path, "hash")
+    started = threading.Barrier(4)
+
+    def execute(case):
+        started.wait(timeout=2)
+        return result(case["case_id"])
+
+    cases = [{"case_id": f"case-{index}"} for index in range(4)]
+    results = runner.run(cases, execute, workers=4)
+
+    assert [item.case_id for item in results] == [case["case_id"] for case in cases]
+    assert len(CheckpointRunner(path, "hash").completed) == 4
+    again = runner.run(cases, execute, workers=4)
+    assert [item.case_id for item in again] == [case["case_id"] for case in cases]
 
 
 def test_atomic_report_and_metrics(tmp_path):

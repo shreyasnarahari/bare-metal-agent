@@ -98,6 +98,35 @@ class BFCLRunner:
         return CheckpointRunner(checkpoint, manifest_sha256).run(entries, self.execute)
 
 
+def score_entries(results: list[Any], *, full: bool) -> list[dict[str, Any]]:
+    """Build one BFCL result record per scored case.
+
+    Full prompt and thinking runs must contain every id. A generation that
+    failed still occupies its id so the official checker counts it as wrong
+    instead of rejecting the file for being short. Grammar and repair stay on
+    the eligible subset.
+    """
+    selected = results if full else [
+        result for result in results if result.status != "constraint_unsupported"
+    ]
+    entries = []
+    for result in selected:
+        recorded = result.metadata.get("bfcl_result") if result.metadata else None
+        if isinstance(recorded, dict) and recorded.get("id"):
+            entries.append(recorded)
+            continue
+        entries.append(
+            {
+                "id": result.case_id,
+                "result": "[toolsmith generation failed]",
+                "latency": 0,
+                "input_token_count": 0,
+                "output_token_count": 0,
+            }
+        )
+    return entries
+
+
 def evaluate_bfcl(
     *,
     registry_name: str,
@@ -142,4 +171,4 @@ def run_bfcl_repair_with_reuse(
     return [checkpoint_runner.completed[entry["id"]] for entry in entries]
 
 
-__all__ = ["BFCLRunner", "evaluate_bfcl", "run_bfcl_repair_with_reuse"]
+__all__ = ["BFCLRunner", "evaluate_bfcl", "run_bfcl_repair_with_reuse", "score_entries"]
