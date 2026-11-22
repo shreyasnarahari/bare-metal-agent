@@ -28,7 +28,7 @@ src/steadyhand/manifest.py
 tests/test_steadyhand_replay.py
 ```
 
-Journal files remain one per episode under `results/steadyhand/` locally. On Colab the live file is `/content/steadyhand/<episode_id>.jsonl`, with the manifest beside it. A finished episode is copied to `MyDrive/toolsmith/records/steadyhand/`. Parallel workers never append to the same file. `JsonlRecorder` writes a line by opening the file, and two threads writing one path can tear a line.
+Journal files remain one per episode under `results/steadyhand/` locally. On Colab the live file is `/content/steadyhand/<episode_id>.jsonl`, with the manifest beside it. A finished episode is copied to `MyDrive/toolsmith/records/<gpu>/steadyhand/`. Parallel workers never append to the same file. `JsonlRecorder` writes a line by opening the file, and two threads writing one path can tear a line.
 
 Claim a task before running it. Create the manifest with `O_EXCL` (or an equivalent create-new) so two workers cannot start the same `episode_id`. The loser skips. Resume of `completed: false` is also claimed exclusively. Replay never takes a claim and never calls the GPU.
 

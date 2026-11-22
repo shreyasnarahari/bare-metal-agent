@@ -17,7 +17,43 @@ Local checks:
 git diff --check
 ```
 
-There are two notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track and `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop. Both provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. On a fresh Colab L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
+There are two notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track and `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop. Both provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. On a fresh Colab T4 or L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
+
+### Running on a T4 or L4
+
+Each notebook's shared `hardware` setup cell detects the GPU, vCPUs, RAM, and free disk once (`toolsmith.hardware`). Every setting below comes from those numbers, not from the GPU's name. Without a GPU, with less than 14 GiB of VRAM, or with compute capability below 7.0, the cell stops and says how to switch runtimes.
+
+| Setting | Rule | T4 (2 vCPUs, about 13 GB RAM) | L4 (8 vCPUs) |
+|---|---|---|---|
+| llama.cpp build jobs | one per vCPU, at most one per 2 GiB of RAM | 2 | 8 |
+| Day 10 server | 4096 tokens per slot; more VRAM means more slots, not longer ones | 4 slots, `-c 16384` | 8 slots, `-c 32768` |
+| Steadyhand server | preset per GPU and shape, confirmed by the probe | per preset | per preset |
+| CPU pools (CPU gate, schema coverage) | one per vCPU, at most 8 | 2 | 8 |
+| HF Qwen3-0.6B generation | one fp16 model per process | 2 processes | 6 processes |
+| MaskBench | the Toolsmith engine in the kernel, plus single-threaded peers | 1 peer at a time | 5 peers at once |
+
+Each Day 10 request pool sends one request per server slot. Any other GPU uses the T4 or L4 rows that match its VRAM.
+
+- **Overlapped setup.** Downloads, builds, Drive restores, and Drive write-backs run as background jobs (`toolsmith.background`). Each job writes its own log under `/content/background-logs/`.
+  - In the Toolsmith notebook, both GGUFs download while b5401 builds.
+  - The b8233 build for Qwen3.5 starts after b5401 and runs through Days 2–8 at low priority.
+  - The MaskBench peer environment installs during the Day 10 generation runs.
+  - In the Steadyhand notebook, provisioning runs during the CPU gate.
+  - On a cached runtime, these jobs are short copies from Drive.
+- **Drive layout.** These folders under `MyDrive/toolsmith/` are shared by every GPU:
+  - `builds/`, holding llama.cpp builds. Their folder names already include the CUDA compute capability.
+  - `models/`, holding the GGUFs and the HF datasets cache.
+
+  Records go to `records/<gpu>/` (`t4`, `l4`, or the GPU's name), so a T4 run and an L4 run never resume, overwrite, or skip each other's files.
+- **Stamps and manifests.**
+  - Every Toolsmith record carries a `runtime` stamp: the GPU, vCPUs, load average, and running background jobs.
+  - Day 10 checkpoint manifests also include the compute capability, the llama.cpp tag, and the server shape. If those change, the run stops and lists every field that differs.
+- **Timing under concurrency.** Timing cells are not serialized. The MaskBench peers run side by side, and the Days 6–8 benchmarks may overlap a background build. Each timing record states the concurrency it ran under, in the stamp or in `run.json`. Compare timings only between runs with the same concurrency.
+- **Steadyhand serving.**
+  - The server cell tries KV cache and flash-attention settings in this order: q8_0 with flash attention, f16 with it, then f16 without it.
+  - It keeps the first setting that loads, leaves 1 GB of VRAM free, and passes a decode-speed self-test.
+  - Running out of VRAM drops one slot.
+  - Sweeps mirror their scores to Drive and resume from that copy after a disconnect.
 
 ## Steadyhand: the agent loop
 
@@ -158,17 +194,17 @@ A semantic error must not be relabeled as a parser defect, and an unsupported sc
 
 ## Reproducibility and evidence
 
-The notebook preserves model/build caches, writes redacted JSONL records, and keeps one shared final `cleanup` cell. Day 10 evidence is configured under:
+The notebook preserves model/build caches, writes redacted JSONL records, and keeps one shared final `cleanup` cell. Day 10 evidence is configured under (`<gpu>` is `t4`, `l4`, or the GPU's name):
 
 ```text
-MyDrive/toolsmith/records/day-10/
+MyDrive/toolsmith/records/<gpu>/day-10/
 ```
 
-Expected artifacts include the manifest, own-set results, BFCL result/score trees, schema coverage, JSONSchemaBench generation, per-engine MaskBench results, failure examples, and `RESULTS.md`. A run resumes only when its complete configuration and dataset hashes match. No result should be published without its model/runtime revisions, harness commits, selected IDs, seed/options, and raw evidence.
+Expected artifacts include the manifest, own-set results, BFCL result/score trees, schema coverage, JSONSchemaBench generation, per-engine MaskBench results, failure examples, and `RESULTS.md`. A run resumes only when its complete configuration, dataset, and runtime (compute capability, llama.cpp tag, server shape) hashes match. No result should be published without its model/runtime revisions, harness commits, selected IDs, seed/options, and raw evidence.
 
 ## Next acceptance steps
 
-1. Publish or copy the exact working tree to Colab and run the Toolsmith notebook from a fresh L4 runtime.
+1. Publish or copy the exact working tree to Colab and run the Toolsmith notebook from a fresh T4 or L4 runtime. Results are kept per GPU.
 2. Complete all earlier serving, parser, sampler, Qwen3.5, and cleanup checks before benchmarking.
 3. Run the small adapter smoke tests before long BFCL or JSONSchemaBench jobs.
 4. Generate results from recorded evidence, then replace the pending performance section with measured values and explicit limitations.

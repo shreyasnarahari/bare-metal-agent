@@ -149,16 +149,16 @@ Tool observations in part 1 are a small JSON object, either `{"ok": true, "value
 
 Inside one episode, execute calls in list order. Concurrent reads inside a single assistant message are part 6. Writes in one assistant message run one after another so that episode's store stays single-threaded and replay stays obvious.
 
-Across episodes, the live Colab path is parallel. `LlamaCppServer` already passes `--parallel` through to llama-server (`src/toolsmith/backends/llama_cpp_server.py`). The Day 10 notebook starts that server with `parallel=4`. One Steadyhand episode occupies one slot only while `chat()` is in flight. A sweep that runs episodes one at a time leaves the other slots idle. Part 7 sizes the slot count for a T4 or L4 and runs that many episodes at once. Part 1's types have to allow that without a later rewrite:
+Across episodes, the live Colab path is parallel. `LlamaCppServer` already passes `--parallel` through to llama-server (`src/toolsmith/backends/llama_cpp_server.py`). The Day 10 notebook starts that server with 4096 tokens per slot (4 slots on a T4, 8 on an L4). One Steadyhand episode occupies one slot only while `chat()` is in flight. A sweep that runs episodes one at a time leaves the other slots idle. Part 7 sizes the slot count for a T4 or L4 and runs that many episodes at once. Part 1's types have to allow that without a later rewrite:
 
 - Each episode owns its `store.clone()`, its message list, and its journal path. No module-level store and no single global journal file.
 - `SteadyhandClient` holds a `ToolsmithService` and may be called from several threads, one episode per call. `LlamaCppClient.complete` only posts on a shared `httpx.Client`, which is safe for concurrent requests. `ToolsmithService._prepare` recompiles a grammar and is not locked today, so each worker gets its own `ToolsmithService` sharing one `LlamaCppClient`. Leave the service recorder unset on those workers. The episode journal is the record.
 - `httpx` limits on that client must be at least the server's `parallel` (`max_connections` and `max_keepalive_connections`). The default pool is large enough for the slot counts in part 7. Set the limits explicitly anyway so a later change cannot silently queue inside the client while the GPU waits.
-- llama.cpp splits `-c` across slots. `context_size=16384` with `parallel=4`, which is the Day 10 setting, is about 4096 tokens per episode, not 16384. Part 7 picks `-c` and `--parallel` together so each slot can hold a Steadyhand episode. Part 1 only has to pass `max_tokens` and stop when the shim returns `completion_truncated`, which is `ABORTED`, not a successful answer.
+- llama.cpp splits `-c` across slots. Day 10's `-c 16384` with 4 slots on a T4 is about 4096 tokens per episode, not 16384. Part 7 picks `-c` and `--parallel` together so each slot can hold a Steadyhand episode. Part 1 only has to pass `max_tokens` and stop when the shim returns `completion_truncated`, which is `ABORTED`, not a successful answer.
 
 ### Journal
 
-`EpisodeJournal` wraps `JsonlRecorder`. One file per episode: `results/steadyhand/<episode_id>.jsonl` locally (`results/` is gitignored). On Colab, append to `/content/steadyhand/<episode_id>.jsonl` (local SSD), then copy the finished file to `MyDrive/toolsmith/records/steadyhand/`. Drive FUSE latency stays off the GPU worker. Part 4 specifies the copy. One JSON object per line:
+`EpisodeJournal` wraps `JsonlRecorder`. One file per episode: `results/steadyhand/<episode_id>.jsonl` locally (`results/` is gitignored). On Colab, append to `/content/steadyhand/<episode_id>.jsonl` (local SSD), then copy the finished file to `MyDrive/toolsmith/records/<gpu>/steadyhand/`. Drive FUSE latency stays off the GPU worker. Part 4 specifies the copy. One JSON object per line:
 
 - `episode_started` with episode id, model profile name, seed, fixture hash, `max_steps`
 - `model_turn` with kind, raw assistant message, usage, error code
