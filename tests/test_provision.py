@@ -329,3 +329,25 @@ def test_ensure_gguf_refuses_a_download_that_cannot_fit(tmp_path, monkeypatch):
         ensure_gguf(GgufFile("repo", "m.gguf", "rev", 5 * 1024**3), local_path=tmp_path / "l.gguf",
                     drive_path=tmp_path / "d" / "m.gguf", token=None, cache_dir="c",
                     download=lambda **options: pytest.fail("must not download"))
+
+
+def test_an_interrupted_build_resumes_only_with_the_same_configuration(tmp_path, monkeypatch):
+    import json as json_module
+
+    commands = []
+    monkeypatch.setattr(provision, "run_logged", lambda command, **options: commands.append(command))
+    (tmp_path / "source" / ".git").mkdir(parents=True)
+    runtime = LlamaCppRuntime("b8233", tmp_path / "source", tmp_path / "build", tmp_path / "cache", "75")
+
+    provision.build_from_source(runtime, jobs=2)
+    config = json_module.loads((runtime.build / ".build-config").read_text())
+    assert config["ref"] == "b8233" and "-DCMAKE_CUDA_ARCHITECTURES=75" in config["flags"]
+
+    (runtime.build / "CMakeCache.txt").write_text("configured")
+    (runtime.build / "half-built.o").write_text("object")  # the kernel restarted mid-build
+    provision.build_from_source(runtime, jobs=2)
+    assert (runtime.build / "half-built.o").exists()  # resumed in place
+
+    other_gpu = LlamaCppRuntime("b8233", tmp_path / "source", tmp_path / "build", tmp_path / "cache", "89")
+    provision.build_from_source(other_gpu, jobs=2)
+    assert not (runtime.build / "half-built.o").exists()  # a different configuration starts clean

@@ -316,7 +316,9 @@ def test_day10_cells_use_every_slot_and_vcpu():
     assert "BACKGROUND.submit('maskbench-peers', install_maskbench_peers)" in setup and "nice=10" in setup
     assert "clone_pool.submit(checkout_pinned" in setup
     assert "parallel_compile_coverage(" in coverage and "workers=coverage_workers" in coverage
-    assert "copy_file_atomic(coverage_local, DAY10_RECORDS / 'schema-coverage.jsonl')" in coverage
+    assert "MirroredFile(" in coverage and "DAY10_RECORDS / 'schema-coverage.jsonl'" in coverage
+    assert "recorded_coverage_ids(coverage_store.local)" in coverage and "if file.name not in coverage_done" in coverage
+    assert "coverage_store.sync(force=True)" in coverage
     assert generation.count("load_dataset(") == 1 and "workers=DAY10_SLOTS" in generation
     assert "run_with_restart(profile, lambda: generate_jsonschema(profile))" in generation
     assert "read_identified_json(report_path, identity)" in generation

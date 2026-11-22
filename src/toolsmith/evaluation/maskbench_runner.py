@@ -110,8 +110,15 @@ def run_peer_engines(
     def run_one(flag: str) -> Path:
         output = output_root / flag.lstrip("-")
         output.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(output / "run.json", {"engine": flag, "concurrency": concurrency, **(stamp or {})})
-        run_logged(command(python, flag, tokenizer, output, files), log_path=output / "runner.log", env=dict(env))
+        # Resume: a schema with an output already (MaskBench names it after the input file, as
+        # run_maskbench_files expects) is not run again after a disconnect.
+        missing = [file for file in files if not (output / Path(file).name).exists()]
+        atomic_write_json(output / "run.json", {
+            "engine": flag, "concurrency": concurrency, "schemas": len(files),
+            "schemas_already_done": len(files) - len(missing), **(stamp or {}),
+        })
+        if missing:
+            run_logged(command(python, flag, tokenizer, output, missing), log_path=output / "runner.log", env=dict(env))
         return output
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(flags))), thread_name_prefix="maskbench-peer") as pool:

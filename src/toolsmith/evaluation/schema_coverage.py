@@ -159,6 +159,31 @@ def parallel_compile_coverage(
         yield from pool.map(one, items)
 
 
+def recorded_coverage_ids(path) -> tuple[set[str], set[str]]:
+    """Schema ids already in a coverage JSONL: (compile records, instance replays).
+
+    Lets an interrupted coverage pass resume where it stopped instead of
+    starting over. A cut-off last line is ignored (repair it before appending).
+    """
+    from pathlib import Path
+
+    compiled: set[str] = set()
+    replayed: set[str] = set()
+    path = Path(path)
+    if not path.is_file():
+        return compiled, replayed
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get("event") == "instance_replay":
+            replayed.add(record["unique_id"])
+        elif "event" not in record and "unique_id" in record:
+            compiled.add(record["unique_id"])
+    return compiled, replayed
+
+
 def pending_file_is_stale(path, run_id: str) -> bool:
     try:
         value = json.loads(path.read_text())
@@ -172,6 +197,7 @@ __all__ = [
     "compile_coverage",
     "isolated_compile_coverage",
     "parallel_compile_coverage",
+    "recorded_coverage_ids",
     "pending_file_is_stale",
     "replay_schema",
 ]

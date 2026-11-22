@@ -19,6 +19,7 @@ need it.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -287,8 +288,21 @@ def build_from_source(
     jobs = jobs or default_build_jobs()
     log_path = Path(log_path or build_log_path(runtime))
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text("")
-    remove_directory(runtime.build)
+    cuda_arch = [f"-DCMAKE_CUDA_ARCHITECTURES={runtime.compute_cap}"] if runtime.compute_cap else []
+    flags = ["-DGGML_CUDA=ON", *cuda_arch, "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=ON"]
+    config = {"ref": runtime.ref, "compute_cap": runtime.compute_cap, "flags": flags}
+    marker = runtime.build / ".build-config"
+    # After a kernel restart /content survives: an interrupted build with the same configuration
+    # resumes where make stopped instead of recompiling every CUDA object.
+    resumable = (
+        marker.is_file() and (runtime.build / "CMakeCache.txt").is_file()
+        and json.loads(marker.read_text()) == config
+    )
+    if resumable:
+        say(f"Resuming the interrupted llama.cpp {runtime.ref} build in {runtime.build}")
+    else:
+        log_path.write_text("")
+        remove_directory(runtime.build)
 
     def progress(path: Path) -> None:
         say(f"[llama.cpp {runtime.ref}] building with {jobs} jobs: {last_progress(path) or 'starting'}")
@@ -299,14 +313,12 @@ def build_from_source(
         run_logged(["git", "clone", "--progress", "--filter=blob:none", LLAMA_CPP_GIT, runtime.source], **git)
     run_logged(["git", "-C", runtime.source, "fetch", "--progress", "--depth", "1", "origin", "tag", runtime.ref], **git)
     run_logged(["git", "-C", runtime.source, "checkout", "--detach", runtime.ref], **git)
-    cuda_arch = [f"-DCMAKE_CUDA_ARCHITECTURES={runtime.compute_cap}"] if runtime.compute_cap else []
     run_logged(
-        [
-            "cmake", "-S", runtime.source, "-B", runtime.build,
-            "-DGGML_CUDA=ON", *cuda_arch, "-DCMAKE_BUILD_TYPE=Release", "-DLLAMA_CURL=ON",
-        ],
+        ["cmake", "-S", runtime.source, "-B", runtime.build, *flags],
         log_path=log_path, nice=nice, progress=progress, stall_seconds=BUILD_STALL_SECONDS,
     )
+    runtime.build.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps(config))
     run_logged(
         ["cmake", "--build", runtime.build, "--target", "llama-server", "-j", str(jobs)],
         log_path=log_path, nice=nice, progress=progress, stall_seconds=BUILD_STALL_SECONDS,

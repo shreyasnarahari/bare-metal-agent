@@ -112,8 +112,8 @@ def test_a_failing_peer_is_reported(tmp_path):
         return [sys.executable, "-c", "print('engine crashed'); raise SystemExit(2)"]
 
     with pytest.raises(RuntimeError, match="engine crashed"):
-        run_peer_engines(["--xgr"], python="p", tokenizer="t", files=[], output_root=tmp_path, env={}, workers=1,
-                         command=failing)
+        run_peer_engines(["--xgr"], python="p", tokenizer="t", files=["a.json"], output_root=tmp_path, env={},
+                         workers=1, command=failing)
 
 
 # HF Qwen3-0.6B generation
@@ -192,3 +192,39 @@ def test_hf_units_spread_over_a_spawn_process_pool(tmp_path, monkeypatch):
 def test_vram_free_reads_total_minus_used():
     assert vram_free_mib("15360, 9000\n") == 6360
     assert vram_free_mib("garbage") is None
+
+
+def test_peers_resume_with_only_the_schemas_that_have_no_output(tmp_path):
+    received = {}
+
+    def command(python, flag, tokenizer, output, files):
+        received[flag] = [str(file) for file in files]
+        return [sys.executable, "-c", "pass"]
+
+    (tmp_path / "maskbench" / "llg").mkdir(parents=True)
+    (tmp_path / "maskbench" / "llg" / "Github_easy---a.json").write_text("{}")
+    files = [tmp_path / "data" / "Github_easy---a.json", tmp_path / "data" / "Github_easy---b.json"]
+    (tmp_path / "maskbench" / "xgr").mkdir(parents=True)
+    for file in files:
+        (tmp_path / "maskbench" / "xgr" / file.name).write_text("{}")
+
+    run_peer_engines(["--llg", "--xgr"], python="p", tokenizer="t", files=files, output_root=tmp_path / "maskbench",
+                     env={}, workers=2, command=command)
+
+    assert received == {"--llg": [str(files[1])]}  # --xgr had every output, so it did not run at all
+    run = json.loads((tmp_path / "maskbench" / "xgr" / "run.json").read_text())
+    assert (run["schemas"], run["schemas_already_done"]) == (2, 2)
+
+
+def test_recorded_coverage_ids_lets_an_interrupted_pass_resume(tmp_path):
+    from toolsmith.evaluation.schema_coverage import recorded_coverage_ids
+
+    path = tmp_path / "coverage.jsonl"
+    path.write_text(
+        '{"unique_id": "a.json", "status": "compiled"}\n'
+        '{"event": "instance_replay", "unique_id": "a.json"}\n'
+        '{"event": "coverage_run", "schemas": 2}\n'
+        '{"unique_id": "b.json", "sta'
+    )
+    assert recorded_coverage_ids(path) == ({"a.json"}, {"a.json"})
+    assert recorded_coverage_ids(tmp_path / "missing.jsonl") == (set(), set())
