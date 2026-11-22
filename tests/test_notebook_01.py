@@ -412,3 +412,10 @@ def test_report_cells_read_finished_runs_back_without_starting_a_server():
     assert "loaded = load_day10_own(profile)" in report and "if 'custom_results' not in globals():" in report
     for cell in ("introduction",):
         assert "run all cells from the top" in "".join(notebook_cell(cell)["source"])
+
+
+def test_day10_helpers_stop_day9_servers_and_never_start_a_model_by_accident():
+    helpers = "".join(notebook_cell("day10-runtime-helpers")["source"])
+
+    assert helpers.rstrip().endswith("stop_day10_runtime()")  # no Day 9 log left open on Drive
+    assert "if name.startswith('__'):" in helpers
