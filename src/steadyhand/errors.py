@@ -37,6 +37,11 @@ class ErrorType(str, Enum):
     PERMANENT_UNAVAILABLE = "permanent_unavailable"
     OUTCOME_UNKNOWN = "outcome_unknown"
     SUSPICIOUS_RESULT = "suspicious_result"
+    # Bulkhead security errors. None is retryable, and recovery never acts on one.
+    PERMISSION_DENIED = "permission_denied"  # policy said DENY; the model may choose another action
+    PERMISSION_REQUIRED = "permission_required"  # policy said ASK; the episode escalates for approval
+    SANDBOX_VIOLATION = "sandbox_violation"  # the sandbox refused or stopped the call
+    RESOURCE_EXHAUSTED = "resource_exhausted"  # a memory, PID, disk, or CPU ceiling stopped a sandboxed run
 
 
 # A sentinel meaning "no value to show", distinct from None (which is a value worth showing).
@@ -65,6 +70,11 @@ class FieldProblem:
         if self.got is not MISSING:
             detail["got"] = _bounded_value(self.got)
         return detail
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> FieldProblem:
+        """Rebuild a detail from ``as_dict`` output (used to replay recorded backend results)."""
+        return cls(value.get("field"), value["problem"], value["got"] if "got" in value else MISSING)
 
 
 @dataclass(frozen=True)
@@ -99,6 +109,18 @@ class ErrorObservation:
         if self.previous_output is not None:
             observation["previous_output"] = self.previous_output
         return observation
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> ErrorObservation:
+        """Rebuild an observation from ``as_dict`` output; ``as_dict`` of the result is identical."""
+        return cls(
+            error_type=ErrorType(value["error_type"]),
+            tool=value["tool"],
+            retryable=value["retryable"],
+            hint=value["hint"],
+            details=tuple(FieldProblem.from_dict(detail) for detail in value.get("details", ())),
+            previous_output=value.get("previous_output"),
+        )
 
     def model_dict(self) -> dict[str, Any]:
         """What the model sees: the typed shape, or for the raw_error baseline only a string."""

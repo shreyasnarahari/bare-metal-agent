@@ -3,6 +3,10 @@
 ``Tool`` has no field for these, so they live in a side table on
 ``SteadyhandRegistry``. Part 2 stores and validates them. The executor reads
 ``timeout_s`` now. Part 6 consumes ``retry``, ``verify``, and ``alternatives``.
+
+These are reliability settings, not privileges. What a tool may touch is its
+Bulkhead ``SecuritySpec`` (``registry.security(name)``), and whether a call may
+run is the policy gate's decision (``steadyhand.security``).
 """
 
 from __future__ import annotations
@@ -20,15 +24,22 @@ class PolicyError(ValueError):
 
 
 class Effect(str, Enum):
-    """What a call does to the store: nothing, the same change however often, or a new change each time."""
+    """What a call does: nothing, the same change however often, a new change each time, or runs code.
+
+    ``EXEC`` runs arbitrary code in a sandbox (Bulkhead part 4). It is never
+    idempotent: recovery never retries or verifies it automatically, the loop
+    runs it sequentially like a write, and registering one requires a
+    ``SecuritySpec`` with a sandbox.
+    """
 
     READ = "read"
     IDEMPOTENT_WRITE = "idempotent_write"
     NON_IDEMPOTENT_WRITE = "non_idempotent_write"
+    EXEC = "exec"
 
     @property
     def idempotent(self) -> bool:
-        return self is not Effect.NON_IDEMPOTENT_WRITE
+        return self in (Effect.READ, Effect.IDEMPOTENT_WRITE)
 
 
 @dataclass(frozen=True)
@@ -79,9 +90,13 @@ class ToolPolicy:
             raise PolicyError(
                 f"idempotent={self.idempotent} contradicts effect {self.effect.value!r}"
             )
-        # Retrying a non-idempotent write could make the change twice.
+        # Retrying a non-idempotent write could make the change twice; rerunning code could too.
         if not self.idempotent and self.retry is not None and self.retry.max_attempts > 0:
-            raise PolicyError("A non-idempotent tool cannot have automatic retries")
+            kind = "An exec tool" if self.effect is Effect.EXEC else "A non-idempotent tool"
+            raise PolicyError(f"{kind} cannot have automatic retries")
+        # An exec tool has no read-back probe and no equivalent alternative; recovery must not act for it.
+        if self.effect is Effect.EXEC and (self.verify is not None or self.alternatives):
+            raise PolicyError("An exec tool cannot have a verify tool or alternatives")
         if len(set(self.alternatives)) != len(self.alternatives):
             raise PolicyError("alternatives must not repeat a tool name")
 

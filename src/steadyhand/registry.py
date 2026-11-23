@@ -1,10 +1,15 @@
-"""``SteadyhandRegistry``: Toolsmith tools plus a policy and semantic-check side table.
+"""``SteadyhandRegistry``: Toolsmith tools plus policy, security, and semantic-check side tables.
 
 Tools are still ``toolsmith.registry.Tool`` objects built through
 ``ToolRegistry.function``, so ``schemas()`` is exactly what the model sees.
 Handlers take the episode store first; the model-facing schema covers only the
 parameters after it. Policies are checked against each other at registration,
 and ``freeze()`` makes the registry read-only so workers can share it.
+
+Bulkhead security metadata (``SecuritySpec``) is a separate side table, never
+part of a model-facing schema. An ``Effect.EXEC`` tool must be registered with
+a spec that has a sandbox. With Bulkhead enabled, the policy gate denies any
+tool that has no spec at all; a missing spec is never treated as full access.
 """
 
 from __future__ import annotations
@@ -15,6 +20,8 @@ from typing import TYPE_CHECKING, Any
 
 from jsonschema import Draft202012Validator
 
+from bulkhead.backends.base import ProgramSpec
+from bulkhead.manifest import SecuritySpec
 from toolsmith.evaluation.models import canonical_hash
 from toolsmith.registry import Tool, ToolRegistry
 
@@ -63,6 +70,8 @@ class SteadyhandRegistry:
         self._semantics: dict[str, SemanticCheck] = {}
         self._validators: dict[str, Draft202012Validator] = {}
         self._result_schemas: dict[str, dict[str, Any]] = {}
+        self._security: dict[str, SecuritySpec | None] = {}
+        self._programs: dict[str, ProgramSpec] = {}
         self._reserved = frozenset(reserved_names)
         self._frozen = False
 
@@ -72,19 +81,43 @@ class SteadyhandRegistry:
         policy: ToolPolicy,
         semantic: SemanticCheck | None = None,
         result_schema: Mapping[str, Any] | None = None,
+        security: SecuritySpec | None = None,
+        program: ProgramSpec | None = None,
     ) -> Tool:
-        """Register a handler. ``result_schema`` describes its return value; the model never sees it."""
+        """Register a handler. ``result_schema`` describes its return value; the model never sees it.
+
+        ``security`` is the tool's Bulkhead metadata. Exec tools must have one with a sandbox.
+        ``program`` is an exec tool's dispatch descriptor: the program kind it runs and the
+        required string argument holding the text. Only exec tools take one.
+        """
         if self._frozen:
             raise RuntimeError("The registry is frozen; register every tool before sharing it")
         name = function.__name__
         if name in self._policies:
             raise ValueError(f"Tool {name!r} is already registered")
         self._check_policy(name, policy)
+        if security is not None and not isinstance(security, SecuritySpec):
+            raise TypeError("security must be a bulkhead SecuritySpec")
+        if policy.effect is Effect.EXEC and (security is None or not security.sandboxed):
+            raise PolicyError(f"{name}: an exec tool must be registered with a SecuritySpec that has a sandbox")
         if semantic is not None and not callable(semantic):
             raise TypeError("semantic must be callable")
-        self._tools.function(function, parameters=arguments_schema(function))
+        if program is not None:
+            if not isinstance(program, ProgramSpec):
+                raise TypeError("program must be a bulkhead ProgramSpec")
+            if policy.effect is not Effect.EXEC:
+                raise PolicyError(f"{name}: only an exec tool has a program descriptor")
+        parameters = arguments_schema(function)
+        if program is not None:
+            prop = parameters.get("properties", {}).get(program.argument, {})
+            if prop.get("type") != "string" or program.argument not in parameters.get("required", ()):
+                raise PolicyError(f"{name}: the program argument {program.argument!r} must be a required string")
+        self._tools.function(function, parameters=parameters)
         tool = self._tools.get(name)
         self._policies[name] = policy
+        self._security[name] = security
+        if program is not None:
+            self._programs[name] = program
         self._validators[name] = Draft202012Validator(tool.parameters)
         if semantic is not None:
             self._semantics[name] = semantic
@@ -108,6 +141,19 @@ class SteadyhandRegistry:
     def policy(self, name: str) -> ToolPolicy:
         try:
             return self._policies[name]
+        except KeyError:
+            raise KeyError(f"Unknown tool: {name}") from None
+
+    def program(self, name: str) -> ProgramSpec | None:
+        """An exec tool's dispatch descriptor, or None."""
+        if name not in self._policies:
+            raise KeyError(f"Unknown tool: {name}")
+        return self._programs.get(name)
+
+    def security(self, name: str) -> SecuritySpec | None:
+        """The tool's Bulkhead security spec, or None when it was registered without one."""
+        try:
+            return self._security[name]
         except KeyError:
             raise KeyError(f"Unknown tool: {name}") from None
 
@@ -136,6 +182,17 @@ class SteadyhandRegistry:
         return canonical_hash(
             [[name, self._policies[name].as_dict()] for name in sorted(self._policies)]
         )
+
+    def security_specs(self) -> dict[str, Any]:
+        """Every tool's security spec as canonical JSON (null when absent), by name."""
+        return {
+            name: spec.as_dict() if (spec := self._security[name]) is not None else None
+            for name in sorted(self._security)
+        }
+
+    def security_spec_sha256(self) -> str:
+        """Hash of every tool's security spec (null when absent), by name; part of a secured episode's id."""
+        return canonical_hash([[name, spec] for name, spec in self.security_specs().items()])
 
     def names(self) -> tuple[str, ...]:
         return tuple(tool.name for tool in self._tools)

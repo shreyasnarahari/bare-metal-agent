@@ -49,6 +49,8 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
         "introduction", "environment", "drive-and-secrets", "install-project", "hardware",
         # Provisioning starts in the background first, so the CPU gate runs while it downloads.
         "steadyhand-runtime-notes", "steadyhand-runtime", "steadyhand-sweep-notes", "steadyhand-cpu-gate",
+        # Bulkhead's CPU-only probe also runs while the runtime provisions.
+        "bulkhead-probe-notes", "bulkhead-probe",
         "steadyhand-server", "steadyhand-notes", "steadyhand-bare-loop", "steadyhand-smoke",
         "steadyhand-sweep", "steadyhand-server-stop", "cleanup",
     ]
@@ -128,6 +130,78 @@ def test_the_cpu_gate_runs_and_records_a_pass(tmp_path, monkeypatch):
     assert record["passed"] is True and record["tasks_run"] == 4 and record["golden_replays"] == 3
     saved = json.loads((tmp_path / "steadyhand" / "cpu-gate.jsonl").read_text())
     assert saved["passed"] is True and "local-test-secret" not in json.dumps(saved)
+
+
+# Bulkhead probe (part 1)
+
+
+def bulkhead_report(scenario):
+    """A report built from the Bulkhead test fixture (no probe runs, so the result is host-independent)."""
+    from bulkhead.types import Capability, HostInfo, ProbeReport
+
+    fixture = json.loads((ROOT / "tests" / "fixtures" / "bulkhead_probe_reports.json").read_text())
+    overrides = next(item for item in fixture["scenarios"] if item["name"] == scenario)["overrides"]
+    records = [
+        Capability(name, overrides[name]["status"], overrides[name]["code"], "fixture")
+        if name in overrides
+        else Capability(name, "ok", "ok", "fixture", facts)
+        for name, facts in fixture["baseline_facts"].items()
+    ]
+    return ProbeReport.build(
+        created_at="2026-11-09T12:00:00Z",
+        host=HostInfo("Linux", "6.6.0", "x86_64", "3.12.0", wsl=False, container=True, root=True),
+        python="/usr/bin/python3",
+        helper="/content/bare-metal-agent/src/bulkhead/_probe_child.py",
+        bwrap_path=None,
+        capabilities=records,
+        cgroup_mount="/sys/fs/cgroup",
+        cgroup_parent=None,
+    )
+
+
+def run_bulkhead_cell(tmp_path, monkeypatch, scenario):
+    import bulkhead.probe
+
+    calls = []
+
+    def fake_run_probe(**options):
+        calls.append(options)
+        return bulkhead_report(scenario)
+
+    monkeypatch.setattr(bulkhead.probe, "run_probe", fake_run_probe)
+    namespace = {"DRIVE_RECORDS": tmp_path, "HF_TOKEN": "hf-test-secret", "LOCAL_KEY": "local-test-secret"}
+    exec(compile(notebook_source("bulkhead-probe"), str(NOTEBOOK_PATH), "exec"), namespace)
+    return namespace, calls
+
+
+def test_the_bulkhead_cell_records_the_probe_under_the_gpu_records(tmp_path, monkeypatch, capsys):
+    from bulkhead.probe import load_report
+
+    monkeypatch.delenv("BULKHEAD_REQUIRE_TIER", raising=False)
+    monkeypatch.setenv("BULKHEAD_CGROUP_PARENT", "/sys/fs/cgroup/delegated")
+
+    namespace, calls = run_bulkhead_cell(tmp_path, monkeypatch, "seccomp_failure")
+
+    saved = tmp_path / "bulkhead" / "probe.colab.json"
+    assert namespace["bulkhead_probe_path"] == saved and load_report(saved) == namespace["BULKHEAD_PROBE"]
+    assert calls == [{"cgroup_parent": "/sys/fs/cgroup/delegated"}]
+    assert "Selected tier: T0 ... NOT a sandbox" in capsys.readouterr().out
+    assert "test-secret" not in saved.read_text()
+
+
+def test_the_bulkhead_cell_fails_when_the_required_tier_is_not_proven(tmp_path, monkeypatch):
+    from bulkhead.errors import UnsupportedTierError
+
+    monkeypatch.delenv("BULKHEAD_CGROUP_PARENT", raising=False)
+    monkeypatch.setenv("BULKHEAD_REQUIRE_TIER", "T2")
+
+    with pytest.raises(UnsupportedTierError, match="T2"):
+        run_bulkhead_cell(tmp_path, monkeypatch, "wsl2_dev_host")
+    assert (tmp_path / "bulkhead" / "probe.colab.json").is_file()  # the evidence is written before the check
+
+    monkeypatch.setenv("BULKHEAD_REQUIRE_TIER", "T1")
+    namespace, calls = run_bulkhead_cell(tmp_path, monkeypatch, "wsl2_dev_host")
+    assert calls == [{"cgroup_parent": None}] and namespace["BULKHEAD_PROBE"].selected_tier.value == "T1"
 
 
 # Live cells (they need a GPU; these checks pin the plan's invariants)

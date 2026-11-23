@@ -1,0 +1,189 @@
+{
+  "episode_id": "ep_ca61c4047282e7d5",
+  "steadyhand_version": "0.1.0",
+  "toolsmith_version": "0.1.0",
+  "journal_version": 1,
+  "profile": "qwen3",
+  "model": "Qwen/Qwen3-8B",
+  "protocol": "qwen3",
+  "use_grammars": true,
+  "enable_thinking": false,
+  "seed": 0,
+  "temperature": 0.0,
+  "max_tokens": 256,
+  "budgets": {
+    "max_steps": 8,
+    "max_prompt_tokens": 24000,
+    "max_completion_tokens": 8000,
+    "max_wall_clock_s": null
+  },
+  "guard_limit": 3,
+  "paraphrase_final": false,
+  "fixture_sha256": "467b1b081d01127c768cef37a1659f1636973561ad93c455d58f4260fadc0d1c",
+  "schema_sha256": "589d6e5e44640999ebdc8a17346e9a845d7be88d2cfcad3492bcb3d075cabb14",
+  "policy_sha256": "5e8004bc2a9fb4cef5f888edc29d9309e0ab6632786a9bc0ad0805915b1325e1",
+  "system_prompt_sha256": "246f9f1550ebe605742f8b765f8fa38dda3aeb9974ba0ef3b5b8b3bb35d50bda",
+  "task_sha256": "e1dd73f81b8920e2c7ed3eb0af71009da5d446fb649d5da03084252ca7a7c210",
+  "fault_schedule_sha256": null,
+  "run_label": "approved-apr_95c6b20744b71c60",
+  "fault_schedule": null,
+  "recovery_policy": "typed_hint",
+  "system_prompt_variant": "plain",
+  "server_parallel": null,
+  "context_size": null,
+  "per_slot_context": null,
+  "security_spec_sha256": "32926147344c97b68eb6398395c42ee96ea658cf09a9e65af6b90cdbd37e2950",
+  "task_policy_sha256": "44a5676a8712d74345fedd46e27ae7ceda797a235864c659f916f84e8f1a2b5f",
+  "security_config": {
+    "version": 1,
+    "task_policy": {
+      "tools": [
+        "add_order_note",
+        "cancel_order",
+        "create_ticket",
+        "get_customer",
+        "get_order",
+        "get_ticket",
+        "issue_refund",
+        "list_payments",
+        "search_orders",
+        "set_ticket_status"
+      ],
+      "deny_tools": [],
+      "ask_tools": [],
+      "rules": [
+        {
+          "tool": "issue_refund",
+          "bounds": {
+            "amount_inr": {
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "paths": {},
+          "destinations": []
+        }
+      ],
+      "fs_read": [],
+      "fs_write": [],
+      "fs_deny": [],
+      "egress": {
+        "allow": [],
+        "max_bytes_out": 65536,
+        "max_bytes_in": 1048576
+      },
+      "egress_deny": [],
+      "limits": {
+        "cpu_s": 10,
+        "mem_mb": 512,
+        "pids": 64,
+        "disk_mb": 200,
+        "out_kb": 64,
+        "wall_s": 30,
+        "stdout_kb": 64,
+        "stderr_kb": 64
+      },
+      "taint_sensitive": [
+        "filesystem_sensitive",
+        "network"
+      ],
+      "required_tier": "T2",
+      "taint_sensitive_tools": [],
+      "sensitive_paths": []
+    },
+    "approval_mode": "deny_all",
+    "grants": [
+      {
+        "approval_id": "apr_95c6b20744b71c60",
+        "episode_id": "ep_6661a06ea054c04a",
+        "policy_sha256": "b597bd4af3da45a3bae5f20baf411495f9420e7ed0796969aa4cff032b02673d",
+        "tool": "issue_refund",
+        "arguments_sha256": "ec395c9e2f8192dba1a7d695f73ab71c41b19c7d84a9c681e412806c07ae41e6",
+        "normalized_grant": {
+          "tool": "issue_refund",
+          "arguments_sha256": "ec395c9e2f8192dba1a7d695f73ab71c41b19c7d84a9c681e412806c07ae41e6",
+          "rules": [
+            "task.widen.bound"
+          ],
+          "widen": {
+            "bounds": {
+              "issue_refund": {
+                "amount_inr": {
+                  "maximum": 120,
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "expires_at": "2026-11-09T13:00:00Z"
+      }
+    ],
+    "available_tiers": []
+  },
+  "security_specs": {
+    "add_order_note": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "cancel_order": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "create_ticket": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "get_customer": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "get_order": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "get_ticket": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "issue_refund": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "list_payments": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "search_orders": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": []
+    },
+    "set_ticket_status": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": [
+        "external_effect"
+      ]
+    }
+  },
+  "bulkhead_version": "0.1.0",
+  "parent_episode_id": "ep_6661a06ea054c04a",
+  "completed": true
+}

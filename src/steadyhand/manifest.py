@@ -9,6 +9,25 @@ the same id.
 Server-shape fields (``server_parallel``, ``context_size``,
 ``per_slot_context``) are not part of the id. Resume compares them, so a
 journal recorded against a different slot size is refused rather than resumed.
+
+Bulkhead fields are optional. With Bulkhead disabled they stay ``None`` and
+are left out of both the identity hash and the written file, so legacy episode
+ids and golden manifests are unchanged and old manifests still load. With it
+enabled, the registry's security-spec hash, the security configuration hash
+(task policy, approval mode, grants, available tiers), and the parent episode
+are identity fields: changing any of them gives a new episode id, and resume
+refuses a manifest that differs. ``security_config`` holds the full content so
+replay can rebuild every decision, and ``security_specs`` holds every tool's
+sandbox configuration (its hash is ``security_spec_sha256``).
+
+``backend`` names the execution backend that ran sandboxed calls (name, build
+version, tier, and probe hash). Like the server shape it is not part of the
+id, but resume compares it, so a sweep can never change tier or backend
+midway; a deliberate change needs a new run label. Replay checks the recorded
+identity and serves the recorded runs instead of calling any backend, so a
+matching manifest proves the recording is consistent and the control plane
+reproduces, not that the backend still enforces anything (see
+``steadyhand.replay``).
 """
 
 from __future__ import annotations
@@ -19,8 +38,9 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import MISSING, asdict, dataclass, fields, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import bulkhead
 import toolsmith
 from toolsmith.evaluation.models import canonical_hash
 from toolsmith.evaluation.runner import atomic_write_json
@@ -32,6 +52,11 @@ from .journal import JOURNAL_VERSION, JournalFormatError, ReplayMismatch
 from .messages import PROMPT_VARIANTS
 from .registry import SteadyhandRegistry
 from .store import Store
+
+if TYPE_CHECKING:
+    from bulkhead.replay import BackendIdentity
+
+    from .security import SecurityConfig
 
 IDENTITY_FIELDS = (
     "journal_version",
@@ -58,6 +83,12 @@ IDENTITY_FIELDS = (
 )
 # Server shape fields: checked on resume, but not part of the episode id.
 SERVER_FIELDS = ("server_parallel", "context_size", "per_slot_context")
+# Bulkhead identity fields: part of the id only when Bulkhead is enabled (task_policy_sha256 is set).
+SECURITY_IDENTITY_FIELDS = ("security_spec_sha256", "task_policy_sha256", "parent_episode_id")
+# Checked on resume but not part of the id: the backend that actually ran sandboxed calls.
+RESUME_FIELDS = ("backend",)
+# Every Bulkhead field; left out of the written manifest while None.
+SECURITY_FIELDS = (*SECURITY_IDENTITY_FIELDS, "security_config", "security_specs", "backend", "bulkhead_version")
 
 
 @dataclass(frozen=True)
@@ -98,14 +129,32 @@ class EpisodeManifest:
     server_parallel: int | None = None
     context_size: int | None = None
     per_slot_context: int | None = None
+    # Bulkhead (part 2). None when disabled; then absent from the identity and the file.
+    security_spec_sha256: str | None = None
+    task_policy_sha256: str | None = None
+    security_config: dict[str, Any] | None = None
+    security_specs: dict[str, Any] | None = None  # part 3: every tool's spec (the sandbox configuration)
+    backend: dict[str, Any] | None = None  # part 3: the execution backend's identity; resume-checked
+    bulkhead_version: str | None = None
+    parent_episode_id: str | None = None
     completed: bool = False
+
+    @property
+    def secured(self) -> bool:
+        """Whether this episode ran with Bulkhead enabled."""
+        return self.task_policy_sha256 is not None
 
     def identity(self) -> dict[str, Any]:
         """The fields hashed into the episode id."""
-        return {name: getattr(self, name) for name in IDENTITY_FIELDS}
+        names = (*IDENTITY_FIELDS, *SECURITY_IDENTITY_FIELDS) if self.secured else IDENTITY_FIELDS
+        return {name: getattr(self, name) for name in names}
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        value = asdict(self)
+        for name in SECURITY_FIELDS:
+            if value[name] is None:
+                del value[name]
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> EpisodeManifest:
@@ -144,8 +193,17 @@ def build_manifest(
     fault_schedule: FaultSchedule | None = None,
     recovery_policy: str = "typed_hint",
     system_prompt_variant: str = "plain",
+    security: SecurityConfig | None = None,
+    parent_episode_id: str | None = None,
+    backend: BackendIdentity | None = None,
 ) -> EpisodeManifest:
-    """The manifest for an episode about to start on ``store`` (hashed before any write)."""
+    """The manifest for an episode about to start on ``store`` (hashed before any write).
+
+    ``security`` enables Bulkhead; ``parent_episode_id`` links an approved retry to the episode that
+    asked; ``backend`` is the identity of the backend that will run sandboxed calls.
+    """
+    if (parent_episode_id is not None or backend is not None) and security is None:
+        raise ValueError("Only a Bulkhead-secured episode can have a parent episode or a backend")
     task = [dict(message) for message in messages]
     _check_prompt_variant(task, system_prompt_variant)
     values: dict[str, Any] = {
@@ -171,6 +229,18 @@ def build_manifest(
         "recovery_policy": recovery_policy,
         "system_prompt_variant": system_prompt_variant,
     }
+    extra: dict[str, Any] = {}
+    if security is not None:
+        # Only a secured episode hashes these, so legacy ids stay exactly as they were.
+        values["security_spec_sha256"] = registry.security_spec_sha256()
+        values["task_policy_sha256"] = security.sha256()
+        values["parent_episode_id"] = parent_episode_id
+        extra = {
+            "security_config": security.as_dict(),
+            "security_specs": registry.security_specs(),
+            "backend": backend.as_dict() if backend is not None else None,
+            "bulkhead_version": bulkhead.__version__,
+        }
     return EpisodeManifest(
         episode_id=episode_id_for(values),
         steadyhand_version=STEADYHAND_VERSION,
@@ -180,6 +250,7 @@ def build_manifest(
         per_slot_context=settings.get("slot_context"),
         fault_schedule=fault_schedule.as_dict() if fault_schedule is not None else None,
         **values,
+        **extra,
     )
 
 
@@ -239,7 +310,7 @@ def mark_completed(path: str | Path) -> EpisodeManifest:
 def require_match(
     recorded: EpisodeManifest,
     current: EpisodeManifest,
-    fields: Sequence[str] = (*IDENTITY_FIELDS, *SERVER_FIELDS),
+    fields: Sequence[str] = (*IDENTITY_FIELDS, *SECURITY_IDENTITY_FIELDS, *SERVER_FIELDS, *RESUME_FIELDS),
 ) -> None:
     """Raise ``ReplayMismatch`` naming the first field where the two manifests disagree."""
     for name in fields:
@@ -265,6 +336,9 @@ def try_claim(path: str | Path) -> bool:
 __all__ = [
     "EpisodeManifest",
     "IDENTITY_FIELDS",
+    "RESUME_FIELDS",
+    "SECURITY_FIELDS",
+    "SECURITY_IDENTITY_FIELDS",
     "SERVER_FIELDS",
     "build_manifest",
     "create_manifest",

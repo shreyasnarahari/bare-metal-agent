@@ -24,6 +24,14 @@ always go back to the model and are never retried or escalated here.
 Waits are capped per wait and per episode, and use ``ctx.sleep`` so tests and
 replay never sleep. Jitter comes from a hash of the call id, not ``random``,
 so replay reproduces every wait exactly.
+
+With Bulkhead enabled, ``ctx.executor`` is the episode's ``SecuredExecutor``:
+every retry, verify probe, and switch gets its own policy decision and audit
+record, and a switch to an alternative tool is authorized as that tool. A
+security error (``permission_denied``, ``permission_required``,
+``sandbox_violation``) is never retried, verified, or switched around, whatever
+the strategy; ``permission_required`` escalates. ``Effect.EXEC`` tools are
+never retried or verified automatically.
 """
 
 from __future__ import annotations
@@ -32,7 +40,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from toolsmith.evaluation.models import canonical_hash
 
@@ -43,10 +51,14 @@ from .journal import EpisodeJournal
 from .policy import Effect, ToolPolicy
 from .registry import SteadyhandRegistry
 from .sanity import SANITY_CHECKS
+from .security import SECURITY_ERRORS
 from .store import Store
 from .tools_ledger import ARGUMENT_MAPS, build_alternatives
 from .types import ToolCall, ToolResult
 from .validate import outcome_unknown_observation, suspicious_result_observation, validate_call
+
+if TYPE_CHECKING:
+    from .security import SecurityGate
 
 # Errors only the model can fix (it sent a bad call), and errors that come from the tool's transport.
 ARGUMENT_ERRORS = frozenset({"invalid_arguments", "unknown_tool", "parse_error"})
@@ -78,7 +90,13 @@ class RecoveryBudget:
 
 @dataclass
 class RecoveryContext:
-    """Everything a strategy may read, and the means to make policy-layer calls."""
+    """Everything a strategy may read, and the means to make policy-layer calls.
+
+    ``executor`` is the episode's executor: with Bulkhead, a ``SecuredExecutor`` that
+    authorizes each policy-layer attempt afresh before the injector or a handler sees it.
+    ``security`` is the episode's gate: each attempt's result is applied to the episode's
+    taint right after it is journaled, before the next attempt is decided.
+    """
 
     call: ToolCall
     arguments: dict[str, Any] | None  # validated arguments; None when validation failed
@@ -96,6 +114,7 @@ class RecoveryContext:
     attempts: int = 0
     verified: bool = False
     switched: bool = False
+    security: SecurityGate | None = None
 
     @property
     def validated(self) -> bool:
@@ -131,12 +150,14 @@ class RecoveryContext:
         result = self.executor.run(call, registry, self.store, **options)
         if result.fault is not None:
             self.journal.injected_fault(step=self.step, fault=result.fault.as_dict())
-        self.record(purpose, call, result, key=key, waited_s=waited_s)
+        record = self.record(purpose, call, result, key=key, waited_s=waited_s)
+        if self.security is not None:
+            self.security.observe(call_id=call.id, tool=call.name, result=result, source_seq=record["seq"], registry=registry)
         return result
 
-    def record(self, purpose: str, call: ToolCall, result: ToolResult, *, key: str | None, waited_s: float) -> None:
-        """Journal one policy-layer attempt (retry, verify, or switch)."""
-        self.journal.policy_attempt(
+    def record(self, purpose: str, call: ToolCall, result: ToolResult, *, key: str | None, waited_s: float) -> dict[str, Any]:
+        """Journal one policy-layer attempt (retry, verify, or switch); returns the record."""
+        return self.journal.policy_attempt(
             step=self.step,
             tool_call_id=self.call.id,
             purpose=purpose,
@@ -177,8 +198,8 @@ class TypedHint:
         return RecoveryAction.RETURN_TO_MODEL
 
     def on_success(self, ctx: RecoveryContext, observation: dict[str, Any]) -> RecoveryAction:
-        if observation.get("error_type") == "suspicious_result" and _writes(ctx):
-            return RecoveryAction.ESCALATE  # the row may already be written; never retry it
+        if observation.get("error_type") == "suspicious_result" and _unsafe(ctx):
+            return RecoveryAction.ESCALATE  # the effect may already have happened; never repeat it
         return RecoveryAction.RETURN_TO_MODEL
 
 
@@ -271,8 +292,13 @@ def strategy_for(name: str) -> RecoveryStrategy:
 
 
 def _writes(ctx: RecoveryContext) -> bool:
-    # A non-idempotent write: repeating it would repeat its effect.
+    # A non-idempotent write: repeating it would repeat its effect (and a keyed verify can check it).
     return ctx.policy is not None and ctx.policy.effect is Effect.NON_IDEMPOTENT_WRITE
+
+
+def _unsafe(ctx: RecoveryContext) -> bool:
+    # Any call whose repetition could repeat its effect: non-idempotent writes and exec.
+    return ctx.policy is not None and ctx.policy.effect in (Effect.NON_IDEMPOTENT_WRITE, Effect.EXEC)
 
 
 def _safe_retry(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
@@ -365,6 +391,13 @@ def apply_recovery(strategy: RecoveryStrategy, ctx: RecoveryContext, result: Too
 
         # A failure: ask the strategy what to do, act, and loop on the new result.
         assert result.error is not None
+        # Security errors bypass the strategy: no retry, verify, or switch can route around them.
+        if result.error.error_type.value in SECURITY_ERRORS:
+            reason = None
+            if result.error.error_type.value == "permission_required":
+                rule = next((detail.got for detail in result.error.details if detail.field == "rule_id"), "unknown")
+                reason = f"{result.tool} needs human approval under rule {rule}"
+            return RecoveryOutcome(_render(strategy, result), recovered_by, reason, False, acted or reason is not None)
         action = strategy.on_observation(ctx, result.error.as_dict())
         if action is RecoveryAction.RETURN_TO_MODEL:
             return RecoveryOutcome(_render(strategy, result), recovered_by, None, False, acted)

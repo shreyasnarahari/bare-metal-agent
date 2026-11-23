@@ -1,0 +1,538 @@
+{
+  "description": "Fake Bulkhead probe outcomes. Each scenario overrides the all-ok baseline (status and code; overridden records lose their facts) and pins the tier that must be selected, every tier that is satisfied, and the root causes that reject T2. The golden report pins the report format and probe_sha256 scheme: if it stops parsing, the schema or the hash changed and SCHEMA_VERSION must be bumped.",
+  "baseline_facts": {
+    "bwrap.binary": {"version": "0.9.0", "setuid": false},
+    "bwrap.namespaces": {
+      "namespaces": ["ipc", "mnt", "net", "pid", "user", "uts"],
+      "fresh_proc": true,
+      "fresh_tmp": true,
+      "no_new_privs": true,
+      "no_capabilities": true
+    },
+    "bwrap.mounts": {"tested": ["masked_subpath", "ro_bind_read", "ro_bind_write", "rw_bind"]},
+    "bwrap.netns": {"interfaces": ["lo"]},
+    "bwrap.unix_socket": {},
+    "userns.unshare": {},
+    "libseccomp.library": {"version": "2.5.5"},
+    "seccomp.filter": {"mode": 2, "arch": "x86_64"},
+    "seccomp.socket_deny": {"denied_families": ["AF_INET", "AF_INET6", "AF_PACKET"]},
+    "no_new_privs": {},
+    "landlock.abi": {"abi": 7},
+    "landlock.fs": {"abi": 7, "tested": ["list_denied", "read_allowed", "read_denied", "write_allowed", "write_denied"]},
+    "landlock.tcp": {"abi": 7},
+    "rlimits": {"tested": ["RLIMIT_CORE", "RLIMIT_FSIZE", "RLIMIT_NOFILE"]},
+    "process.group_cleanup": {"tree": ["child", "grandchild"]},
+    "cgroup.v2_mount": {"nsdelegate": true},
+    "cgroup.delegation": {"available": ["cpu", "io", "memory", "pids"], "enabled": ["cpu", "memory", "pids"]},
+    "cgroup.leaf": {},
+    "cgroup.limits": {"controllers": ["cpu", "memory", "pids"]},
+    "cgroup.kill": {"tree": ["child", "grandchild_new_session"]},
+    "fs.openat2": {"resolve": ["RESOLVE_BENEATH", "RESOLVE_NO_SYMLINKS"]}
+  },
+  "scenarios": [
+    {
+      "name": "everything_proven",
+      "overrides": {},
+      "selected": "T2",
+      "satisfied": ["T2", "T1", "T0"],
+      "t2_root_causes": []
+    },
+    {
+      "name": "missing_bwrap",
+      "overrides": {
+        "bwrap.binary": {"status": "unavailable", "code": "not_found"},
+        "bwrap.namespaces": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["bwrap.binary"]
+    },
+    {
+      "name": "userns_eperm",
+      "overrides": {
+        "bwrap.namespaces": {"status": "denied", "code": "eperm"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "userns.unshare": {"status": "denied", "code": "eperm"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["bwrap.namespaces"]
+    },
+    {
+      "name": "apparmor_restricts_userns",
+      "overrides": {
+        "bwrap.namespaces": {"status": "denied", "code": "apparmor_userns_restricted"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "userns.unshare": {"status": "denied", "code": "apparmor_userns_restricted"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["bwrap.namespaces"]
+    },
+    {
+      "name": "bwrap_lacks_a_flag",
+      "overrides": {
+        "bwrap.namespaces": {"status": "unsupported", "code": "unknown_option"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["bwrap.namespaces"]
+    },
+    {
+      "name": "read_only_cgroup",
+      "overrides": {
+        "cgroup.delegation": {"status": "denied", "code": "not_writable"},
+        "cgroup.leaf": {"status": "unavailable", "code": "dependency_unavailable"},
+        "cgroup.limits": {"status": "unavailable", "code": "dependency_unavailable"},
+        "cgroup.kill": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["cgroup.delegation"]
+    },
+    {
+      "name": "cgroup_kill_leaves_survivors",
+      "overrides": {
+        "cgroup.kill": {"status": "failed", "code": "survivors"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["cgroup.kill"]
+    },
+    {
+      "name": "landlock_abi_0_without_bwrap",
+      "overrides": {
+        "bwrap.binary": {"status": "unavailable", "code": "not_found"},
+        "bwrap.namespaces": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "landlock.abi": {"status": "unsupported", "code": "abi_0"},
+        "landlock.fs": {"status": "unavailable", "code": "dependency_unavailable"},
+        "landlock.tcp": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T0",
+      "satisfied": ["T0"],
+      "t2_root_causes": ["bwrap.binary"]
+    },
+    {
+      "name": "landlock_abi_0_with_full_t2",
+      "overrides": {
+        "landlock.abi": {"status": "unsupported", "code": "abi_0"},
+        "landlock.fs": {"status": "unavailable", "code": "dependency_unavailable"},
+        "landlock.tcp": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T2",
+      "satisfied": ["T2", "T0"],
+      "t2_root_causes": []
+    },
+    {
+      "name": "seccomp_failure",
+      "overrides": {
+        "seccomp.filter": {"status": "failed", "code": "verification_failed"}
+      },
+      "selected": "T0",
+      "satisfied": ["T0"],
+      "t2_root_causes": ["seccomp.filter"]
+    },
+    {
+      "name": "libseccomp_missing",
+      "overrides": {
+        "libseccomp.library": {"status": "unavailable", "code": "not_found"},
+        "seccomp.filter": {"status": "unavailable", "code": "dependency_unavailable"},
+        "seccomp.socket_deny": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T0",
+      "satisfied": ["T0"],
+      "t2_root_causes": ["libseccomp.library"]
+    },
+    {
+      "name": "no_inet_socket_denial_on_t1",
+      "overrides": {
+        "bwrap.binary": {"status": "unavailable", "code": "not_found"},
+        "bwrap.namespaces": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "seccomp.socket_deny": {"status": "failed", "code": "verification_failed"}
+      },
+      "selected": "T0",
+      "satisfied": ["T0"],
+      "t2_root_causes": ["bwrap.binary"]
+    },
+    {
+      "name": "wsl2_dev_host",
+      "overrides": {
+        "bwrap.binary": {"status": "unavailable", "code": "not_found"},
+        "bwrap.namespaces": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "cgroup.delegation": {"status": "unavailable", "code": "not_configured"},
+        "cgroup.leaf": {"status": "unavailable", "code": "dependency_unavailable"},
+        "cgroup.limits": {"status": "unavailable", "code": "dependency_unavailable"},
+        "cgroup.kill": {"status": "unavailable", "code": "dependency_unavailable"}
+      },
+      "selected": "T1",
+      "satisfied": ["T1", "T0"],
+      "t2_root_causes": ["bwrap.binary", "cgroup.delegation"]
+    },
+    {
+      "name": "no_process_cleanup_and_no_t2",
+      "overrides": {
+        "bwrap.binary": {"status": "unavailable", "code": "not_found"},
+        "bwrap.namespaces": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.mounts": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.netns": {"status": "unavailable", "code": "dependency_unavailable"},
+        "bwrap.unix_socket": {"status": "unavailable", "code": "dependency_unavailable"},
+        "process.group_cleanup": {"status": "failed", "code": "survivors"}
+      },
+      "selected": "T0",
+      "satisfied": ["T0"],
+      "t2_root_causes": ["bwrap.binary"]
+    },
+    {
+      "name": "informational_failures_never_change_the_tier",
+      "overrides": {
+        "bwrap.unix_socket": {"status": "failed", "code": "verification_failed"},
+        "userns.unshare": {"status": "denied", "code": "userns_disabled"},
+        "landlock.tcp": {"status": "unsupported", "code": "abi_too_old"},
+        "fs.openat2": {"status": "unsupported", "code": "enosys"}
+      },
+      "selected": "T2",
+      "satisfied": ["T2", "T1", "T0"],
+      "t2_root_causes": []
+    }
+  ],
+  "golden_report": {
+    "schema_version": 1,
+    "created_at": "2026-11-09T12:00:00Z",
+    "host": {
+      "os": "Linux",
+      "kernel_release": "6.8.0-test",
+      "architecture": "x86_64",
+      "python_version": "3.12.0",
+      "wsl": false,
+      "container": false,
+      "root": false
+    },
+    "tools": {
+      "python": "/usr/bin/python3",
+      "helper": "/opt/bulkhead/_probe_child.py",
+      "bwrap": {
+        "path": "/usr/bin/bwrap",
+        "version": null
+      },
+      "libseccomp": {
+        "available": true,
+        "version": "2.5.5"
+      }
+    },
+    "capabilities": [
+      {
+        "name": "bwrap.binary",
+        "status": "unavailable",
+        "code": "not_found",
+        "detail": "probe detail (not_found)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "bwrap.namespaces",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "bwrap.mounts",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "bwrap.netns",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "bwrap.unix_socket",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "userns.unshare",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "libseccomp.library",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "version": "2.5.5"
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "seccomp.filter",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "arch": "x86_64",
+          "mode": 2
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "seccomp.socket_deny",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "denied_families": [
+            "AF_INET",
+            "AF_INET6",
+            "AF_PACKET"
+          ]
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "no_new_privs",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "landlock.abi",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "abi": 7
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "landlock.fs",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "abi": 7,
+          "tested": [
+            "list_denied",
+            "read_allowed",
+            "read_denied",
+            "write_allowed",
+            "write_denied"
+          ]
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "landlock.tcp",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "abi": 7
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "rlimits",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "tested": [
+            "RLIMIT_CORE",
+            "RLIMIT_FSIZE",
+            "RLIMIT_NOFILE"
+          ]
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "process.group_cleanup",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "tree": [
+            "child",
+            "grandchild"
+          ]
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "cgroup.v2_mount",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "nsdelegate": true
+        },
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "cgroup.delegation",
+        "status": "unavailable",
+        "code": "not_configured",
+        "detail": "probe detail (not_configured)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "cgroup.leaf",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "cgroup.limits",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "cgroup.kill",
+        "status": "unavailable",
+        "code": "dependency_unavailable",
+        "detail": "probe detail (dependency_unavailable)",
+        "facts": {},
+        "elapsed_s": 0.01
+      },
+      {
+        "name": "fs.openat2",
+        "status": "ok",
+        "code": "ok",
+        "detail": "probe detail",
+        "facts": {
+          "resolve": [
+            "RESOLVE_BENEATH",
+            "RESOLVE_NO_SYMLINKS"
+          ]
+        },
+        "elapsed_s": 0.01
+      }
+    ],
+    "landlock": {
+      "abi": 7,
+      "tested": [
+        "filesystem",
+        "tcp_connect"
+      ]
+    },
+    "cgroup": {
+      "mount": "/sys/fs/cgroup",
+      "parent": "/sys/fs/cgroup/delegated",
+      "delegated": false,
+      "controllers": [],
+      "leaf_created": false,
+      "limits_written": false,
+      "kill_verified": false
+    },
+    "tiers": {
+      "T2": {
+        "label": "Namespace sandbox",
+        "satisfied": false,
+        "missing": [
+          {
+            "capability": "bwrap.binary",
+            "status": "unavailable",
+            "code": "not_found",
+            "detail": "probe detail (not_found)"
+          },
+          {
+            "capability": "bwrap.namespaces",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          },
+          {
+            "capability": "bwrap.mounts",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          },
+          {
+            "capability": "bwrap.netns",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          },
+          {
+            "capability": "cgroup.delegation",
+            "status": "unavailable",
+            "code": "not_configured",
+            "detail": "probe detail (not_configured)"
+          },
+          {
+            "capability": "cgroup.leaf",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          },
+          {
+            "capability": "cgroup.limits",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          },
+          {
+            "capability": "cgroup.kill",
+            "status": "unavailable",
+            "code": "dependency_unavailable",
+            "detail": "probe detail (dependency_unavailable)"
+          }
+        ]
+      },
+      "T1": {
+        "label": "Landlock sandbox",
+        "satisfied": true,
+        "missing": []
+      },
+      "T0": {
+        "label": "NOT a sandbox",
+        "satisfied": true,
+        "missing": []
+      }
+    },
+    "selected_tier": "T1",
+    "probe_sha256": "a1927bf1477fc8b20c09e6ec33ae84881c2e419e95315600f88992ad059545e8"
+  }
+}

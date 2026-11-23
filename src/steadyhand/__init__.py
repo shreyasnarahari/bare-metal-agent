@@ -26,6 +26,7 @@ from .messages import SYSTEM_PROMPT, initial_messages, render_final_message
 from .policy import Effect, PolicyError, RetrySpec, ToolPolicy
 from .recovery import STRATEGIES, RecoveryAction, RecoveryStrategy, strategy_for
 from .registry import SteadyhandRegistry
+from .security import SecurityConfig, run_approved_episode, store_task_policy
 from .store import NotFoundError, Store, StoreConflictError, load_fixture
 from .tools import build_registry
 from .types import (
@@ -66,6 +67,7 @@ __all__ = [
     "RetrySpec",
     "STRATEGIES",
     "SYSTEM_PROMPT",
+    "SecurityConfig",
     "SequentialExecutor",
     "SteadyhandClient",
     "SteadyhandRegistry",
@@ -84,7 +86,9 @@ __all__ = [
     "new_episode_id",
     "observation_message",
     "render_final_message",
+    "run_approved_episode",
     "run_episode",
+    "store_task_policy",
     "strategy_for",
     "transition",
     "validate_call",

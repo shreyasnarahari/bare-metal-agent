@@ -499,7 +499,9 @@ def validate_tasks(tasks: Sequence[Task], fixture: Store | None = None) -> dict[
 
 
 # Run a task's reference calls (through validation, like the loop) and check they produce the gold;
-# an impossible task's reference must change nothing.
+# an impossible task's reference must change nothing. This is trusted dataset validation outside any
+# episode: no model output is involved, so it calls the executor directly, with Bulkhead off. The
+# executor still refuses to run any exec tool in-process. Episodes never take this path.
 def _check_reference(task: Task, registry: SteadyhandRegistry, fixture: Store) -> list[str]:
     store = fixture.clone()
     executor = SequentialExecutor()

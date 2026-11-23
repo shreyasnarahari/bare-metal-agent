@@ -12,10 +12,25 @@ model sees: the typed observation, a policy-layer retry, a verified write, an
 alternative tool, or an escalation. A successful result that fails a sanity
 check stops the rest of that turn's writes.
 
+With Bulkhead (``security=``), a valid call that the guard lets through is then
+authorized by ``SecurityGate`` before its fault slot is reserved or anything
+runs: validate -> guard -> authorize -> injector -> handler. A denied call gets
+a non-retryable ``permission_denied`` observation and the episode continues; a
+call that needs approval gets ``permission_required`` and the episode
+escalates at that call. The executor is wrapped in ``SecuredExecutor``, so
+every recovery retry, verify probe, and switch is authorized on its own.
+
+Taint is applied right after each result is journaled, in call order, before
+the next call is decided; a message whose calls could reach a sensitive sink
+runs sequentially, so an untrusted read cannot be outrun by a sensitive write
+in the same message.
+
 Several reads in one assistant message run together on a small per-episode
-pool (at most 4 threads). Validation, the guard, and fault indexes are settled
-in call order first, and results are journaled in call order afterwards, so
-replay stays exact. A message that contains any write runs sequentially.
+pool (at most 4 threads). Validation, the guard, policy decisions, and fault
+indexes are settled in call order first, and results are journaled in call
+order afterwards, so replay stays exact. A message that contains any write,
+or (with Bulkhead) any call with a sink or egress, runs sequentially, so a
+later call is always decided after the earlier results are in.
 
 Endings: ``done`` (visible text), ``budget_exhausted``, ``escalated``, or
 ``aborted`` (backend, request, truncation, or cancellation). For the two
@@ -31,7 +46,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from toolsmith.evaluation.models import canonical_hash
 
@@ -51,6 +66,7 @@ from .messages import PARAPHRASE_REQUEST, render_final_message
 from .policy import Effect
 from .recovery import RecoveryBudget, RecoveryContext, RecoveryStrategy, TypedHint, apply_recovery
 from .registry import SteadyhandRegistry
+from .security import Authorization, BackendRunner, SecuredExecutor, SecurityConfig, SecurityGate
 from .store import Store
 from .types import (
     EpisodeResult,
@@ -63,6 +79,9 @@ from .types import (
     observation_content,
 )
 from .validate import Verdict, parse_error_observation, suspicious_result_observation, validate_call
+
+if TYPE_CHECKING:
+    from bulkhead.replay import ExecutionBackend
 
 MAX_PARALLEL_READS = 4  # read-only calls in one message share at most this many threads
 # What the model sees for a write that was skipped because an earlier result looked wrong.
@@ -90,11 +109,12 @@ class _Episode:
     budget: RecoveryBudget
     sleep: Callable[[float], None]
     history: list[dict[str, Any]]
+    security: SecurityGate | None = None
 
 
 @dataclass
 class _Plan:
-    """What was decided about one call before it runs: validation, guard, idempotency key, fault slot."""
+    """What was decided about one call before it runs: validation, guard, policy, idempotency key, fault slot."""
 
     call: ToolCall
     verdict: Verdict
@@ -102,10 +122,16 @@ class _Plan:
     key: str | None = None
     call_index: int | None = None
     skipped: bool = False
+    authorization: Authorization | None = None  # Bulkhead's decision; None when Bulkhead is off
+
+    @property
+    def refused(self) -> bool:
+        """Bulkhead denied the call or asked for approval."""
+        return self.authorization is not None and not self.authorization.allowed
 
     @property
     def runnable(self) -> bool:
-        return self.verdict.ok and not self.decision.blocked and not self.skipped
+        return self.verdict.ok and not self.decision.blocked and not self.skipped and not self.refused
 
 
 def run_episode(
@@ -124,6 +150,9 @@ def run_episode(
     faults: FaultSchedule | None = None,
     recovery: RecoveryStrategy | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    security: SecurityConfig | None = None,
+    parent_episode_id: str | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> EpisodeResult:
     """Run one episode against ``store``, which the episode owns and mutates.
 
@@ -140,7 +169,18 @@ def run_episode(
 
     ``recovery`` picks the strategy (default ``typed_hint``). ``sleep`` is how
     policy backoff waits; tests and replay pass one that does not sleep.
+
+    ``security`` turns on Bulkhead's policy gate for every call;
+    ``parent_episode_id`` marks an approved retry (its grants bind to that parent).
+    ``backend`` runs the calls that must never run in-process (exec, sandboxed, network, or
+    filesystem tools); its tier must be one of the configuration's available tiers.
     """
+    if (parent_episode_id is not None or backend is not None) and security is None:
+        raise ValueError("Only a Bulkhead-secured episode can have a parent episode or a backend")
+    if security is not None and backend is not None and backend.identity.tier not in security.available_tiers:
+        raise ValueError("The backend's tier is not among the configuration's available tiers")
+    if security is not None and security.available_tiers and backend is None:
+        raise ValueError("Available sandbox tiers need a backend to run them")
     budgets = budgets or Budgets()
     executor = executor or SequentialExecutor()
     strategy = recovery or TypedHint()
@@ -153,6 +193,19 @@ def run_episode(
         max_tokens=settings.get("max_tokens"),
     )
     history = deepcopy([dict(message) for message in messages])
+    gate = None
+    if security is not None:
+        gate = SecurityGate(
+            security,
+            registry,
+            journal=journal,
+            episode_id=journal.episode_id,
+            parent_episode_id=parent_episode_id,
+            step=lambda: controller.steps,
+            backend_identity=backend.identity if backend is not None else None,
+        )
+        # Every call the episode makes, recovery's included, goes through the gate first.
+        executor = SecuredExecutor(executor, gate, BackendRunner(backend, gate) if backend is not None else None)
     episode = _Episode(
         registry=registry,
         store=store,
@@ -164,6 +217,7 @@ def run_episode(
         budget=RecoveryBudget(),
         sleep=sleep,
         history=history,
+        security=gate,
     )
     tools = registry.schemas()
     final_content: str | None = None
@@ -181,6 +235,7 @@ def run_episode(
         policy_sha256=registry.policies_sha256(),
         messages=history,
         recovery_policy=strategy.name,
+        bulkhead=gate.summary() if gate is not None else None,
     )
     try:
         while controller.running:
@@ -320,15 +375,24 @@ def _escalate_repeat(turn: ModelTurn, controller: EpisodeController, journal: Ep
 
 def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
     """Run one assistant message's calls. Returns an escalation reason, or None to keep going."""
-    registry = episode.registry
-    # Only a message made entirely of reads runs in parallel; any write makes it sequential.
+    registry, gate = episode.registry, episode.security
+    # Only a message made entirely of reads runs in parallel; any write makes it sequential, and
+    # so does (with Bulkhead) any call with a sink or egress, so later calls see earlier results.
     parallel = len(calls) > 1 and all(
-        call.name in registry and registry.policy(call.name).effect is Effect.READ for call in calls
+        call.name in registry
+        and registry.policy(call.name).effect is Effect.READ
+        and (gate is None or gate.batchable(call, registry))
+        for call in calls
     )
     if parallel:
-        # Plan in call order first (validation, guard, fault slots), run concurrently, then finish
-        # (recover and journal) in call order again, so the journal does not depend on timing.
-        plans = [_plan(call, episode, reserve_fault_index=True) for call in calls]
+        # Plan in call order first (validation, guard, policy decision, fault slots), run
+        # concurrently, then finish (recover and journal) in call order again, so the journal does
+        # not depend on timing. The episode escalates at an ASK, so nothing after it is planned.
+        plans = []
+        for call in calls:
+            plans.append(_plan(call, episode, reserve_fault_index=True))
+            if plans[-1].refused and plans[-1].authorization.asks:  # type: ignore[union-attr]
+                break
         width = min(MAX_PARALLEL_READS, len(plans))
         with ThreadPoolExecutor(max_workers=width, thread_name_prefix="steadyhand-read") as pool:
             futures = [pool.submit(_first_attempt, plan, episode) if plan.runnable else None for plan in plans]
@@ -342,9 +406,7 @@ def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
     # Sequential: once a result fails a sanity check, the turn's remaining writes are skipped.
     skip_writes = False
     for call in calls:
-        plan = _plan(call, episode, reserve_fault_index=False)
-        if skip_writes and plan.verdict.ok and not plan.decision.blocked and _is_write(call, registry):
-            plan.skipped = True
+        plan = _plan(call, episode, reserve_fault_index=False, skip=skip_writes and _is_write(call, registry))
         first = _first_attempt(plan, episode) if plan.runnable else None
         reason, suspicious = _finish(plan, first, episode)
         if reason is not None:
@@ -353,17 +415,27 @@ def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
     return None
 
 
-def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool) -> _Plan:
-    """Validate the call and show it to the guard; for a runnable call, add its key and fault slot.
+def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool, skip: bool = False) -> _Plan:
+    """Validate the call, show it to the guard, and (with Bulkhead) authorize it; for a runnable
+    call, add its key and fault slot.
 
-    Writes get an idempotency key when the strategy uses keyed writes. Parallel reads
-    reserve their fault index now, in call order, because they may finish in any order.
+    ``skip`` marks a write skipped after a suspicious result; it is never authorized. Writes get
+    an idempotency key when the strategy uses keyed writes. Parallel reads reserve their fault
+    index now, in call order, because they may finish in any order. A refused call never
+    reserves one, so the injector cannot see it.
     """
     verdict = validate_call(call, episode.registry, episode.store)
     decision = episode.controller.guard.observe(call)
     plan = _Plan(call=call, verdict=verdict, decision=decision)
     if not plan.runnable:
         return plan
+    if skip:
+        plan.skipped = True
+        return plan
+    if episode.security is not None:
+        plan.authorization = episode.security.authorize(call, episode.registry, via="model")
+        if not plan.runnable:
+            return plan
     if episode.strategy.keyed_writes and _is_write(call, episode.registry) and verdict.arguments is not None:
         plan.key = idempotency_key(episode.journal.episode_id, call.name, verdict.arguments)
     if reserve_fault_index and episode.injector is not None:
@@ -380,6 +452,8 @@ def _first_attempt(plan: _Plan, episode: _Episode) -> ToolResult:
         options["idempotency_key"] = plan.key
     if plan.call_index is not None:
         options["call_index"] = plan.call_index
+    if plan.authorization is not None:
+        options["authorization"] = plan.authorization  # the executor is a SecuredExecutor
     return episode.executor.run(plan.call, episode.registry, episode.store, **options)
 
 
@@ -426,6 +500,12 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
             ),
             handler_called=False,
         )
+    elif plan.refused:
+        # Bulkhead said DENY or ASK: no injector, no handler, no recovery. ASK stops the episode.
+        assert episode.security is not None and plan.authorization is not None
+        result = episode.security.refusal(call, plan.authorization)
+        if plan.authorization.asks:
+            escalate_reason = episode.security.escalation_reason(call, plan.authorization)
     else:
         if first is None:
             first = plan.verdict.rejected(call)
@@ -446,6 +526,7 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
             sleep=episode.sleep,
             budget=episode.budget,
             idempotency_key=plan.key,
+            security=episode.security,
         )
         outcome = apply_recovery(episode.strategy, context, first)
         result, escalate_reason, suspicious = outcome.result, outcome.escalate_reason, outcome.suspicious
@@ -462,7 +543,10 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
     if not plan.decision.blocked:
         controller.guard.record_outcome(plan.decision.key, result)
     episode.history.append(observation_message(call, result))
-    journal.tool_result(step=step, result=result)
+    record = journal.tool_result(step=step, result=result)
+    if episode.security is not None:
+        # Taint lands before the next call in this message (or the next turn) is decided.
+        episode.security.observe(call_id=call.id, tool=call.name, result=result, source_seq=record["seq"])
     return escalate_reason, suspicious
 
 

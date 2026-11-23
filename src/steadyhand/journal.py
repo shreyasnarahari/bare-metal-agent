@@ -13,6 +13,28 @@ arrived in part 5 this way, the recovery events in part 6). An optional field
 is written only when it differs from its default, which a reader assumes when
 the field is absent (``recovery_policy`` defaults to ``typed_hint``).
 
+Bulkhead's security events are added the same way: ``policy_decision``,
+``approval_requested``, ``taint_transition``, ``sandbox_execution``, and
+``egress_decision``. Their exact fields and value rules live in
+``bulkhead.audit``; every value is checked both when a record is written and
+when a journal is read (enum labels, hashes, bounds, and consistency, such as a
+verdict matching its rule). They carry hashes, rule ids, labels, sizes, and
+bounded details, never raw arguments, command lines, URLs, or secrets.
+``episode_started`` carries a ``bulkhead`` summary only when Bulkhead is
+enabled, so journals written without it are byte-for-byte unchanged.
+
+Only genuinely variable fields are volatile: model and tool timings, and a
+sandbox run's or egress decision's elapsed time, resource usage, and proxy
+byte counts. Verdicts, rule ids, taint labels, request hashes, and every
+observation compare exactly, so editing any of them is a ``ReplayMismatch``
+naming the record and field.
+
+Security records are evidence of what the control plane decided and what a
+backend reported, not proof of enforcement. Replay re-derives the decisions and
+serves recorded ``sandbox_execution`` results back, which shows the control
+plane reproduces; it does not show that a kernel enforced anything. Only a live
+run under the real backend (``steadyhand.replay.live_replay_report``) tests that.
+
 A journal built with ``expected=`` records is in verify mode: each appended
 record is compared with the recorded line at the same ``seq`` instead of
 being written. Replay uses it with ``write=False``; resume uses it with
@@ -33,6 +55,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from bulkhead import audit
 from toolsmith.artifacts import copy_file_atomic, copy_snapshot
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from toolsmith.recording import JsonlRecorder
@@ -76,6 +99,9 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "handler_called", "idempotency_key", "waited_s",
     }),
     "sanity_checked": frozenset({"step", "tool_call_id", "tool", "passed", "problem"}),
+    # Bulkhead security events (policy_decision, approval_requested, taint_transition,
+    # sandbox_execution, egress_decision); fields and value rules come from bulkhead.audit.
+    **{event: frozenset(fields) for event, fields in audit.SECURITY_EVENT_FIELDS.items()},
     "recovery": frozenset({"step", "tool_call_id", "tool", "strategy", "recovered_by", "escalated"}),
     # Tool-side faults only. Model-output failures stay on model_turn.
     "injected_fault": frozenset({
@@ -90,11 +116,12 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
 # Fields an event carries in exactly one of its forms.
 ONE_OF_FIELDS: dict[str, frozenset[str]] = {"tool_result": frozenset({"value", "error"})}
 # Fields written only when they differ from the default a reader assumes.
-OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint"}}
+OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint", "bulkhead": None}}
 # Timing differs on every run, so it never takes part in replay equality.
 VOLATILE_FIELDS: dict[str, frozenset[str]] = {
     "model_turn": frozenset({"elapsed_s"}),
     "tool_result": frozenset({"elapsed_s"}),
+    **audit.VOLATILE_SECURITY_FIELDS,
 }
 
 
@@ -211,6 +238,11 @@ def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
         raise JournalFormatError(f"{event} has {problem}", seq=expected_seq, field="fields")
     if one_of and len(keys & one_of) != 1:
         raise JournalFormatError(f"{event} needs exactly one of {sorted(one_of)}", seq=expected_seq, field="fields")
+    if event in audit.SECURITY_EVENT_FIELDS:
+        try:
+            audit.validate(event, {name: record[name] for name in EVENT_FIELDS[event]})
+        except audit.AuditError as exc:
+            raise JournalFormatError(f"{event}: {exc}", seq=expected_seq, field=exc.field) from None
 
 
 class EpisodeJournal:
@@ -313,8 +345,11 @@ class EpisodeJournal:
         policy_sha256: str,
         messages: Sequence[Mapping[str, Any]],
         recovery_policy: str = "typed_hint",
+        bulkhead: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        optional = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
+        optional: dict[str, Any] = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
+        if bulkhead is not None:
+            optional["bulkhead"] = dict(bulkhead)
         return self.append(
             "episode_started",
             **optional,
@@ -455,6 +490,90 @@ class EpisodeJournal:
             idempotency_key=idempotency_key,
             waited_s=waited_s,
         )
+
+    def policy_decision(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        via: str,
+        tool: str,
+        arguments_sha256: str,
+        verdict: str,
+        rule_id: str,
+        reason_code: str,
+        taint_before: str,
+        policy_sha256: str,
+        grant_id: str | None,
+        normalized_request_sha256: str,
+    ) -> dict[str, Any]:
+        """One Bulkhead decision. ``tool_result.handler_called`` stays the evidence of execution."""
+        return self._security(
+            "policy_decision",
+            step=step,
+            tool_call_id=tool_call_id,
+            via=via,
+            tool=tool,
+            arguments_sha256=arguments_sha256,
+            verdict=verdict,
+            rule_id=rule_id,
+            reason_code=reason_code,
+            taint_before=taint_before,
+            policy_sha256=policy_sha256,
+            grant_id=grant_id,
+            normalized_request_sha256=normalized_request_sha256,
+        )
+
+    def approval_requested(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        rule_id: str,
+        request_sha256: str,
+        normalized_grant: Mapping[str, Any],
+        parent_episode_id: str | None,
+        approval_mode: str,
+    ) -> dict[str, Any]:
+        """The privileges an ASK needs (no credentials). ``parent_episode_id`` is this episode's own parent."""
+        return self._security(
+            "approval_requested",
+            step=step,
+            tool_call_id=tool_call_id,
+            rule_id=rule_id,
+            request_sha256=request_sha256,
+            normalized_grant=dict(normalized_grant),
+            parent_episode_id=parent_episode_id,
+            approval_mode=approval_mode,
+        )
+
+    def taint_transition(
+        self, *, step: int, tool_call_id: str, source_tool: str, before: str, after: str, source_seq: int,
+    ) -> dict[str, Any]:
+        """The episode became untrusted; ``source_seq`` is the record that carried the outside content."""
+        return self._security(
+            "taint_transition",
+            step=step,
+            tool_call_id=tool_call_id,
+            source_tool=source_tool,
+            before=before,
+            after=after,
+            source_seq=source_seq,
+        )
+
+    def sandbox_execution(self, *, step: int, tool_call_id: str, via: str, tool: str, result: Mapping[str, Any], **audit_fields: Any) -> dict[str, Any]:
+        """One backend run: its audit fields (``bulkhead.replay.AUDIT_FIELDS``) and its typed result."""
+        return self._security(
+            "sandbox_execution", step=step, tool_call_id=tool_call_id, via=via, tool=tool, result=dict(result), **audit_fields,
+        )
+
+    def egress_decision(self, **fields: Any) -> dict[str, Any]:
+        """One proxy decision (part 6): the normalized authority, never a URL, body, or header."""
+        return self._security("egress_decision", **fields)
+
+    def _security(self, event: str, **fields: Any) -> dict[str, Any]:
+        # Checked before writing, so an invalid security record never reaches the file.
+        return self.append(event, **audit.build(event, **fields))
 
     def sanity_checked(
         self, *, step: int, tool_call_id: str, tool: str, passed: bool, problem: str | None,

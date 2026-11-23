@@ -13,10 +13,31 @@ an incomplete journal with a matching manifest exists, it resumes: the recorded
 prefix is replayed and checked, then the live client takes over at the next
 ``seq``. A crash that kills the process outright leaves ``<episode_id>.claim``
 behind; delete it by hand before resuming that episode.
+
+A Bulkhead-secured episode replays with the security configuration stored in
+its manifest (checked against the manifest's hash), so every policy decision,
+approval request, and taint transition is re-derived and compared like any
+other event. A journal recorded without Bulkhead replays without it, exactly
+as before.
+
+Replay never repeats an external side effect. In-memory mock-store handlers
+are re-executed (they only touch the fresh fixture copy). Exec, sandboxed,
+filesystem, and network tools are served by ``RecordedExecutionBackend`` from
+the recorded ``sandbox_execution`` events, after checking the replayed request
+matches; no process is spawned and no socket is opened. Resume does the same
+for the recorded prefix before handing new calls to the live backend.
+
+What replay verifies: the control plane (validation, guard, policy decisions,
+approvals, taint, recovery, and every observation and message) reproduces
+exactly. What it does not: kernel enforcement. Only a live run under the real
+backend shows that; ``live_replay_report`` re-executes a recorded episode
+under a backend you supply and writes a separate comparison report, never
+touching the original journal.
 """
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import time
@@ -27,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bulkhead.replay import BackendIdentity, ExecutionBackend, ExecutionOutcome, ExecutionRequest, RecordedExecutionBackend
 from toolsmith.evaluation.models import canonical_hash
 
 from .controller import DEFAULT_GUARD_LIMIT, Budgets
@@ -51,6 +73,7 @@ from .manifest import (
 )
 from .recovery import RecoveryStrategy, no_sleep, strategy_for
 from .registry import SteadyhandRegistry
+from .security import SecurityConfig
 from .store import Store, load_fixture
 from .tools import build_registry
 from .types import EpisodeResult, ModelClient, ModelTurn, ToolCall, TurnKind
@@ -219,6 +242,28 @@ class ReplayCancel:
         return True
 
 
+class ResumingBackend:
+    """Serves the recorded prefix's sandbox runs, then hands later calls to the live backend."""
+
+    def __init__(self, recorded: RecordedExecutionBackend, live: ExecutionBackend) -> None:
+        self.recorded = recorded
+        self.live = live
+        self.identity = live.identity
+
+    def execute(self, request: ExecutionRequest, arguments: Mapping[str, Any]) -> ExecutionOutcome:
+        backend: ExecutionBackend = self.recorded if self.recorded.remaining else self.live
+        return backend.execute(request, arguments)
+
+
+def registry_for(schema_sha256: str) -> SteadyhandRegistry:
+    """The built-in registry whose model-facing schemas hash to ``schema_sha256`` (store tools, optionally exec tools)."""
+    for exec_tools in (False, True):
+        candidate = build_registry(exec_tools=exec_tools)
+        if candidate.schemas_sha256() == schema_sha256:
+            return candidate
+    return build_registry()  # require_match then names the schema mismatch
+
+
 def replay_episode(
     path: str | Path,
     *,
@@ -226,6 +271,7 @@ def replay_episode(
     store: Store | None = None,
     executor: SequentialExecutor | None = None,
     recovery: RecoveryStrategy | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> EpisodeResult:
     """Re-run a finished journal on CPU and check every event. Writes nothing.
 
@@ -233,6 +279,9 @@ def replay_episode(
     it; a strategy that differs from the recorded one is refused. Policy waits
     are not slept; their recorded lengths are compared instead. Pass ``store``
     (a fresh fixture clone) to keep the replayed final store; it is mutated.
+    Backend tools are served from the recording unless ``backend`` is given
+    (only ``live_replay_report`` does that). The registry is picked by the
+    recorded schema hash unless ``registry`` is given.
     """
     path = Path(path)
     records = read_journal(path)
@@ -252,9 +301,14 @@ def replay_episode(
             field="recovery_policy",
         )
     strategy = recovery or strategy_for(manifest.recovery_policy)
-    registry = registry or build_registry()
+    registry = registry or registry_for(manifest.schema_sha256)
     store = store if store is not None else load_fixture().clone()
     faults = _recorded_schedule(manifest.fault_schedule, manifest.fault_schedule_sha256)
+    security = _recorded_security(manifest.security_config, manifest.task_policy_sha256)
+    _check_recorded_specs(manifest.security_specs, manifest.security_spec_sha256)
+    identity = BackendIdentity.from_dict(manifest.backend) if manifest.backend is not None else None
+    if backend is None and identity is not None:
+        backend = RecordedExecutionBackend(records, identity)
     current = build_manifest(
         started["settings"],
         registry,
@@ -269,6 +323,9 @@ def replay_episode(
         fault_schedule=faults,
         recovery_policy=strategy.name,
         system_prompt_variant=manifest.system_prompt_variant,
+        security=security,
+        parent_episode_id=manifest.parent_episode_id,
+        backend=identity,
     )
     require_match(manifest, current)
 
@@ -292,6 +349,9 @@ def replay_episode(
         faults=faults,
         recovery=strategy,
         sleep=no_sleep,
+        security=security,
+        parent_episode_id=manifest.parent_episode_id,
+        backend=_as_recorded_identity(backend, identity),
     )
     journal.verify_complete()
     return result
@@ -318,10 +378,16 @@ def run_claimed_episode(
     recovery: RecoveryStrategy | None = None,
     system_prompt_variant: str = "plain",
     sleep: Callable[[float], None] = time.sleep,
+    security: SecurityConfig | None = None,
+    parent_episode_id: str | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> EpisodeResult | None:
     """Claim, run (or resume), and complete one episode. ``None`` means nothing to do here.
 
     ``store`` must be the unmodified starting store; its hash is part of the id.
+    ``security`` enables Bulkhead; it and ``parent_episode_id`` are part of the id.
+    ``backend`` runs sandboxed calls; resume refuses a different backend identity and serves
+    the recorded prefix's runs from the journal instead of re-running them.
     Returns ``None`` when another worker holds the claim or the episode is
     already complete. Raises ``ReplayMismatch`` when an incomplete journal's
     manifest differs from this run, rather than resuming it.
@@ -341,6 +407,9 @@ def run_claimed_episode(
         fault_schedule=faults,
         recovery_policy=recovery.name if recovery is not None else "typed_hint",
         system_prompt_variant=system_prompt_variant,
+        security=security,
+        parent_episode_id=parent_episode_id,
+        backend=backend.identity if backend is not None else None,
     )
     # The episode id is a hash of the manifest, so the same task, settings, and faults always map
     # to the same journal file.
@@ -354,6 +423,7 @@ def run_claimed_episode(
     try:
         run_client: ModelClient = client
         run_clock = clock
+        run_backend = backend
         expected: list[dict[str, Any]] = []
         # A manifest already exists: the episode is complete (nothing to do) or was interrupted
         # (resume by replaying its journal, then continuing live).
@@ -367,6 +437,8 @@ def run_claimed_episode(
                 expected = read_journal(journal_path)
                 run_client = ResumingClient(ReplayClient.from_records(expected), client)
                 run_clock = ReplayClock.from_records(expected, live=clock)
+                if backend is not None:
+                    run_backend = ResumingBackend(RecordedExecutionBackend(expected, backend.identity), backend)
         elif journal_path.exists():
             raise FileExistsError(f"A journal exists without a manifest: {journal_path}")
         journal = EpisodeJournal(
@@ -387,11 +459,77 @@ def run_claimed_episode(
             faults=faults,
             recovery=recovery,
             sleep=sleep,
+            security=security,
+            parent_episode_id=parent_episode_id,
+            backend=run_backend,
         )
         mark_completed(manifest_file)
         return result
     finally:
         claim_file.unlink(missing_ok=True)
+
+
+# Events whose mismatch means a security decision changed, not just an output.
+SECURITY_DECISION_EVENTS = frozenset({"policy_decision", "approval_requested", "taint_transition", "egress_decision"})
+
+
+def live_replay_report(
+    path: str | Path,
+    backend: ExecutionBackend,
+    report_path: str | Path,
+    *,
+    registry: SteadyhandRegistry | None = None,
+) -> dict[str, Any]:
+    """Opt-in: re-execute a recorded episode's sandboxed calls under ``backend`` and write a comparison.
+
+    The original journal and manifest are never written; the report goes to
+    ``report_path`` only. Volatile fields (timings, resource use) may differ.
+    The first mismatch is classified: a changed security decision is a
+    security failure; a different sandbox outcome or observation is a
+    divergence to investigate (later events cannot be compared after it).
+    """
+    path, report_path = Path(path), Path(report_path)
+    if report_path.resolve() in (path.resolve(), manifest_path_for(path).resolve()):
+        raise ValueError("the live replay report must not overwrite the recorded journal or manifest")
+    records = read_journal(path)
+    report: dict[str, Any] = {
+        "journal": path.name,
+        "recorded_backend": load_manifest(manifest_path_for(path)).backend,
+        "live_backend": backend.identity.as_dict(),
+        "matched": True,
+        "first_mismatch": None,
+        "security_failure": False,
+    }
+    try:
+        replay_episode(path, registry=registry, backend=backend)
+    except ReplayMismatch as exc:
+        event = records[exc.seq]["event"] if exc.seq is not None and exc.seq < len(records) else None
+        kind = "security_decision" if event in SECURITY_DECISION_EVENTS else "sandbox_outcome" if event == "sandbox_execution" else "observation"
+        report.update(
+            matched=False,
+            first_mismatch={"seq": exc.seq, "field": exc.field, "event": event, "kind": kind, "message": str(exc)},
+            security_failure=kind == "security_decision",
+        )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2) + "\n", encoding="utf-8")
+    return report
+
+
+class _IdentifiedBackend:
+    """A live backend presented under the recorded identity, so summaries compare in a live replay."""
+
+    def __init__(self, backend: ExecutionBackend, identity: BackendIdentity) -> None:
+        self._backend = backend
+        self.identity = identity
+
+    def execute(self, request: ExecutionRequest, arguments: Mapping[str, Any]) -> ExecutionOutcome:
+        return self._backend.execute(request, arguments)
+
+
+def _as_recorded_identity(backend: ExecutionBackend | None, identity: BackendIdentity | None) -> ExecutionBackend | None:
+    if backend is None or identity is None or backend.identity == identity:
+        return backend
+    return _IdentifiedBackend(backend, identity)
 
 
 @dataclass(frozen=True)
@@ -437,6 +575,26 @@ def _recorded_schedule(value: Mapping[str, Any] | None, expected_sha256: str | N
     return schedule
 
 
+def _recorded_security(value: Mapping[str, Any] | None, expected_sha256: str | None) -> SecurityConfig | None:
+    """Rebuild the recorded Bulkhead configuration and check it against the manifest hash."""
+    if value is None:
+        if expected_sha256 is not None:
+            raise ReplayMismatch("The manifest hashes a security config it does not include", field="security_config")
+        return None
+    config = SecurityConfig.from_dict(value)
+    if config.sha256() != expected_sha256:
+        raise ReplayMismatch("The recorded security config does not match its manifest hash", field="task_policy_sha256")
+    return config
+
+
+def _check_recorded_specs(value: Mapping[str, Any] | None, expected_sha256: str | None) -> None:
+    """The recorded spec content must hash to the recorded security_spec_sha256."""
+    if value is None:
+        return
+    if canonical_hash([[name, spec] for name, spec in value.items()]) != expected_sha256:
+        raise ReplayMismatch("The recorded security specs do not match their manifest hash", field="security_specs")
+
+
 # A redacted value would make replayed messages differ from the originals, so refuse up front.
 def _refuse_redacted(records: Sequence[Mapping[str, Any]]) -> None:
     for record in records:
@@ -456,13 +614,17 @@ def _drop_torn_tail(path: Path) -> None:
 
 
 __all__ = [
+    "SECURITY_DECISION_EVENTS",
     "RecordedTurn",
     "ReplayCancel",
     "ReplayClient",
     "ReplayClock",
     "ReplayOutcome",
+    "ResumingBackend",
     "ResumingClient",
     "replay_episode",
+    "live_replay_report",
+    "registry_for",
     "replay_many",
     "run_claimed_episode",
     "turn_from_record",

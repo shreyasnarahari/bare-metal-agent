@@ -1,0 +1,245 @@
+{
+  "episode_id": "ep_624825b69b582333",
+  "steadyhand_version": "0.1.0",
+  "toolsmith_version": "0.1.0",
+  "journal_version": 1,
+  "profile": "qwen3",
+  "model": "Qwen/Qwen3-8B",
+  "protocol": "qwen3",
+  "use_grammars": true,
+  "enable_thinking": false,
+  "seed": 0,
+  "temperature": 0.0,
+  "max_tokens": 256,
+  "budgets": {
+    "max_steps": 8,
+    "max_prompt_tokens": 24000,
+    "max_completion_tokens": 8000,
+    "max_wall_clock_s": null
+  },
+  "guard_limit": 3,
+  "paraphrase_final": false,
+  "fixture_sha256": "467b1b081d01127c768cef37a1659f1636973561ad93c455d58f4260fadc0d1c",
+  "schema_sha256": "fbf5ddf9d2f5d5aede73d24b00a533c093468e2a602e83f4d56f2f6e3ac5a1c6",
+  "policy_sha256": "8c3f2353d616bafd0eaec7aed912dbdadea9b08390ac1bf779550f207886c150",
+  "system_prompt_sha256": "246f9f1550ebe605742f8b765f8fa38dda3aeb9974ba0ef3b5b8b3bb35d50bda",
+  "task_sha256": "e1dd73f81b8920e2c7ed3eb0af71009da5d446fb649d5da03084252ca7a7c210",
+  "fault_schedule_sha256": null,
+  "run_label": "sandboxed_exec",
+  "fault_schedule": null,
+  "recovery_policy": "typed_hint",
+  "system_prompt_variant": "plain",
+  "server_parallel": null,
+  "context_size": null,
+  "per_slot_context": null,
+  "security_spec_sha256": "64a13370b42a020bdbd6a76b3d606b7ccbc1cb4ce2553930e36bf5130c5253ec",
+  "task_policy_sha256": "b42664c8f2e511b25a3c5a5ff7ec9b74bfe8aa50b1cd3ca93b114ccef9602ff5",
+  "security_config": {
+    "version": 1,
+    "task_policy": {
+      "tools": [
+        "add_order_note",
+        "cancel_order",
+        "create_ticket",
+        "get_customer",
+        "get_order",
+        "get_ticket",
+        "issue_refund",
+        "list_payments",
+        "run_shell",
+        "search_orders",
+        "set_ticket_status"
+      ],
+      "deny_tools": [],
+      "ask_tools": [],
+      "rules": [],
+      "fs_read": [
+        "$WORKSPACE",
+        "/lib",
+        "/lib64",
+        "/usr"
+      ],
+      "fs_write": [
+        "$WORKSPACE/out"
+      ],
+      "fs_deny": [
+        "$WORKSPACE/.env",
+        "$WORKSPACE/.git"
+      ],
+      "egress": {
+        "allow": [],
+        "max_bytes_out": 65536,
+        "max_bytes_in": 1048576
+      },
+      "egress_deny": [],
+      "limits": {
+        "cpu_s": 10,
+        "mem_mb": 512,
+        "pids": 64,
+        "disk_mb": 200,
+        "out_kb": 64,
+        "wall_s": 30,
+        "stdout_kb": 64,
+        "stderr_kb": 64
+      },
+      "taint_sensitive": [
+        "filesystem_sensitive",
+        "network"
+      ],
+      "required_tier": "T2",
+      "taint_sensitive_tools": [
+        "issue_refund"
+      ],
+      "sensitive_paths": []
+    },
+    "approval_mode": "deny_all",
+    "grants": [],
+    "available_tiers": [
+      "T2"
+    ]
+  },
+  "security_specs": {
+    "add_order_note": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "cancel_order": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "create_ticket": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "get_customer": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "get_order": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "get_ticket": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "issue_refund": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": [
+        "external_effect"
+      ]
+    },
+    "list_payments": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": []
+    },
+    "run_python": {
+      "sandbox": {
+        "fs_read": [
+          "$WORKSPACE",
+          "/lib",
+          "/lib64",
+          "/usr"
+        ],
+        "fs_write": [
+          "$WORKSPACE/out"
+        ],
+        "fs_deny": [
+          "$WORKSPACE/.env",
+          "$WORKSPACE/.git"
+        ],
+        "net": {
+          "allow": [],
+          "max_bytes_out": 65536,
+          "max_bytes_in": 1048576
+        },
+        "limits": {
+          "cpu_s": 10,
+          "mem_mb": 512,
+          "pids": 64,
+          "disk_mb": 200,
+          "out_kb": 64,
+          "wall_s": 30,
+          "stdout_kb": 64,
+          "stderr_kb": 64
+        },
+        "secrets": []
+      },
+      "output_trust": "untrusted",
+      "sinks": [
+        "filesystem"
+      ]
+    },
+    "run_shell": {
+      "sandbox": {
+        "fs_read": [
+          "$WORKSPACE",
+          "/lib",
+          "/lib64",
+          "/usr"
+        ],
+        "fs_write": [
+          "$WORKSPACE/out"
+        ],
+        "fs_deny": [
+          "$WORKSPACE/.env",
+          "$WORKSPACE/.git"
+        ],
+        "net": {
+          "allow": [],
+          "max_bytes_out": 65536,
+          "max_bytes_in": 1048576
+        },
+        "limits": {
+          "cpu_s": 10,
+          "mem_mb": 512,
+          "pids": 64,
+          "disk_mb": 200,
+          "out_kb": 64,
+          "wall_s": 30,
+          "stdout_kb": 64,
+          "stderr_kb": 64
+        },
+        "secrets": []
+      },
+      "output_trust": "untrusted",
+      "sinks": [
+        "filesystem"
+      ]
+    },
+    "search_orders": {
+      "sandbox": null,
+      "output_trust": "trusted",
+      "sinks": []
+    },
+    "set_ticket_status": {
+      "sandbox": null,
+      "output_trust": "untrusted",
+      "sinks": [
+        "external_effect"
+      ]
+    }
+  },
+  "backend": {
+    "name": "scripted-test",
+    "version": "1",
+    "tier": "T2",
+    "probe_sha256": null
+  },
+  "bulkhead_version": "0.1.0",
+  "completed": true
+}

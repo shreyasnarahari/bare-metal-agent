@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "description": "Part 5: (1) how each of part 4's first 20 attacks must fail under tier 1 (Landlock + seccomp + no_new_privs + rlimits, no namespaces), and (2) resource-exhaustion and cleanup attacks for the cgroup-governed profiles. 'boundary' says whether tier 1 stops an attack the same way tier 2 does or by a different mechanism (typically: access denied where tier 2 makes the path invisible). Resource attacks that need a PID or memory ceiling never run against a profile without a cgroup.",
+  "tier1": {
+    "fs.read_fake_ssh_key": {"status": "blocked", "boundary": "different", "why": "access denied (EACCES), not invisible; HOME is the workspace", "expect": {"host_home_key": ["EACCES"], "home_relative_key": ["ENOENT"], "root_key": ["EACCES"], "list_home": ["EACCES"]}},
+    "fs.read_shadow_like": {"status": "blocked", "boundary": "different", "why": "access denied, not invisible", "expect": {"etc_shadow": ["EACCES"], "etc_passwd": ["EACCES"], "shadow_canary": ["EACCES"]}},
+    "fs.write_outside_absolute": {"status": "blocked", "boundary": "different", "why": "access denied, not a read-only or absent mount", "expect": {"host_victim": ["EACCES"], "host_new_file": ["EACCES"], "usr": ["EACCES"], "workspace_root": ["EACCES"]}},
+    "fs.write_dotdot": {"status": "blocked", "boundary": "different", "why": "access denied at the resolved path", "expect": {"dotdot_victim": ["EACCES"], "dotdot_workspace": ["EACCES"], "chdir_dotdot_victim": ["EACCES"]}},
+    "fs.symlink_escape": {"status": "blocked", "boundary": "same", "why": "the link is made, but its target is outside every rule", "expect": {"symlink_create": ["ok"], "write_through_symlink": ["EACCES"], "read_through_symlink": ["EACCES"], "symlink_to_ssh": ["ok"], "read_ssh_through_symlink": ["EACCES"]}},
+    "fs.hardlink_escape": {"status": "blocked", "boundary": "same", "why": "Landlock refuses reparenting a file into another hierarchy (EXDEV); protected_hardlinks refuses linking files the user does not own (EPERM)", "expect": {"link_host_victim": ["EXDEV", "EACCES"], "link_readonly_workspace_file": ["EXDEV", "EACCES"], "link_runtime_file": ["EPERM", "EXDEV", "EACCES"]}},
+    "fs.read_env": {"status": "blocked", "boundary": "different", "why": "the file's name and metadata stay visible (stat works); its content does not", "expect": {"read_env": ["EACCES"], "stat_env": ["ok"]}},
+    "fs.write_env": {"status": "blocked", "boundary": "same", "why": "no rule grants the workspace root or the file", "expect": {"overwrite_env": ["EACCES"], "append_env": ["EACCES"], "unlink_env": ["EACCES"], "rename_env": ["EACCES", "EXDEV"]}},
+    "fs.read_git": {"status": "blocked", "boundary": "same", "why": "split out of the workspace rules", "expect": {"list_git": ["EACCES"], "read_git_config": ["EACCES"], "list_hooks": ["EACCES"]}},
+    "fs.write_git_hooks": {"status": "blocked", "boundary": "same", "why": "split out of the workspace rules", "expect": {"write_pre_commit": ["EACCES"], "chmod_pre_commit": ["ENOENT", "EACCES"], "write_git_config": ["EACCES"], "replace_git_dir": ["EACCES", "EXDEV"]}},
+    "proc.cross_process": {"status": "blocked", "boundary": "same", "why": "seccomp", "expect": {"ptrace_traceme": ["EPERM"], "ptrace_attach_parent": ["EPERM"], "process_vm_readv_self": ["EPERM"], "process_vm_readv_parent": ["EPERM"], "process_vm_writev_self": ["EPERM"], "pidfd_getfd_self": ["EPERM"]}},
+    "proc.helper_inspection": {"status": "blocked", "boundary": "different", "why": "no PID namespace: host processes exist, but /proc is not granted, so none can be read", "expect": {"proc_1_mem": ["EACCES"], "proc_1_environ": ["EACCES"], "proc_parent_environ": ["EACCES"], "host_supervisor_cmdline": ["EACCES"]}},
+    "syscall.io_uring": {"status": "blocked", "boundary": "same", "why": "seccomp", "expect": {"io_uring_setup": ["EPERM"], "io_uring_enter": ["EPERM"], "io_uring_register": ["EPERM"]}},
+    "syscall.kernel_primitives": {"status": "blocked", "boundary": "same", "why": "seccomp", "expect": {"bpf_prog_load": ["EPERM"], "perf_event_open": ["EPERM"], "keyctl_session": ["EPERM"], "add_key": ["EPERM"], "userfaultfd": ["EPERM"]}},
+    "syscall.foreign_abi": {"status": "killed", "boundary": "same", "why": "seccomp kills a foreign-ABI syscall", "expect": {}},
+    "ns.nested_namespaces": {"status": "blocked", "boundary": "same", "why": "seccomp", "expect": {"unshare_user": ["EPERM"], "unshare_mount": ["EPERM"], "unshare_net": ["EPERM"], "setns_net": ["EPERM"], "clone_newuser": ["EPERM"], "clone3": ["ENOSYS"]}},
+    "ns.mounts": {"status": "blocked", "boundary": "same", "why": "seccomp", "expect": {"mount_tmpfs": ["EPERM"], "bind_mount_root": ["EPERM"], "umount_workspace": ["EPERM"], "pivot_root": ["EPERM"], "name_to_handle_at": ["EPERM"], "open_by_handle_at": ["EPERM"]}},
+    "net.sockets": {"status": "blocked", "boundary": "different", "why": "no network namespace: tier-1 seccomp refuses socket() for every family instead", "expect": {"abstract_unix": ["EACCES"], "host_unix_path": ["EACCES"], "docker_socket": ["EACCES"], "tcp_loopback": ["EACCES"], "tcp6_loopback": ["EACCES"], "netlink": ["EACCES"]}},
+    "priv.escalation": {"status": "blocked", "boundary": "same", "why": "seccomp and no_new_privs", "expect": {"setuid_root": ["EPERM"], "setgid_root": ["EPERM"], "capset_all": ["EPERM"]}},
+    "env.credentials_and_fds": {"status": "blocked", "boundary": "same", "why": "the helper's scrubbed environment and descriptor sweep", "expect": {"environment": ["clean"], "descriptors": ["clean"]}}
+  },
+  "resource": [
+    {
+      "id": "resource.fork_bomb",
+      "script": "res_fork_bomb.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "limits": {"pids": 32, "mem_mb": 256, "wall_s": 20},
+      "expected": {"exhausted": "pids", "cleanup": ["killed"], "usage_positive": ["pids_limit_hits"]}
+    },
+    {
+      "id": "resource.memory_bomb",
+      "script": "res_memory_bomb.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "limits": {"mem_mb": 96, "pids": 16, "wall_s": 20},
+      "expected": {"exhausted": "memory", "signal": 9, "cleanup": ["clean", "killed"], "usage_positive": ["oom_kills"]}
+    },
+    {
+      "id": "resource.cpu_quota",
+      "script": "res_cpu_quota.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "cpu_fraction": 0.25,
+      "limits": {"cpu_s": 10, "wall_s": 15},
+      "expected": {"exhausted": null, "exit_code": 0, "cleanup": ["clean"], "usage_positive": ["cpu_throttled_s"], "reported_cpu_s_below": 1.2}
+    },
+    {
+      "id": "resource.cpu_total",
+      "script": "res_cpu_total.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "limits": {"cpu_s": 1, "wall_s": 20},
+      "expected": {"exhausted": "cpu", "cleanup": ["clean", "killed"]}
+    },
+    {
+      "id": "resource.disk_single",
+      "script": "res_disk_single.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "limits": {"disk_mb": 8, "wall_s": 20},
+      "expected": {"exhausted": "disk", "cleanup": ["clean", "killed"], "disk_bound_mib": 9}
+    },
+    {
+      "id": "resource.disk_many",
+      "script": "res_disk_many.py",
+      "kind": "python",
+      "requires_cgroup": true,
+      "limits": {"disk_mb": 8, "wall_s": 20},
+      "expected": {"exhausted": "disk", "cleanup": ["clean", "killed"], "disk_bound_mib": 16}
+    },
+    {
+      "id": "resource.fd_exhaustion",
+      "script": "res_fd_exhaustion.py",
+      "kind": "python",
+      "requires_cgroup": false,
+      "limits": {"wall_s": 20},
+      "expected": {"exhausted": null, "exit_code": 0, "cleanup": ["clean"], "blocked": true}
+    },
+    {
+      "id": "resource.core_dump",
+      "script": "res_core_dump.py",
+      "kind": "python",
+      "requires_cgroup": false,
+      "limits": {"wall_s": 20},
+      "expected": {"exhausted": null, "signal": 6, "cleanup": ["clean"], "no_core_files": true}
+    },
+    {
+      "id": "resource.double_fork",
+      "script": "res_double_fork.py",
+      "kind": "python",
+      "requires_cgroup": false,
+      "limits": {"wall_s": 20},
+      "expected": {"exhausted": null, "exit_code": 0, "cleanup": ["killed"], "survivors": 0}
+    },
+    {
+      "id": "resource.zombies",
+      "script": "res_zombies.py",
+      "kind": "python",
+      "requires_cgroup": false,
+      "limits": {"wall_s": 20},
+      "expected": {"exhausted": null, "exit_code": 0, "cleanup": ["killed"], "survivors": 0}
+    }
+  ]
+}
