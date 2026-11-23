@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 (threat model and capability probe) and 2 (policy, manifests, and approvals) are implemented. **No tool runs in a sandbox yet.**
+**Status:** parts 1 (threat model and capability probe), 2 (policy, manifests, and approvals), and 3 (taint, audit, and replay) are implemented. **No tool runs in a sandbox yet.**
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -135,6 +135,17 @@ The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab
 An approval becomes a one-shot grant for that exact call. `run_approved_episode` runs it as a new linked episode (`run_label="approved-<id>"`, with a parent reference). The denied episode's files never change.
 
 Exec tools (`run_python`, `run_shell`, opt-in via `build_registry(exec_tools=True)`) are registered but always denied until part 4 adds a sandbox backend. The executor never runs them in-process. With `security=None`, behavior, episode ids, and golden manifests are unchanged.
+
+### Taint, audit, and replay (part 3)
+
+Taint is coarse, episode-level information-flow control. It is not per-value tracking.
+
+- **Labels:** an episode starts trusted. The first tool output from a tool whose results are not declared trusted makes it untrusted, and nothing makes it trusted again. Store reads were reviewed field by field: `search_orders` is trusted; customer, order, ticket, and payment reads are not.
+- **Effect:** while the episode is untrusted, a call that reaches a taint-sensitive sink asks instead of being allowed. That covers network, sensitive filesystem writes, and tools the task marks sensitive. An explicit deny stays a deny, and pure reads are unaffected.
+- **Ordering:** taint is applied right after each result is journaled, before the next call is decided. A message with a sensitive call runs sequentially, so an untrusted read can't be outrun by a sensitive call in the same message.
+- **Journal:** every security event (`policy_decision`, `approval_requested`, `taint_transition`, `sandbox_execution`, `egress_decision`) is strictly checked in the episode's own journal when written and when read.
+- **Replay:** default replay re-derives every decision, taint change, and observation. Exec, sandboxed, filesystem, and network calls are served from their recorded `sandbox_execution` runs, so replay never spawns a process or opens a socket. It shows the control plane reproduces; it does not show the kernel enforced anything. `live_replay_report` re-executes under a supplied backend and writes a separate comparison report.
+- **Fixtures:** the golden secured episodes in `tests/fixtures/bulkhead_episodes/` cover clean, tainted, same-turn, denied, approved, and sandboxed runs. The sandboxed one uses a scripted test backend, not a sandbox.
 
 ## Architecture
 

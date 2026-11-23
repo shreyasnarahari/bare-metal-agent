@@ -30,6 +30,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .errors import SecuritySpecError
+from .taint import Sink, Trust
 from .types import canonical_hash
 
 WORKSPACE = "$WORKSPACE"
@@ -52,19 +53,8 @@ _LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
-class Trust(str, Enum):
-    """How far a tool's output may be trusted (part 3 turns this into episode taint)."""
-
-    TRUSTED = "trusted"  # deterministic internal results, declared trusted after review
-    UNTRUSTED = "untrusted"  # anything that can carry outside content; the default
-
-
-class Sink(str, Enum):
-    """Where a tool's effects go. A tool with no sink only reads."""
-
-    NETWORK = "network"  # any outbound communication, even a nominally read-only fetch
-    FILESYSTEM = "filesystem"  # persistent filesystem writes
-    EXTERNAL_EFFECT = "external_effect"  # payments, tickets, messages, and other outside-visible changes
+# Trust and Sink live in bulkhead.taint and are re-exported here for spec authors.
+FILESYSTEM_SINKS = (Sink.FILESYSTEM, Sink.FILESYSTEM_SENSITIVE)
 
 
 class PathAccess(str, Enum):
@@ -365,8 +355,9 @@ class SecuritySpec:
     """A tool's security metadata: its sandbox (``None`` for a trusted in-process tool), output trust, and sinks.
 
     Sinks must cover what the sandbox allows: network egress needs ``NETWORK``
-    and filesystem writes need ``FILESYSTEM``. An in-process tool cannot claim
-    either; it must be given a sandbox first.
+    and filesystem writes need ``FILESYSTEM`` or ``FILESYSTEM_SENSITIVE``. An
+    in-process tool cannot claim a network or filesystem sink; it must be given a
+    sandbox first.
     """
 
     sandbox: Sandbox | None
@@ -381,13 +372,13 @@ class SecuritySpec:
         normalized = tuple(sorted({_enum(Sink, sink, "sinks") for sink in sinks}, key=lambda sink: sink.value))
         object.__setattr__(self, "sinks", normalized)
         if self.sandbox is None:
-            claimed = [sink.value for sink in normalized if sink in (Sink.NETWORK, Sink.FILESYSTEM)]
+            claimed = [sink.value for sink in normalized if sink is Sink.NETWORK or sink in FILESYSTEM_SINKS]
             if claimed:
                 raise SecuritySpecError(f"an in-process tool cannot declare {claimed}; give it a sandbox")
             return
         if self.sandbox.net.enabled and Sink.NETWORK not in normalized:
             raise SecuritySpecError("a sandbox with egress must declare the network sink")
-        if self.sandbox.fs_write and Sink.FILESYSTEM not in normalized:
+        if self.sandbox.fs_write and not set(normalized) & set(FILESYSTEM_SINKS):
             raise SecuritySpecError("a sandbox with writable paths must declare the filesystem sink")
 
     @property
@@ -453,6 +444,7 @@ class Bounds:
 __all__ = [
     "DEFAULT_LIMITS",
     "DEFAULT_PORTS",
+    "FILESYSTEM_SINKS",
     "GLOBAL_MAXIMA",
     "MAX_EGRESS_BYTES",
     "WORKSPACE",

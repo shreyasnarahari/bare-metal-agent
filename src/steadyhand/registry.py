@@ -160,14 +160,16 @@ class SteadyhandRegistry:
             [[name, self._policies[name].as_dict()] for name in sorted(self._policies)]
         )
 
+    def security_specs(self) -> dict[str, Any]:
+        """Every tool's security spec as canonical JSON (null when absent), by name."""
+        return {
+            name: spec.as_dict() if (spec := self._security[name]) is not None else None
+            for name in sorted(self._security)
+        }
+
     def security_spec_sha256(self) -> str:
         """Hash of every tool's security spec (null when absent), by name; part of a secured episode's id."""
-        return canonical_hash(
-            [
-                [name, spec.as_dict() if (spec := self._security[name]) is not None else None]
-                for name in sorted(self._security)
-            ]
-        )
+        return canonical_hash([[name, spec] for name, spec in self.security_specs().items()])
 
     def names(self) -> tuple[str, ...]:
         return tuple(tool.name for tool in self._tools)

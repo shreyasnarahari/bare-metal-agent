@@ -16,9 +16,12 @@ and switches alike) and only hands an allowed call to this executor, so a
 denied call never reaches the injector, never consumes a fault index, and
 never runs a handler. The thread timeout here is not a security boundary.
 
-An ``Effect.EXEC`` tool is never run in-process, whoever calls this executor:
-it is refused as a ``sandbox_violation`` before the injector. Exec tools run
-only through a sandbox backend (Bulkhead part 4).
+A tool that needs a backend (``Effect.EXEC``, a sandboxed spec, or a network
+or filesystem sink; see ``bulkhead.replay.requires_backend``) never runs
+in-process, whoever calls this executor. Without a ``backend`` runner it is
+refused as a ``sandbox_violation`` before the injector. With one, the runner
+replaces the handler: a live sandbox backend (parts 4 and 5), or in replay the
+recorded backend, which serves recorded runs and never re-executes them.
 
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only
@@ -36,6 +39,7 @@ from dataclasses import replace
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
+from bulkhead.replay import requires_backend
 from toolsmith.evaluation.models import canonical_hash
 
 from .errors import ErrorObservation
@@ -53,7 +57,14 @@ from .validate import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from bulkhead.manifest import SecuritySpec
+
     from .faults import FaultInjector
+
+    # Runs a call that needs a backend: (call, arguments, arguments hash, spec, via) -> result.
+    BackendRunner = Callable[[ToolCall, dict[str, Any], str, SecuritySpec | None, str], ToolResult]
 
 
 class SequentialExecutor:
@@ -69,9 +80,11 @@ class SequentialExecutor:
         via: str = "model",
         idempotency_key: str | None = None,
         call_index: int | None = None,
+        backend: BackendRunner | None = None,
     ) -> ToolResult:
         """``idempotency_key`` reaches handlers that accept one (the server side of strategy d).
-        ``call_index`` is an injector index reserved earlier, for parallel reads."""
+        ``call_index`` is an injector index reserved earlier, for parallel reads. ``backend`` runs
+        calls that must never run in-process; without it they are refused."""
         started = time.monotonic()
 
         def refused(error: ErrorObservation, digest: str | None) -> ToolResult:
@@ -97,9 +110,11 @@ class SequentialExecutor:
         digest = canonical_hash(arguments)
         if tool.handler is None:
             return refused(handler_error_observation(call.name, "this tool has no handler"), digest)
-        if policy.effect is Effect.EXEC:
-            problem = "exec tools never run in-process; they need a sandbox backend"
-            return refused(sandbox_violation_observation(call.name, "bulkhead.exec.in_process", problem), digest)
+        spec = registry.security(call.name)
+        needs_backend = requires_backend(spec, exec_effect=policy.effect is Effect.EXEC)
+        if needs_backend and backend is None:
+            problem = "this tool never runs in-process; it needs a sandbox backend"
+            return refused(sandbox_violation_observation(call.name, "bulkhead.backend.required", problem), digest)
 
         # The key is added server-side only for handlers that take one; the model never supplies it.
         handler_arguments = dict(arguments)
@@ -107,6 +122,9 @@ class SequentialExecutor:
             handler_arguments["idempotency_key"] = idempotency_key
 
         def invoke(target: Store) -> ToolResult:
+            if needs_backend:
+                assert backend is not None
+                return backend(call, dict(arguments), digest, spec, via)
             return self._invoke(call, tool.handler, policy, handler_arguments, digest, target, started)
 
         # With faults scheduled, the injector decides whether ``invoke`` runs and what comes back.

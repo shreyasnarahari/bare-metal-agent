@@ -15,12 +15,23 @@ grammar subset.
 The store tools are trusted in-process handlers: their specs have no sandbox
 and declare no network or filesystem sink. Writes declare ``EXTERNAL_EFFECT``
 (refunds, tickets, notes, and status changes are visible outside the agent).
-Every output stays ``UNTRUSTED`` until part 3 reviews which fields can carry
-customer-written text. With Bulkhead disabled the specs change nothing.
+With Bulkhead disabled the specs change nothing.
+
+Output trust was reviewed field by field (Bulkhead part 3). A result is
+``UNTRUSTED`` when it can carry text written outside the agent: customer names
+and emails (``get_customer``), order notes (``get_order``, ``cancel_order``),
+ticket subjects (``get_ticket``, ``set_ticket_status``), and refund or ledger
+reasons recorded earlier (``list_payments``). It is ``TRUSTED`` only when every
+field is internal structured data (``search_orders``: ids, statuses, dates,
+totals) or an echo of the call's own arguments plus internal ids
+(``issue_refund``, ``create_ticket``, ``add_order_note``). Once outside content
+has been written into the store, the episode was already tainted when that
+content arrived; no per-field provenance is claimed.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from typing import Annotated, Any, TypedDict
 
@@ -265,8 +276,14 @@ TOOL_SPECS: tuple[tuple[Any, ToolPolicy, SemanticCheck | None], ...] = (
 # Bulkhead metadata for the in-process store tools (a separate table, so TOOL_SPECS keeps its shape).
 STORE_READ_SECURITY = SecuritySpec(sandbox=None, output_trust=Trust.UNTRUSTED, sinks=())
 STORE_WRITE_SECURITY = SecuritySpec(sandbox=None, output_trust=Trust.UNTRUSTED, sinks=(Sink.EXTERNAL_EFFECT,))
+# Reviewed as internal structured data or an echo of the call's own arguments (see the module docstring).
+TRUSTED_OUTPUT_TOOLS = frozenset({"search_orders", "issue_refund", "create_ticket", "add_order_note"})
 TOOL_SECURITY: dict[str, SecuritySpec] = {
-    handler.__name__: STORE_READ_SECURITY if handler in READ_HANDLERS else STORE_WRITE_SECURITY for handler in HANDLERS
+    handler.__name__: replace(
+        STORE_READ_SECURITY if handler in READ_HANDLERS else STORE_WRITE_SECURITY,
+        output_trust=Trust.TRUSTED if handler.__name__ in TRUSTED_OUTPUT_TOOLS else Trust.UNTRUSTED,
+    )
+    for handler in HANDLERS
 }
 
 
@@ -301,6 +318,7 @@ __all__ = [
     "STORE_WRITE_SECURITY",
     "TOOL_SECURITY",
     "TOOL_SPECS",
+    "TRUSTED_OUTPUT_TOOLS",
     "TOOL_TIMEOUT_S",
     "add_order_note",
     "build_registry",

@@ -20,6 +20,11 @@ call that needs approval gets ``permission_required`` and the episode
 escalates at that call. The executor is wrapped in ``SecuredExecutor``, so
 every recovery retry, verify probe, and switch is authorized on its own.
 
+Taint is applied right after each result is journaled, in call order, before
+the next call is decided; a message whose calls could reach a sensitive sink
+runs sequentially, so an untrusted read cannot be outrun by a sensitive write
+in the same message.
+
 Several reads in one assistant message run together on a small per-episode
 pool (at most 4 threads). Validation, the guard, policy decisions, and fault
 indexes are settled in call order first, and results are journaled in call
@@ -41,7 +46,7 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from toolsmith.evaluation.models import canonical_hash
 
@@ -61,7 +66,7 @@ from .messages import PARAPHRASE_REQUEST, render_final_message
 from .policy import Effect
 from .recovery import RecoveryBudget, RecoveryContext, RecoveryStrategy, TypedHint, apply_recovery
 from .registry import SteadyhandRegistry
-from .security import Authorization, SecuredExecutor, SecurityConfig, SecurityGate
+from .security import Authorization, BackendRunner, SecuredExecutor, SecurityConfig, SecurityGate
 from .store import Store
 from .types import (
     EpisodeResult,
@@ -74,6 +79,9 @@ from .types import (
     observation_content,
 )
 from .validate import Verdict, parse_error_observation, suspicious_result_observation, validate_call
+
+if TYPE_CHECKING:
+    from bulkhead.replay import ExecutionBackend
 
 MAX_PARALLEL_READS = 4  # read-only calls in one message share at most this many threads
 # What the model sees for a write that was skipped because an earlier result looked wrong.
@@ -144,6 +152,7 @@ def run_episode(
     sleep: Callable[[float], None] = time.sleep,
     security: SecurityConfig | None = None,
     parent_episode_id: str | None = None,
+    backend: ExecutionBackend | None = None,
 ) -> EpisodeResult:
     """Run one episode against ``store``, which the episode owns and mutates.
 
@@ -163,9 +172,15 @@ def run_episode(
 
     ``security`` turns on Bulkhead's policy gate for every call;
     ``parent_episode_id`` marks an approved retry (its grants bind to that parent).
+    ``backend`` runs the calls that must never run in-process (exec, sandboxed, network, or
+    filesystem tools); its tier must be one of the configuration's available tiers.
     """
-    if parent_episode_id is not None and security is None:
-        raise ValueError("Only a Bulkhead-secured episode can have a parent episode")
+    if (parent_episode_id is not None or backend is not None) and security is None:
+        raise ValueError("Only a Bulkhead-secured episode can have a parent episode or a backend")
+    if security is not None and backend is not None and backend.identity.tier not in security.available_tiers:
+        raise ValueError("The backend's tier is not among the configuration's available tiers")
+    if security is not None and security.available_tiers and backend is None:
+        raise ValueError("Available sandbox tiers need a backend to run them")
     budgets = budgets or Budgets()
     executor = executor or SequentialExecutor()
     strategy = recovery or TypedHint()
@@ -187,9 +202,10 @@ def run_episode(
             episode_id=journal.episode_id,
             parent_episode_id=parent_episode_id,
             step=lambda: controller.steps,
+            backend_identity=backend.identity if backend is not None else None,
         )
         # Every call the episode makes, recovery's included, goes through the gate first.
-        executor = SecuredExecutor(executor, gate)
+        executor = SecuredExecutor(executor, gate, BackendRunner(backend, gate) if backend is not None else None)
     episode = _Episode(
         registry=registry,
         store=store,
@@ -510,6 +526,7 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
             sleep=episode.sleep,
             budget=episode.budget,
             idempotency_key=plan.key,
+            security=episode.security,
         )
         outcome = apply_recovery(episode.strategy, context, first)
         result, escalate_reason, suspicious = outcome.result, outcome.escalate_reason, outcome.suspicious
@@ -526,7 +543,10 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
     if not plan.decision.blocked:
         controller.guard.record_outcome(plan.decision.key, result)
     episode.history.append(observation_message(call, result))
-    journal.tool_result(step=step, result=result)
+    record = journal.tool_result(step=step, result=result)
+    if episode.security is not None:
+        # Taint lands before the next call in this message (or the next turn) is decided.
+        episode.security.observe(call_id=call.id, tool=call.name, result=result, source_seq=record["seq"])
     return escalate_reason, suspicious
 
 

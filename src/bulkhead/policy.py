@@ -14,7 +14,10 @@ within a verdict the earliest rule names the decision.
 2. Explicit task denials: denied tools, paths, and destinations always win.
 3. Tool membership, argument bounds, path and destination sets, and the
    tool's sandbox against the task's ceiling. Anything new is ``ASK``.
-4. Taint: an untrusted episode asks before using a taint-sensitive sink.
+4. Taint: an untrusted episode asks before a call whose effective sinks
+   include a taint-sensitive one (the tool's declared sinks, plus
+   ``FILESYSTEM_SENSITIVE`` for writes touching the task's sensitive paths), or
+   before any tool the task lists as taint-sensitive. A denial stays a denial.
 5. Task rules that always ask.
 6. ``ALLOW`` only through an exact, unconsumed grant for the ``ASK``, or when
    nothing asked or denied.
@@ -54,6 +57,7 @@ from .manifest import (
     number,
 )
 from .narrowing import Widening, egress_widening, limits_widening, paths_outside, task_widenings
+from .taint import DEFAULT_TAINT_SENSITIVE
 from .types import SandboxTier, canonical_hash
 
 _NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
@@ -170,8 +174,12 @@ class TaskPolicy:
     egress: Egress = field(default_factory=Egress)
     egress_deny: tuple[str, ...] = ()
     limits: Limits = DEFAULT_LIMITS
-    taint_sensitive: tuple[Sink, ...] = (Sink.FILESYSTEM, Sink.NETWORK)
+    taint_sensitive: tuple[Sink, ...] = DEFAULT_TAINT_SENSITIVE
     required_tier: SandboxTier = SandboxTier.T2
+    # Part 3: tools whose calls are taint-sensitive whatever their sinks (e.g. refunds), and paths
+    # whose writes count as FILESYSTEM_SENSITIVE.
+    taint_sensitive_tools: tuple[str, ...] = ()
+    sensitive_paths: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         try:
@@ -195,7 +203,10 @@ class TaskPolicy:
             raise PolicyConfigError("one rule per tool")
         if not set(names) <= set(tools):
             raise PolicyConfigError(f"rules for tools the task does not allow: {sorted(set(names) - set(tools))}")
-        fs_read, fs_write, fs_deny = (normalize_paths(getattr(self, name), name) for name in ("fs_read", "fs_write", "fs_deny"))
+        fs_read, fs_write, fs_deny, sensitive = (
+            normalize_paths(getattr(self, name), name) for name in ("fs_read", "fs_write", "fs_deny", "sensitive_paths")
+        )
+        sensitive_tools = _names(self.taint_sensitive_tools, "taint_sensitive_tools")
         outside = [path for path in fs_write if not beneath(path, WORKSPACE)]
         if outside:
             raise PolicyConfigError(f"fs_write must stay inside {WORKSPACE}: {outside}")
@@ -217,6 +228,7 @@ class TaskPolicy:
             ("rules", tuple(sorted(rules, key=lambda rule: rule.tool))),
             ("fs_read", fs_read), ("fs_write", fs_write), ("fs_deny", fs_deny),
             ("egress_deny", egress_deny), ("taint_sensitive", sinks), ("required_tier", tier),
+            ("taint_sensitive_tools", sensitive_tools), ("sensitive_paths", sensitive),
         ):
             object.__setattr__(self, name, value)
 
@@ -240,6 +252,8 @@ class TaskPolicy:
             "limits": self.limits.as_dict(),
             "taint_sensitive": [sink.value for sink in self.taint_sensitive],
             "required_tier": self.required_tier.value,
+            "taint_sensitive_tools": list(self.taint_sensitive_tools),
+            "sensitive_paths": list(self.sensitive_paths),
         }
 
     def sha256(self) -> str:
@@ -249,7 +263,7 @@ class TaskPolicy:
     def from_dict(cls, value: Any, where: str = "task_policy") -> TaskPolicy:
         optional = (
             "deny_tools", "ask_tools", "rules", "fs_read", "fs_write", "fs_deny", "egress", "egress_deny",
-            "limits", "taint_sensitive", "required_tier",
+            "limits", "taint_sensitive", "required_tier", "taint_sensitive_tools", "sensitive_paths",
         )
         check_keys(value, ("tools",), where, optional=optional, error=PolicyConfigError)
         options: dict[str, Any] = {key: value[key] for key in optional if key in value}
@@ -377,12 +391,14 @@ class PolicyEngine:
         policy, spec, tool = request.policy, request.spec, request.tool
         findings: list[Finding] = []
         numeric, paths, destinations, malformed = self._facets(request)
+        sinks = self.effective_sinks(spec, paths, policy)
         normalized = {
             "tool": tool,
             "via": request.via,
             "arguments_sha256": request.arguments_sha256,
             "sandboxed": spec.sandboxed if spec is not None else None,
-            "sinks": [sink.value for sink in spec.sinks] if spec is not None else None,
+            "sinks": sorted(sink.value for sink in sinks) if spec is not None else None,
+            "taint_sensitive_tool": tool in policy.taint_sensitive_tools,
             "taint_before": request.taint_before.value,
             "numeric": numeric,
             "paths": {arg: {"access": access.value, "path": path} for arg, (access, path) in paths.items()},
@@ -434,8 +450,8 @@ class PolicyEngine:
         if spec is not None and spec.sandboxed and (widen := _sandbox_widening(spec, policy)):
             findings.append(Finding("task.widen.sandbox", {"sandbox": widen}))
 
-        # 4. Taint: an untrusted episode asks before reaching a taint-sensitive sink.
-        if request.taint_before is Trust.UNTRUSTED and spec is not None and set(spec.sinks) & set(policy.taint_sensitive):
+        # 4. Taint: an untrusted episode asks before reaching a taint-sensitive sink or tool.
+        if request.taint_before is Trust.UNTRUSTED and (sinks & set(policy.taint_sensitive) or tool in policy.taint_sensitive_tools):
             findings.append(Finding("bulkhead.taint.sensitive_sink"))
 
         # 5. Task rules that always ask.
@@ -475,6 +491,23 @@ class PolicyEngine:
             ):
                 return decision("approval.grant", requested_grant=requested, grant_id=grant.approval_id)
         return decision(asks[0].rule_id, requested_grant=requested)
+
+    @staticmethod
+    def effective_sinks(
+        spec: SecuritySpec | None, paths: Mapping[str, tuple[PathAccess, str]], policy: TaskPolicy
+    ) -> set[Sink]:
+        """The tool's declared sinks, plus FILESYSTEM_SENSITIVE when this call can write a sensitive path."""
+        sinks = set(spec.sinks) if spec is not None else set()
+        sensitive = policy.sensitive_paths
+        if not sensitive:
+            return sinks
+        writes = [path for access, path in paths.values() if access is PathAccess.WRITE]
+        if spec is not None and spec.sandbox is not None:
+            writes += list(spec.sandbox.fs_write)
+        # A write overlaps a sensitive path when either lies beneath the other.
+        if any(beneath_any(path, sensitive) or any(beneath(item, path) for item in sensitive) for path in writes):
+            sinks.add(Sink.FILESYSTEM_SENSITIVE)
+        return sinks
 
     @staticmethod
     def _facets(

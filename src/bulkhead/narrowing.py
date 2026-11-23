@@ -12,8 +12,9 @@ or hostname matching.
 - Numeric bounds: a lower bound may rise and an upper bound may fall; moving
   either the other way, or dropping a bound, widens.
 - Resource limits and egress byte ceilings may only decrease.
-- Deny rules, ask rules, argument checks, and taint-sensitive sinks can never
-  be removed, and the required sandbox tier can never drop.
+- Deny rules, ask rules, argument checks, taint-sensitive sinks and tools, and
+  sensitive paths can never be removed, and the required sandbox tier can
+  never drop.
 
 Everything here is pure: no I/O, clocks, or randomness.
 """
@@ -138,6 +139,8 @@ def task_widenings(candidate: TaskPolicy, current: TaskPolicy) -> tuple[Widening
     note("egress_deny_removed", removed(candidate.egress_deny, current.egress_deny))
     note("limits", limits_widening(candidate.limits, current.limits))
     note("taint_sensitive_removed", removed([s.value for s in candidate.taint_sensitive], [s.value for s in current.taint_sensitive]))
+    note("taint_sensitive_tools_removed", removed(candidate.taint_sensitive_tools, current.taint_sensitive_tools))
+    note("sensitive_paths_removed", denies_dropped(candidate.sensitive_paths, current.sensitive_paths))
     if candidate.required_tier.rank < current.required_tier.rank:
         note("required_tier", candidate.required_tier.value)
     return tuple(found)

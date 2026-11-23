@@ -22,9 +22,21 @@ authorized for a different tool or different arguments. Every decision is a
   retry is a fresh claimed episode (``run_approved_episode``) linked to its
   parent, carrying one single-use grant for that exact call.
 
+Taint (part 3): the gate holds the episode's ``EpisodeTaintState``. After each
+result is journaled (model calls and policy-layer attempts alike, in call
+order), an observation that carries outside content from a tool whose output
+is not declared trusted makes the episode untrusted and journals a
+``taint_transition``. The next decision sees the new taint, so an untrusted
+read followed by a sensitive call in the same message still asks. Refusals,
+validation errors, and other loop-authored observations carry no outside
+content. Taint never decreases, and is never shared between episodes.
+
+Tools that must not run in-process go to an ``ExecutionBackend`` through
+``BackendRunner``, which journals every run as ``sandbox_execution``.
+
 With ``security=None`` nothing here runs and episodes behave exactly as before.
-No operating-system sandbox exists yet: sandboxed tools are denied until part
-4 adds a backend and part 1's probe proves its tier.
+No live operating-system sandbox exists yet: sandboxed tools are denied unless
+a backend is supplied, which only tests and replay do until part 4.
 """
 
 from __future__ import annotations
@@ -45,13 +57,17 @@ from bulkhead.approvals import (
     unconsumed,
 )
 from bulkhead.errors import GrantError, PolicyConfigError
-from bulkhead.manifest import SecuritySpec, Sink, Trust, check_keys
+from bulkhead.manifest import PathAccess, SecuritySpec, Sink, Trust, check_keys
 from bulkhead.policy import Decision, NarrowingOutcome, PolicyEngine, PolicyRequest, TaskPolicy, ToolRule, Verdict
+from bulkhead.replay import BackendIdentity, ExecutionBackend, ExecutionRequest, RecordedExecutionMismatch, requires_backend
+from bulkhead.taint import DEFAULT_TAINT_SENSITIVE, EpisodeTaintState, TaintSource, TaintTransition
 from bulkhead.types import SandboxTier, canonical_hash, canonical_json
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 
-from .errors import one_line
+from .errors import ErrorObservation, ErrorType, one_line
 from .executor import SequentialExecutor
+from .journal import ReplayMismatch
+from .policy import Effect
 from .registry import SteadyhandRegistry
 from .store import Store
 from .tools import HANDLERS
@@ -140,16 +156,58 @@ def store_task_policy(
     deny_tools: Sequence[str] = (),
     ask_tools: Sequence[str] = (),
     rules: Sequence[ToolRule] = (),
-    taint_sensitive: Sequence[Sink] = (Sink.FILESYSTEM, Sink.NETWORK),
+    taint_sensitive: Sequence[Sink] = DEFAULT_TAINT_SENSITIVE,
+    taint_sensitive_tools: Sequence[str] = (),
+    available_tools: Sequence[str] = (),
 ) -> TaskPolicy:
-    """A task policy for mock-store episodes: the ten store tools, no paths, no network."""
+    """A task policy for mock-store episodes: the ten store tools (plus ``available_tools``), no paths, no network.
+
+    ``taint_sensitive_tools`` names store effects the task treats as sensitive (for example
+    ``issue_refund``): once the episode is untrusted, calling them asks.
+    """
     return TaskPolicy(
-        tools=tuple(tools),
+        tools=(*tools, *available_tools),
         deny_tools=tuple(deny_tools),
         ask_tools=tuple(ask_tools),
         rules=tuple(rules),
         taint_sensitive=tuple(taint_sensitive),
+        taint_sensitive_tools=tuple(taint_sensitive_tools),
     )
+
+
+def carries_outside_content(result: ToolResult, *, backend_run: bool) -> bool:
+    """Whether an observation holds data a tool produced (and so can carry outside content).
+
+    A success always does. A failure does when the tool itself produced it: a handler
+    exception, or any result of a backend run that started. Refusals, validation errors,
+    guard blocks, injected faults, and timeouts are short loop-authored metadata.
+    """
+    if result.ok:
+        return True
+    if not result.handler_called or result.error is None:
+        return False
+    return backend_run or result.error.error_type is ErrorType.HANDLER_ERROR
+
+
+def tool_result_from(call: ToolCall, digest: str, result: Mapping[str, Any]) -> ToolResult:
+    """Rebuild a ``ToolResult`` from a backend's typed result (live or recorded)."""
+    if result["ok"]:
+        return ToolResult(call.id, call.name, call.arguments, digest, True, value=result["value"], handler_called=result["handler_called"])
+    return ToolResult(
+        call.id, call.name, call.arguments, digest, False,
+        error=ErrorObservation.from_dict(result["error"]), handler_called=result["handler_called"],
+    )
+
+
+def typed_result(result: ToolResult) -> dict[str, Any]:
+    """A ``ToolResult`` as the typed result a backend reports."""
+    body: dict[str, Any] = {"ok": result.ok, "handler_called": result.handler_called}
+    if result.ok:
+        body["value"] = result.value
+    else:
+        assert result.error is not None
+        body["error"] = result.error.as_dict()
+    return body
 
 
 def decode_for_policy(call: ToolCall) -> tuple[Any, str]:
@@ -205,6 +263,7 @@ class SecurityGate:
         parent_episode_id: str | None = None,
         step: Callable[[], int] = lambda: 0,
         engine: PolicyEngine | None = None,
+        backend_identity: BackendIdentity | None = None,
     ) -> None:
         if config.grants and parent_episode_id is None:
             raise GrantError("grants are honored only in an approved episode that names its parent")
@@ -215,11 +274,18 @@ class SecurityGate:
         self.episode_id = episode_id
         self.parent_episode_id = parent_episode_id
         self.engine = engine or PolicyEngine()
-        # Part 3 moves this to UNTRUSTED when outside content arrives; until then it stays TRUSTED.
-        self.taint = Trust.TRUSTED
+        self.taint_state = EpisodeTaintState()  # owned by this episode alone; never shared
         self.consumed: list[str] = []
+        self.backend_identity = backend_identity
         self._step = step
         self._available = frozenset(config.available_tiers)
+
+    @property
+    def taint(self) -> Trust:
+        return self.taint_state.label
+
+    def step(self) -> int:
+        return self._step()
 
     def summary(self) -> dict[str, Any]:
         """The ``bulkhead`` field of ``episode_started``."""
@@ -229,7 +295,30 @@ class SecurityGate:
             "task_policy_sha256": self.policy.sha256(),
             "approval_mode": self.config.approval_mode.value,
             "parent_episode_id": self.parent_episode_id,
+            "backend": self.backend_identity.as_dict() if self.backend_identity is not None else None,
         }
+
+    def observe(
+        self, *, call_id: str, tool: str, result: ToolResult, source_seq: int, registry: SteadyhandRegistry | None = None,
+    ) -> TaintTransition | None:
+        """Apply one journaled result's taint (``source_seq`` is its record); journal a change of label."""
+        registry = registry if registry is not None else self.registry
+        spec = self.spec_for(tool, registry)
+        backend_run = tool in registry and requires_backend(spec, exec_effect=registry.policy(tool).effect is Effect.EXEC)
+        if not carries_outside_content(result, backend_run=backend_run):
+            return None
+        trust = spec.output_trust if spec is not None else Trust.UNTRUSTED
+        self.taint_state, transition = self.taint_state.observe(TaintSource(call_id, tool, source_seq), trust)
+        if transition is not None:
+            self.journal.taint_transition(
+                step=self._step(),
+                tool_call_id=call_id,
+                source_tool=tool,
+                before=transition.before.value,
+                after=transition.after.value,
+                source_seq=source_seq,
+            )
+        return transition
 
     @staticmethod
     def spec_for(name: str, registry: SteadyhandRegistry) -> SecuritySpec | None:
@@ -311,11 +400,19 @@ class SecurityGate:
         return f"{call.name} needs human approval under rule {decision.rule_id} ({grant_summary(decision.requested_grant)})"
 
     def batchable(self, call: ToolCall, registry: SteadyhandRegistry) -> bool:
-        """Whether a read may join a parallel batch: it has a spec, no sink, and no egress."""
+        """Whether a read may join a parallel batch decided on one starting taint.
+
+        Only an in-process call with a spec, no sink, no egress, no write-path argument, and
+        no taint-sensitive listing qualifies; anything else runs sequentially, so it is decided
+        after every earlier result's taint has been applied.
+        """
         spec = self.spec_for(call.name, registry)
-        if spec is None or spec.sinks:
+        if spec is None or spec.sinks or spec.sandbox is not None:
             return False
-        return spec.sandbox is None or not spec.sandbox.net.enabled
+        if call.name in self.policy.taint_sensitive_tools:
+            return False
+        rule = self.policy.rules_by_tool().get(call.name)
+        return rule is None or all(access is not PathAccess.WRITE for access in rule.paths.values())
 
     def narrow(self, candidate: TaskPolicy) -> NarrowingOutcome:
         """Apply a narrower policy; a widening leaves the policy unchanged and returns the ASK it needs."""
@@ -325,17 +422,53 @@ class SecurityGate:
         return outcome
 
 
+class BackendRunner:
+    """Runs calls that must not run in-process through the episode's backend and journals each run.
+
+    The backend must run at the task's required tier. A recorded backend's
+    mismatch (replay asked for a run the recording does not hold) becomes a
+    ``ReplayMismatch`` naming the recorded record and field.
+    """
+
+    def __init__(self, backend: ExecutionBackend, gate: SecurityGate) -> None:
+        self.backend = backend
+        self.gate = gate
+
+    def __call__(self, call: ToolCall, arguments: dict[str, Any], digest: str, spec: SecuritySpec | None, via: str) -> ToolResult:
+        from .validate import sandbox_violation_observation
+
+        def violation(rule: str, problem: str) -> ToolResult:
+            return ToolResult(call.id, call.name, call.arguments, digest, False, error=sandbox_violation_observation(call.name, rule, problem))
+
+        if spec is None or not spec.sandboxed:
+            return violation("bulkhead.backend.no_sandbox", "the tool has no sandbox specification to run under")
+        if self.backend.identity.tier is not self.gate.policy.required_tier:
+            return violation("bulkhead.backend.tier", "the backend's tier is not the tier the task requires")
+        request = ExecutionRequest(self.gate.episode_id, call.id, via, call.name, digest, spec)
+        try:
+            outcome = self.backend.execute(request, arguments)
+        except RecordedExecutionMismatch as exc:
+            raise ReplayMismatch(str(exc), seq=exc.seq, field=exc.field) from None
+        self.gate.journal.sandbox_execution(
+            step=self.gate.step(), tool_call_id=call.id, via=via, tool=call.name, result=outcome.result, **outcome.audit,
+        )
+        return tool_result_from(call, digest, outcome.result)
+
+
 class SecuredExecutor:
     """Wraps the episode's executor: every call is authorized before the injector or handler sees it.
 
     The loop passes the ``Authorization`` it already made (decisions for one
     message are made in call order before anything runs). Policy-layer calls
-    from recovery come without one and get a fresh decision here.
+    from recovery come without one and get a fresh decision here. Calls that
+    must not run in-process go to ``runner`` (a ``BackendRunner``), or are
+    refused when there is none.
     """
 
-    def __init__(self, inner: SequentialExecutor, gate: SecurityGate) -> None:
+    def __init__(self, inner: SequentialExecutor, gate: SecurityGate, runner: BackendRunner | None = None) -> None:
         self.inner = inner
         self.gate = gate
+        self.runner = runner
 
     def run(
         self,
@@ -355,7 +488,7 @@ class SecuredExecutor:
             raise RuntimeError(f"an authorization for {authorization.tool} was presented for {call.name}")
         if not authorization.allowed:
             return self.gate.refusal(call, authorization)
-        options: dict[str, Any] = {"via": via}
+        options: dict[str, Any] = {"via": via, "backend": self.runner}
         if injector is not None:
             options["injector"] = injector
         if idempotency_key is not None:
@@ -396,6 +529,36 @@ def approval_requests(journal_path: str | Path) -> list[ApprovalRequest]:
     return requests
 
 
+@dataclass(frozen=True)
+class ApprovalLineage:
+    """How an approved retry links to the episode that asked: parent id, run label, and its one grant."""
+
+    episode_id: str
+    parent_episode_id: str
+    run_label: str
+    grant: Grant
+
+
+def approval_lineage(journal_path: str | Path) -> ApprovalLineage | None:
+    """The parent/child link recorded in an episode's manifest, or None for an episode that is not a retry.
+
+    Checks the link is self-consistent: one grant, bound to the parent, named by the run label.
+    """
+    from .journal import JournalFormatError, manifest_path_for
+    from .manifest import load_manifest
+
+    manifest = load_manifest(manifest_path_for(journal_path))
+    if manifest.parent_episode_id is None:
+        return None
+    config = SecurityConfig.from_dict(manifest.security_config)
+    if len(config.grants) != 1:
+        raise JournalFormatError("an approved retry carries exactly one grant", field="security_config")
+    grant = config.grants[0]
+    if grant.episode_id != manifest.parent_episode_id or manifest.run_label != f"approved-{grant.approval_id}":
+        raise JournalFormatError("the approval link is inconsistent", field="parent_episode_id")
+    return ApprovalLineage(manifest.episode_id, manifest.parent_episode_id, manifest.run_label, grant)
+
+
 def resolve_approvals(journal_path: str | Path, approver: Approver, *, now: datetime, ttl_s: float = 3600.0) -> list[Grant]:
     """Ask ``approver`` about each request; one grant per approved request, nothing for a decline."""
     return [
@@ -420,6 +583,7 @@ def run_approved_episode(
     clock: Callable[[], float] = time.monotonic,
     cancel: Any = None,
     sleep: Callable[[float], None] = time.sleep,
+    backend: ExecutionBackend | None = None,
 ) -> EpisodeResult | None:
     """Retry an escalated episode as a fresh claimed episode carrying one single-use grant.
 
@@ -484,6 +648,7 @@ def run_approved_episode(
         sleep=sleep,
         security=config,
         parent_episode_id=manifest.episode_id,
+        backend=backend,
     )
 
 
@@ -491,14 +656,20 @@ __all__ = [
     "CONFIG_VERSION",
     "SECURITY_ERRORS",
     "STORE_TOOLS",
+    "ApprovalLineage",
     "Authorization",
+    "BackendRunner",
     "SecuredExecutor",
     "SecurityConfig",
     "SecurityGate",
+    "approval_lineage",
     "approval_requests",
+    "carries_outside_content",
     "decode_for_policy",
     "grant_summary",
     "resolve_approvals",
     "run_approved_episode",
     "store_task_policy",
+    "tool_result_from",
+    "typed_result",
 ]

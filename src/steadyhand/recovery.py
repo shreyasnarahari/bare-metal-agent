@@ -40,7 +40,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from toolsmith.evaluation.models import canonical_hash
 
@@ -56,6 +56,9 @@ from .store import Store
 from .tools_ledger import ARGUMENT_MAPS, build_alternatives
 from .types import ToolCall, ToolResult
 from .validate import outcome_unknown_observation, suspicious_result_observation, validate_call
+
+if TYPE_CHECKING:
+    from .security import SecurityGate
 
 # Errors only the model can fix (it sent a bad call), and errors that come from the tool's transport.
 ARGUMENT_ERRORS = frozenset({"invalid_arguments", "unknown_tool", "parse_error"})
@@ -91,6 +94,8 @@ class RecoveryContext:
 
     ``executor`` is the episode's executor: with Bulkhead, a ``SecuredExecutor`` that
     authorizes each policy-layer attempt afresh before the injector or a handler sees it.
+    ``security`` is the episode's gate: each attempt's result is applied to the episode's
+    taint right after it is journaled, before the next attempt is decided.
     """
 
     call: ToolCall
@@ -109,6 +114,7 @@ class RecoveryContext:
     attempts: int = 0
     verified: bool = False
     switched: bool = False
+    security: SecurityGate | None = None
 
     @property
     def validated(self) -> bool:
@@ -144,12 +150,14 @@ class RecoveryContext:
         result = self.executor.run(call, registry, self.store, **options)
         if result.fault is not None:
             self.journal.injected_fault(step=self.step, fault=result.fault.as_dict())
-        self.record(purpose, call, result, key=key, waited_s=waited_s)
+        record = self.record(purpose, call, result, key=key, waited_s=waited_s)
+        if self.security is not None:
+            self.security.observe(call_id=call.id, tool=call.name, result=result, source_seq=record["seq"], registry=registry)
         return result
 
-    def record(self, purpose: str, call: ToolCall, result: ToolResult, *, key: str | None, waited_s: float) -> None:
-        """Journal one policy-layer attempt (retry, verify, or switch)."""
-        self.journal.policy_attempt(
+    def record(self, purpose: str, call: ToolCall, result: ToolResult, *, key: str | None, waited_s: float) -> dict[str, Any]:
+        """Journal one policy-layer attempt (retry, verify, or switch); returns the record."""
+        return self.journal.policy_attempt(
             step=self.step,
             tool_call_id=self.call.id,
             purpose=purpose,
