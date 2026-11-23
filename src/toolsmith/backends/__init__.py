@@ -1,3 +1,5 @@
+"""llama.cpp backend: an HTTP client for ``/completion`` and a managed ``llama-server`` process."""
+
 from .llama_cpp import (
     CompletionTruncatedError,
     LlamaCppClient,

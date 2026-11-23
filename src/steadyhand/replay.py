@@ -55,11 +55,14 @@ from .store import Store, load_fixture
 from .tools import build_registry
 from .types import EpisodeResult, ModelClient, ModelTurn, ToolCall, TurnKind
 
+# The marker JsonlRecorder writes in place of a secret; a journal containing it cannot replay exactly.
 REDACTED = "[redacted]"
 
 
 @dataclass(frozen=True)
 class RecordedTurn:
+    """One recorded model turn, with the hash of the messages it was given."""
+
     seq: int
     messages_sha256: str
     tool_choice: Any
@@ -67,6 +70,7 @@ class RecordedTurn:
 
 
 def turn_from_record(record: Mapping[str, Any]) -> ModelTurn:
+    """Rebuild the ``ModelTurn`` a ``model_turn`` journal record describes."""
     message = deepcopy(record["assistant_message"])
     calls = tuple(ToolCall.from_openai(call) for call in (message or {}).get("tool_calls") or [])
     usage = record["usage"]
@@ -121,6 +125,7 @@ class ReplayClient:
         *,
         tool_choice: str | dict[str, Any] = "auto",
     ) -> ModelTurn:
+        """The next recorded turn, if the code sent exactly the recorded messages and tool choice."""
         if not self._turns:
             raise ReplayMismatch("The code asked for a model turn the journal does not have", field="model_turn")
         recorded = self._turns[0]
@@ -186,6 +191,7 @@ class ReplayClock:
         return cls(values, live)
 
     def __call__(self) -> float:
+        # First read is the episode start (0.0); later reads replay the recorded budget-check times.
         if not self._started:
             self._started = True
             return 0.0
@@ -194,6 +200,7 @@ class ReplayClock:
             return self._last
         if self._live is None:
             raise ReplayMismatch("The code read the clock more often than the recording", field="elapsed_s")
+        # Resume: continue from the last recorded time on the live clock.
         if self._switch is None:
             self._switch = self._live()
         return self._last + (self._live() - self._switch)
@@ -232,6 +239,8 @@ def replay_episode(
     if records[-1]["event"] != "episode_finished":
         raise JournalFormatError("Only a finished episode can be replayed; resume it instead", field="event")
     _refuse_redacted(records)
+    # The manifest must describe this journal, and the code must rebuild the same manifest now
+    # (same tools, policies, fixture, faults, and strategy); otherwise replay is meaningless.
     manifest = load_manifest(manifest_path_for(path))
     started = records[0]
     if manifest.episode_id != started["episode_id"]:
@@ -263,6 +272,8 @@ def replay_episode(
     )
     require_match(manifest, current)
 
+    # Re-run with the model, clock, and cancellation all served from the recording. The journal
+    # compares each new event with the recorded one instead of writing it.
     finished = records[-1]
     budget_checks = sum(1 for record in records if record["event"] == "budget_checked")
     journal = EpisodeJournal(path, episode_id=started["episode_id"], expected=records, write=False)
@@ -331,16 +342,21 @@ def run_claimed_episode(
         recovery_policy=recovery.name if recovery is not None else "typed_hint",
         system_prompt_variant=system_prompt_variant,
     )
+    # The episode id is a hash of the manifest, so the same task, settings, and faults always map
+    # to the same journal file.
     journal_path = Path(directory) / f"{manifest.episode_id}.jsonl"
     manifest_file = manifest_path_for(journal_path)
     claim_file = journal_path.with_name(f"{manifest.episode_id}.claim")
     journal_path.parent.mkdir(parents=True, exist_ok=True)
+    # The claim file (created exclusively) stops two workers from running the same episode.
     if not try_claim(claim_file):
         return None
     try:
         run_client: ModelClient = client
         run_clock = clock
         expected: list[dict[str, Any]] = []
+        # A manifest already exists: the episode is complete (nothing to do) or was interrupted
+        # (resume by replaying its journal, then continuing live).
         if not create_manifest(manifest_file, manifest):
             recorded = load_manifest(manifest_file)
             if recorded.completed:
@@ -380,6 +396,8 @@ def run_claimed_episode(
 
 @dataclass(frozen=True)
 class ReplayOutcome:
+    """Whether one journal replayed cleanly (and how it ended), or the error it raised."""
+
     path: str
     ok: bool
     status: str | None
@@ -396,6 +414,7 @@ def replay_many(paths: Sequence[str | Path], *, workers: int | None = None) -> l
         return list(pool.map(_replay_one, [str(path) for path in paths]))
 
 
+# Runs in a pool process; any failure becomes an outcome instead of stopping the batch.
 def _replay_one(path: str) -> ReplayOutcome:
     try:
         result = replay_episode(path)
@@ -418,6 +437,7 @@ def _recorded_schedule(value: Mapping[str, Any] | None, expected_sha256: str | N
     return schedule
 
 
+# A redacted value would make replayed messages differ from the originals, so refuse up front.
 def _refuse_redacted(records: Sequence[Mapping[str, Any]]) -> None:
     for record in records:
         if REDACTED in dump_record(record):

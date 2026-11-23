@@ -1,3 +1,11 @@
+"""Append-only JSONL evidence records, with secrets redacted.
+
+Every evaluation and notebook cell writes what it did as one JSON object per
+line. Before writing, values under sensitive keys (``api_key``, ``token``, ...)
+are replaced, and every known secret string (such as ``HF_TOKEN`` and
+``LOCAL_KEY``) is masked wherever it appears, so records can be shared.
+"""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 _REDACTED = "[redacted]"
+# Values under these keys (compared case-insensitively, "-" as "_") are always redacted.
 _SENSITIVE_KEYS = {
     "access_token",
     "api_key",
@@ -21,6 +30,7 @@ _SENSITIVE_KEYS = {
 
 
 def _redact(value: Any, secrets: tuple[str, ...]) -> Any:
+    # Walk nested dicts and lists; secrets are replaced longest first so overlaps cannot leak.
     if isinstance(value, Mapping):
         redacted = {}
         for key, item in value.items():

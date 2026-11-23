@@ -18,8 +18,9 @@ from typing import Any
 
 from .store import NotFoundError, Store
 
-_PAISA = Decimal("0.01")
+_PAISA = Decimal("0.01")  # rounding tolerance when comparing INR amounts
 
+# What the model is told when a result fails its check.
 LIST_PAYMENTS_HINT = (
     "Payment list does not match the order total. Call get_order and list_payments again before refunding."
 )
@@ -27,6 +28,7 @@ ISSUE_REFUND_HINT = "The refund receipt failed a consistency check. Do not refun
 
 
 def check_list_payments(store: Store, arguments: Mapping[str, Any], value: Any) -> str | None:
+    """Do the listed payments and refunds add up to the reported totals and the order total?"""
     try:
         order = store.order(arguments["order_id"])
         total = Decimal(order.total_inr)
@@ -39,6 +41,7 @@ def check_list_payments(store: Store, arguments: Mapping[str, Any], value: Any) 
         reported_refunded = Decimal(value["refunded_total_inr"])
     except (KeyError, TypeError, InvalidOperation, NotFoundError) as exc:
         return f"payment list could not be read: {type(exc).__name__}"
+    # A cancelled order should have no payment left in force.
     expected = Decimal(0) if order.status == "cancelled" else total
     if abs(captured - reported_captured) > _PAISA:
         return f"captured payments add up to {captured} INR but the total says {reported_captured} INR"
@@ -52,6 +55,7 @@ def check_list_payments(store: Store, arguments: Mapping[str, Any], value: Any) 
 
 
 def check_issue_refund(store: Store, arguments: Mapping[str, Any], value: Any) -> str | None:
+    """Is the refund positive, and do all refunds on the order stay within its total?"""
     try:
         amount = Decimal(value["amount_inr"])
         order = store.order(value["order_id"])
@@ -65,6 +69,7 @@ def check_issue_refund(store: Store, arguments: Mapping[str, Any], value: Any) -
     return None
 
 
+# (store, arguments, result value) -> a problem description, or None if the value passes.
 SanityCheck = Callable[[Store, Mapping[str, Any], Any], "str | None"]
 SANITY_CHECKS: dict[str, tuple[SanityCheck, str]] = {
     "list_payments": (check_list_payments, LIST_PAYMENTS_HINT),

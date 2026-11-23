@@ -1,3 +1,13 @@
+"""HTTP client for llama-server's raw ``/completion`` endpoint.
+
+Toolsmith renders prompts itself and sends llama.cpp a plain prompt string (plus
+an optional GBNF grammar), instead of using llama-server's own chat endpoint.
+That keeps prompt rendering, tool parsing, and validation in Python where they
+can be tested. Every failure maps to one ``LlamaCppError`` subclass, so callers
+can tell a dead server (connection), a slow one (timeout), a bad reply
+(response), and a generation that hit ``max_tokens`` (truncated) apart.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -9,18 +19,20 @@ from ..sse import SSEDecodeError, SSEJSONDecoder
 
 
 class LlamaCppError(RuntimeError):
-    pass
+    """Base class for every failure talking to llama-server."""
 
 
 class LlamaCppConnectionError(LlamaCppError):
-    pass
+    """The server could not be reached (not started, crashed, wrong port)."""
 
 
 class LlamaCppTimeoutError(LlamaCppError):
-    pass
+    """The server took longer than the client timeout."""
 
 
 class LlamaCppResponseError(LlamaCppError):
+    """An HTTP error status, or a body that is not the JSON object expected."""
+
     def __init__(
         self,
         message: str,
@@ -34,12 +46,16 @@ class LlamaCppResponseError(LlamaCppError):
 
 
 class CompletionTruncatedError(LlamaCppError):
+    """Generation stopped at ``max_tokens``; ``response`` keeps what was produced."""
+
     def __init__(self, response: dict[str, Any]) -> None:
         super().__init__("Completion stopped at the requested token limit")
         self.response = response
 
 
 class LlamaCppClient:
+    """A thread-safe, connection-pooling client; one instance can serve every worker."""
+
     def __init__(
         self,
         base_url: str,
@@ -72,6 +88,7 @@ class LlamaCppClient:
         self._client.close()
 
     def health(self) -> dict[str, Any]:
+        """``GET /health``; llama-server answers 503 while the model is still loading."""
         return self._request("GET", "/health")
 
     def complete(
@@ -83,6 +100,7 @@ class LlamaCppClient:
         grammar: str | None = None,
         seed: int | None = None,
     ) -> dict[str, Any]:
+        """One non-streaming completion. Raises ``CompletionTruncatedError`` at the token limit."""
         response = self._request(
             "POST",
             "/completion",
@@ -108,6 +126,11 @@ class LlamaCppClient:
         grammar: str | None = None,
         seed: int | None = None,
     ) -> Iterator[dict[str, Any]]:
+        """Yield each streamed event as it arrives.
+
+        Raises ``CompletionTruncatedError`` after the last event if the token
+        limit was hit; the error's response holds all the streamed content.
+        """
         payload = self._completion_payload(
             prompt,
             max_tokens=max_tokens,
@@ -116,6 +139,8 @@ class LlamaCppClient:
             seed=seed,
             stream=True,
         )
+        # The terminal event (stop=true) carries timings and the stop reason; content arrives
+        # in pieces before it, so it is collected for a truncation error.
         terminal: dict[str, Any] | None = None
         content_parts: list[str] = []
         try:
@@ -143,6 +168,7 @@ class LlamaCppClient:
             response["content"] = "".join(content_parts)
             raise CompletionTruncatedError(response)
 
+    # Every event must have string content and a boolean stop flag; returns the event if it is the last.
     def _process_stream_event(
         self,
         event: dict[str, Any],
@@ -170,6 +196,7 @@ class LlamaCppClient:
         if temperature < 0:
             raise ValueError("temperature must not be negative")
 
+        # llama.cpp's names: n_predict is the token limit. A grammar constrains sampling to GBNF.
         payload: dict[str, Any] = {
             "prompt": prompt,
             "n_predict": max_tokens,
@@ -184,10 +211,12 @@ class LlamaCppClient:
 
     @staticmethod
     def _is_truncated(response: dict[str, Any]) -> bool:
+        # llama.cpp has reported this three ways across releases; newer ones send "truncated".
         if "truncated" in response:
             return response["truncated"] is True
         return response.get("stopped_limit") is True or response.get("stop_type") == "limit"
 
+    # One JSON request, with transport errors mapped to the LlamaCppError subclasses above.
     def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
         try:
             response = self._client.request(method, path, **kwargs)
@@ -221,6 +250,7 @@ class LlamaCppClient:
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            # A streamed response has not read its body yet; read it so the error can quote it.
             if not response.is_closed and not hasattr(response, "_content"):
                 response.read()
             body = response.text

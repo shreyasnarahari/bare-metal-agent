@@ -23,6 +23,8 @@ MAX_QUOTED_OUTPUT_CHARS = 2_000
 
 
 class ErrorType(str, Enum):
+    """The kinds of failure the model can be told about; each has its own recovery rules."""
+
     INVALID_ARGUMENTS = "invalid_arguments"
     UNKNOWN_TOOL = "unknown_tool"
     PARSE_ERROR = "parse_error"
@@ -37,6 +39,7 @@ class ErrorType(str, Enum):
     SUSPICIOUS_RESULT = "suspicious_result"
 
 
+# A sentinel meaning "no value to show", distinct from None (which is a value worth showing).
 class _Missing:
     def __repr__(self) -> str:
         return "MISSING"
@@ -54,6 +57,7 @@ class FieldProblem:
     got: Any = MISSING
 
     def as_dict(self) -> dict[str, Any]:
+        """The JSON shown to the model; long text and values are shortened."""
         detail: dict[str, Any] = {}
         if self.field is not None:
             detail["field"] = self.field
@@ -65,6 +69,8 @@ class FieldProblem:
 
 @dataclass(frozen=True)
 class ErrorObservation:
+    """A typed failure as the model sees it: what went wrong, whether retrying can help, and a hint."""
+
     error_type: ErrorType
     tool: str | None
     retryable: bool
@@ -80,6 +86,7 @@ class ErrorObservation:
             raise ValueError("An error observation needs a non-empty hint")
 
     def as_dict(self) -> dict[str, Any]:
+        """The typed observation: ok=false, error_type, tool, retryable, hint, and optional details."""
         observation: dict[str, Any] = {
             "ok": False,
             "error_type": self.error_type.value,
@@ -100,6 +107,7 @@ class ErrorObservation:
         return {"ok": False, "error": self.raw_text()}
 
     def raw_text(self) -> str:
+        """The bare error string the raw_error baseline shows instead (no type, no hint)."""
         parts = [f"{detail.field}: {detail.problem}" if detail.field else detail.problem for detail in self.details]
         return one_line("; ".join(parts) if parts else self.error_type.value.replace("_", " "))
 
@@ -141,6 +149,7 @@ def bounded(text: str, limit: int = MAX_QUOTED_OUTPUT_CHARS) -> str:
     return text[:limit] + "\n[truncated by Steadyhand]"
 
 
+# Shorten a "got" value for display: long strings are cut, containers become one short line.
 def _bounded_value(value: Any) -> Any:
     if isinstance(value, str) and len(value) > MAX_GOT_CHARS:
         return value[: MAX_GOT_CHARS - 3] + "..."

@@ -1,3 +1,26 @@
+"""The OpenAI-compatible chat-completions service and its FastAPI app.
+
+``ToolsmithService.chat`` is the whole Toolsmith pipeline for one request:
+
+1. **Prepare**: check the request (model, tools, messages, response format),
+   resolve ``tool_choice``, compile a GBNF grammar when constraining, and render
+   the prompt with the model's own chat template.
+2. **Generate**: send the prompt (and grammar) to llama-server's ``/completion``.
+3. **Parse**: read the native tool-call markup (Qwen3 or Qwen3.5) into text,
+   reasoning, and tool calls.
+4. **Validate**: tool choice, argument schemas, or the structured-output schema.
+5. **Repair** (non-streaming only): on a model-output failure, ask once more
+   with the bad output and diagnostics quoted, then validate again.
+
+Every attempt can be written to a ``JsonlRecorder`` with the raw prompt, raw
+model output, grammar hash, and outcome. ``chat_stream`` streams the same
+pipeline as OpenAI-style chunks; it cannot repair, because deltas have already
+been sent. The service only returns tool calls; it never runs a tool.
+
+Errors use OpenAI's shape. Status 500 means the model's output failed (a
+result worth counting); 502 means the backend failed (infrastructure).
+"""
+
 from __future__ import annotations
 
 import hmac
@@ -45,6 +68,8 @@ from .validation import (
 
 
 class ChatCompletionRequest(BaseModel):
+    """The supported subset of an OpenAI chat-completions request; unknown fields are rejected."""
+
     model_config = ConfigDict(extra="forbid")
 
     model: str = "Qwen/Qwen3-8B"
@@ -57,10 +82,13 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = Field(default=0.6, ge=0)
     seed: int | None = None
     response_format: dict[str, Any] | None = None
+    # Passed to the chat template; only enable_thinking is supported.
     chat_template_kwargs: dict[str, Any] = Field(default_factory=dict)
 
 
 class APIError(RuntimeError):
+    """An error with an HTTP status and an OpenAI-style body (``type``, ``code``, ``message``)."""
+
     def __init__(
         self,
         message: str,
@@ -92,6 +120,8 @@ class APIError(RuntimeError):
 
 @dataclass(frozen=True)
 class _PreparedRequest:
+    """Everything derived from a request before generation: tools, prompt, grammar, validators."""
+
     tools: tuple[Tool, ...]
     messages: list[dict[str, Any]]
     prompt: str
@@ -101,6 +131,7 @@ class _PreparedRequest:
     structured_validator: StructuredOutputValidator | None
 
 
+# Failures caused by what the model wrote; these are the ones a repair attempt may fix.
 _ModelOutputError = (
     ToolCallParseError,
     ToolCallValidationError,
@@ -109,6 +140,12 @@ _ModelOutputError = (
 
 
 class ToolsmithService:
+    """One model behind an OpenAI-style API: render, generate, parse, validate, and maybe repair.
+
+    ``use_grammars=False`` turns off constrained decoding (prompt-only mode, for
+    ablations). ``validator_factory`` lets evaluations swap the validator.
+    """
+
     def __init__(
         self,
         client: LlamaCppClient,
@@ -134,10 +171,12 @@ class ToolsmithService:
         self.grammar_compiler = GBNFCompiler(protocol=profile.protocol)
 
     def chat(self, request: ChatCompletionRequest) -> dict[str, Any]:
+        """A complete (non-streaming) chat completion, with up to ``max_repairs`` repair attempts."""
         prepared = self._prepare(request)
         messages = prepared.messages
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+        # Attempt 0 uses the prepared prompt; each repair re-renders with the repair turn appended.
         for attempt in range(self.repair_policy.max_repairs + 1):
             prompt = (
                 prepared.prompt
@@ -149,6 +188,7 @@ class ToolsmithService:
                     prompt,
                     **self._generation_settings(request, prepared.grammar),
                 )
+            # Hitting max_tokens is never repaired: a retry would hit the same limit.
             except CompletionTruncatedError as exc:
                 error = APIError(
                     "The model response was truncated before it could be parsed",
@@ -196,6 +236,7 @@ class ToolsmithService:
                         error_type="server_error",
                         code="empty_model_response",
                     )
+            # Parse or validation failure: record it, then repair if attempts remain.
             except _ModelOutputError as exc:
                 error = self._model_output_error(exc, attempt)
                 error.raw_output = content
@@ -222,6 +263,7 @@ class ToolsmithService:
                     )
                     continue
                 raise error from exc
+            # An empty answer is also repairable; other API errors are not.
             except APIError as exc:
                 exc.repair_attempts = attempt
                 exc.raw_output = content
@@ -264,7 +306,9 @@ class ToolsmithService:
                         "finish_reason": "tool_calls" if parsed.tool_calls else "stop",
                     }
                 ],
+                # Usage sums every attempt, so the cost of repairs is visible.
                 "usage": total_usage.copy(),
+                # Toolsmith-specific metadata, outside the OpenAI fields.
                 "toolsmith": {
                     "repair_attempts": attempt,
                     "grammar_sha256": (
@@ -290,9 +334,12 @@ class ToolsmithService:
         raise AssertionError("Repair loop ended without a response")
 
     def chat_stream(self, request: ChatCompletionRequest) -> Iterator[str]:
+        """SSE lines for a streamed completion. Request errors raise here, before streaming starts."""
         prepared = self._prepare(request)
         return self._stream_completion(request, prepared)
 
+    # The streaming generator. Validation can only run at the end, so a failure is sent as an
+    # in-stream error event (the HTTP status is already 200), followed by [DONE].
     def _stream_completion(
         self,
         request: ChatCompletionRequest,
@@ -306,7 +353,7 @@ class ToolsmithService:
         parser = self._incremental_parser(prepared, expect_thinking)
         raw_events: list[dict[str, Any]] = []
         upstream: Iterator[dict[str, Any]] | None = None
-        outcome = "cancelled"
+        outcome = "cancelled"  # stays so if the client disconnects mid-stream
         validation_outcome = "not_run"
         stream_error: APIError | None = None
         response_message: dict[str, Any] | None = None
@@ -392,6 +439,7 @@ class ToolsmithService:
                     code=stream_error.code,
                 )
                 yield DONE
+            # Close the llama.cpp stream even on error or client disconnect, then record the attempt.
             if upstream is not None:
                 close = getattr(upstream, "close", None)
                 if close is not None:
@@ -417,6 +465,7 @@ class ToolsmithService:
                 )
 
     def _prepare(self, request: ChatCompletionRequest) -> _PreparedRequest:
+        """Validate the request and build the prompt, grammar, and validators (no model call)."""
         self._validate_options(request)
         if request.model != self.profile.model:
             raise APIError(
@@ -442,6 +491,7 @@ class ToolsmithService:
                 "response_format=json_schema cannot be combined with tools in this milestone",
                 code="incompatible_response_format",
             )
+        # The grammar covers the whole response, so it has no room for a reasoning block.
         enable_thinking = request.chat_template_kwargs.get("enable_thinking")
         constrained = self.use_grammars and (bool(tools) or structured_schema is not None)
         if constrained and enable_thinking is not False:
@@ -492,6 +542,7 @@ class ToolsmithService:
             structured_validator,
         )
 
+    # Re-render the prompt for a repair attempt, with the extra repair message.
     def _render(
         self,
         request: ChatCompletionRequest,
@@ -504,6 +555,7 @@ class ToolsmithService:
             enable_thinking=request.chat_template_kwargs.get("enable_thinking"),
         )
 
+    # Parse a complete response with the protocol's parser.
     def _parse(
         self,
         request: ChatCompletionRequest,
@@ -519,6 +571,7 @@ class ToolsmithService:
         parser = self.parser or Qwen3ToolCallParser(expect_thinking=expect_thinking)
         return parser.parse(content)
 
+    # A fresh streaming parser for the protocol (tests may inject a Qwen3 parser factory).
     def _incremental_parser(
         self,
         prepared: _PreparedRequest,
@@ -535,6 +588,7 @@ class ToolsmithService:
 
     @staticmethod
     def _validate_parsed(prepared: _PreparedRequest, parsed: ParsedResponse) -> None:
+        # Tool requests check tool calls; structured requests need exactly one JSON text answer.
         if prepared.structured_validator is None:
             prepared.validator.validate(parsed)
             return
@@ -552,6 +606,7 @@ class ToolsmithService:
 
     @staticmethod
     def _model_output_error(exc: Exception, attempt: int) -> APIError:
+        # A 500 carrying the parser's or validator's code, so evaluations can count each failure kind.
         if isinstance(exc, ToolCallParseError):
             message = f"Could not parse model output: {exc}"
         elif isinstance(exc, ToolCallValidationError):
@@ -569,6 +624,7 @@ class ToolsmithService:
         )
 
     @staticmethod
+    # Sampling settings for llama.cpp; the grammar is sent only when constraining.
     def _generation_settings(
         request: ChatCompletionRequest,
         grammar: CompiledGrammar | None,
@@ -584,6 +640,7 @@ class ToolsmithService:
 
     @staticmethod
     def _grammar_details(grammar: CompiledGrammar | None) -> dict[str, Any]:
+        # The grammar fields every record carries, so a run can be reproduced exactly.
         return {
             "grammar": grammar.text if grammar is not None else None,
             "grammar_sha256": grammar.sha256 if grammar is not None else None,
@@ -593,6 +650,7 @@ class ToolsmithService:
             "grammar_limitations": grammar.limitations if grammar is not None else (),
         }
 
+    # One record per attempt (success, retry, or error), when a recorder is configured.
     def _record_non_stream(
         self,
         request: ChatCompletionRequest,
@@ -632,6 +690,7 @@ class ToolsmithService:
 
     @staticmethod
     def _message(parsed: ParsedResponse) -> dict[str, Any]:
+        # The OpenAI assistant message; reasoning goes in reasoning_content, not content.
         message: dict[str, Any] = {"role": "assistant", "content": parsed.content}
         if parsed.reasoning_content is not None:
             message["reasoning_content"] = parsed.reasoning_content
@@ -641,6 +700,7 @@ class ToolsmithService:
 
     @classmethod
     def _usage(cls, response: dict[str, Any]) -> dict[str, int]:
+        # Token counts from llama.cpp's timings, falling back to its older top-level fields.
         prompt_tokens = cls._token_count(response, "prompt_n", "tokens_evaluated")
         completion_tokens = cls._token_count(response, "predicted_n", "tokens_predicted")
         return {
@@ -658,6 +718,8 @@ class ToolsmithService:
         return int(value or 0)
 
     @staticmethod
+    # The schema of a json_schema response_format (None for text or no format). Only strict
+    # schemas are accepted, since the grammar enforces them exactly.
     def _structured_schema(
         response_format: Mapping[str, Any] | None,
     ) -> Mapping[str, Any] | None:
@@ -695,6 +757,7 @@ class ToolsmithService:
 
     @staticmethod
     def _validate_options(request: ChatCompletionRequest) -> None:
+        # Reject options the shim would otherwise silently ignore.
         if request.stream_options is not None:
             if not request.stream:
                 raise APIError("stream_options requires stream=true")
@@ -715,6 +778,9 @@ class ToolsmithService:
 
     @staticmethod
     def _validate_messages(messages: list[dict[str, Any]]) -> None:
+        # The conversation must be well-formed: text content only, a system message only first,
+        # unique tool-call ids with strict-JSON object arguments, and every tool call answered by
+        # exactly one tool message before anything else happens.
         pending_tool_ids: set[str] = set()
         all_tool_ids: set[str] = set()
         for index, message in enumerate(messages):
@@ -772,6 +838,10 @@ class ToolsmithService:
 
 
 def create_app(service: ToolsmithService, *, api_key: str | None = None) -> FastAPI:
+    """A FastAPI app serving ``/health``, ``/v1/models``, and ``/v1/chat/completions``.
+
+    With ``api_key``, every request needs ``Authorization: Bearer <key>``.
+    """
     app = FastAPI(title="Toolsmith")
     app.state.service = service
 
@@ -780,6 +850,7 @@ def create_app(service: ToolsmithService, *, api_key: str | None = None) -> Fast
         if api_key is not None:
             expected = f"Bearer {api_key}"
             supplied = request.headers.get("Authorization", "")
+            # Constant-time comparison, so response timing does not leak the key.
             if not hmac.compare_digest(supplied, expected):
                 error = APIError(
                     "Invalid or missing API key",
@@ -805,6 +876,7 @@ def create_app(service: ToolsmithService, *, api_key: str | None = None) -> Fast
         return JSONResponse(error.body(), status_code=error.status_code)
 
     @app.exception_handler(RequestValidationError)
+    # Pydantic validation details are not echoed back; the client gets a plain 400.
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         error = APIError("The chat completion request is invalid")
         return JSONResponse(error.body(), status_code=400)

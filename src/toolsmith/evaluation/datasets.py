@@ -1,3 +1,11 @@
+"""Load and check Toolsmith's own evaluation set (200 single-turn cases over 10 tools).
+
+``validate_toolsmith_dataset`` refuses a dataset that drifted: wrong case or
+category counts, duplicate ids, a gold call that breaks its own tool's schema or
+tool choice, or a comparison mode that does not match the gold calls. It returns
+counts and hashes that go into run manifests.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +19,7 @@ from ..registry import Tool
 from ..validation import ToolCallValidator
 from .models import canonical_hash
 
+# The planned number of cases per category; any other mix is treated as a changed dataset.
 EXPECTED_CATEGORIES = {
     "simple": 30,
     "optional": 20,
@@ -52,6 +61,7 @@ def validate_toolsmith_dataset(
     counts = Counter(case["category"] for case in cases)
     if counts != EXPECTED_CATEGORIES:
         raise ValueError(f"Unexpected category counts: {counts}")
+    # Every gold answer must itself pass the validator the model is held to.
     for case in cases:
         if case["tools_version"] != "toolsmith-tools-v1":
             raise ValueError(f"Wrong tool registry version in {case['case_id']}")

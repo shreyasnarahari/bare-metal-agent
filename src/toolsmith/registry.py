@@ -1,3 +1,12 @@
+"""Tool definitions: names, descriptions, and JSON Schemas for their arguments.
+
+A ``Tool`` can come from an OpenAI-style definition or from a typed Python
+function. For a function, the parameter annotations become a JSON Schema (via a
+generated pydantic model that forbids extra keys), and the docstring becomes the
+tool's description, so changing a tool function's docstring changes the schema
+the model sees. Handlers are stored for convenience; the shim never calls them.
+"""
+
 from __future__ import annotations
 
 import inspect
@@ -11,6 +20,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 from pydantic import ConfigDict, create_model
 
+# Names the OpenAI function-calling API accepts: 1-64 characters, starting with a letter or "_".
 _NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_-]{0,63}")
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -21,6 +31,7 @@ def _validate_name(name: str) -> None:
 
 
 def ensure_unique_tool_names(tools: Iterable[Tool]) -> None:
+    """Raise if two tools share a name (a call could not say which one it meant)."""
     seen: set[str] = set()
     for tool in tools:
         if tool.name in seen:
@@ -29,6 +40,7 @@ def ensure_unique_tool_names(tools: Iterable[Tool]) -> None:
 
 
 def _validate_parameters(parameters: Mapping[str, Any]) -> None:
+    # The schema must itself be valid Draft 2020-12, and arguments are always a JSON object.
     try:
         Draft202012Validator.check_schema(dict(parameters))
     except SchemaError as exc:
@@ -38,6 +50,8 @@ def _validate_parameters(parameters: Mapping[str, Any]) -> None:
 
 
 def _schema_from_function(function: Callable[..., Any], name: str) -> dict[str, Any]:
+    # Every parameter must be passable by keyword and annotated, because arguments arrive
+    # as a JSON object keyed by name. Parameters without defaults become required.
     fields = {}
     for parameter in inspect.signature(function).parameters.values():
         if parameter.kind in (
@@ -57,12 +71,14 @@ def _schema_from_function(function: Callable[..., Any], name: str) -> dict[str, 
         **fields,
     )
     schema = model.model_json_schema()
-    schema.pop("title", None)
+    schema.pop("title", None)  # pydantic's generated model name is noise in a prompt
     return schema
 
 
 @dataclass(frozen=True)
 class Tool:
+    """One callable tool as the model sees it. Validated and deep-copied on creation."""
+
     name: str
     description: str
     parameters: dict[str, Any]
@@ -76,7 +92,7 @@ class Tool:
         object.__setattr__(self, "parameters", deepcopy(self.parameters))
 
     @classmethod
-    def from_function(
+    def from_function(  # the docstring becomes the description unless one is given
         cls,
         function: F,
         *,
@@ -100,6 +116,7 @@ class Tool:
 
     @classmethod
     def from_openai(cls, definition: Mapping[str, Any]) -> Tool:
+        """Build a tool from ``{"type": "function", "function": {...}}`` (a request's ``tools`` entry)."""
         if definition.get("type") != "function":
             raise ValueError("Only function tools are supported")
         function = definition.get("function")
@@ -120,6 +137,7 @@ class Tool:
         return cls(name, description, dict(parameters))
 
     def to_openai(self) -> dict[str, Any]:
+        """The OpenAI ``tools`` entry for this tool, as passed to a chat template."""
         return {
             "type": "function",
             "function": {
@@ -131,6 +149,8 @@ class Tool:
 
 
 class ToolRegistry:
+    """An ordered set of uniquely named tools; ``@registry.function`` registers a function."""
+
     def __init__(self, tools: Iterable[Tool] = ()) -> None:
         self._tools: dict[str, Tool] = {}
         for tool in tools:

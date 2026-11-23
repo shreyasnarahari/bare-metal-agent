@@ -1,3 +1,13 @@
+"""The grammar intermediate representation (IR) shared by GBNF and the custom sampler.
+
+A grammar is a ``GrammarProgram``: named rules, each an ``Expression`` tree built
+from literals, character sets, rule references, sequences, choices, repeats, and
+groups. ``render_gbnf`` turns it into llama.cpp's GBNF text, and
+``toolsmith.sampling.automaton`` compiles the very same tree into a pushdown
+automaton. Because there is one IR, there is no second GBNF parser that could
+drift from the first.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,16 +16,20 @@ from typing import TypeAlias
 
 @dataclass(frozen=True)
 class Empty:
-    pass
+    """Matches the empty string."""
 
 
 @dataclass(frozen=True)
 class Literal:
+    """Matches ``text`` exactly."""
+
     text: str
 
 
 @dataclass(frozen=True)
 class CharRange:
+    """An inclusive range of Unicode codepoints."""
+
     start: int
     end: int
 
@@ -26,6 +40,8 @@ class CharRange:
 
 @dataclass(frozen=True)
 class CharSet:
+    """One character from (or, if ``negated``, outside) the given ranges, like ``[a-z]``/``[^"]``."""
+
     ranges: tuple[CharRange, ...]
     negated: bool = False
 
@@ -47,21 +63,29 @@ class CharSet:
 
 @dataclass(frozen=True)
 class RuleRef:
+    """Matches whatever the named rule matches (rules may refer to each other recursively)."""
+
     name: str
 
 
 @dataclass(frozen=True)
 class Sequence:
+    """Each item in order."""
+
     items: tuple[Expression, ...]
 
 
 @dataclass(frozen=True)
 class Choice:
+    """Any one of the alternatives."""
+
     alternatives: tuple[Expression, ...]
 
 
 @dataclass(frozen=True)
 class Repeat:
+    """``expression`` repeated ``minimum`` to ``maximum`` times (``None``: unbounded)."""
+
     expression: Expression
     minimum: int = 0
     maximum: int | None = None
@@ -75,6 +99,8 @@ class Repeat:
 
 @dataclass(frozen=True)
 class Group:
+    """Parentheses in GBNF output; no effect on what matches."""
+
     expression: Expression
 
 
@@ -84,6 +110,7 @@ EMPTY = Empty()
 
 
 def sequence(*items: Expression) -> Expression:
+    """Build a sequence, flattening nested sequences and collapsing zero or one item."""
     flattened = []
     for item in items:
         if isinstance(item, Sequence):
@@ -98,6 +125,7 @@ def sequence(*items: Expression) -> Expression:
 
 
 def choice(*alternatives: Expression) -> Expression:
+    """Build a choice, flattening nested choices and collapsing zero or one alternative."""
     flattened = []
     for alternative in alternatives:
         if isinstance(alternative, Choice):
@@ -112,7 +140,11 @@ def choice(*alternatives: Expression) -> Expression:
 
 
 def optional(expression: Expression) -> Repeat:
+    """Zero or one ``expression`` (GBNF ``?``)."""
     return Repeat(expression, 0, 1)
+
+
+# GBNF rendering helpers: quote literals and character classes with GBNF's escapes.
 
 
 def _literal(text: str) -> str:
@@ -137,6 +169,7 @@ def _literal(text: str) -> str:
 
 
 def _class_character(codepoint: int, *, negated: bool, final: bool) -> str:
+    # Characters special inside [...] are escaped; a literal "-" is safe only last in a positive class.
     character = chr(codepoint)
     if character == "\\":
         return "\\\\"
@@ -173,6 +206,7 @@ def _charset(expression: CharSet) -> str:
 
 
 def _render(expression: Expression) -> str:
+    # Sequences and choices under a repeat get parentheses, so "a | b" + "*" means "(a | b)*".
     if isinstance(expression, Empty):
         return ""
     if isinstance(expression, Literal):
@@ -209,6 +243,8 @@ def _render(expression: Expression) -> str:
 
 @dataclass(frozen=True)
 class GrammarProgram:
+    """A complete grammar: uniquely named rules, one of which is the ``root``."""
+
     rules: tuple[tuple[str, Expression], ...]
     root: str = "root"
 
@@ -229,6 +265,7 @@ class GrammarProgram:
         raise KeyError(name)
 
     def render_gbnf(self) -> str:
+        """GBNF text, root rule first, the others in definition order."""
         ordered = sorted(self.rules, key=lambda item: item[0] != self.root)
         return "\n".join(f"{name} ::= {_render(expression)}" for name, expression in ordered) + "\n"
 

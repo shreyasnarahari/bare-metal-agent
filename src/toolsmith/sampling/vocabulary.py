@@ -1,3 +1,17 @@
+"""A model vocabulary as raw bytes, organised as a byte trie.
+
+To decide which tokens fit a grammar, the sampler needs the exact bytes each
+token stands for. Qwen (like GPT-2) stores byte-level tokens as printable
+stand-in characters, and Llama/SentencePiece uses ``▁`` for spaces and
+``<0xNN>`` for raw bytes, so each tokenizer gets a decoder back to true bytes.
+
+Tokens are inserted into a trie keyed by byte: tokens sharing a prefix share
+nodes, so the mask engine checks a common prefix against the grammar once for
+all of them. Special tokens (EOS, chat markers) are kept out of the trie; EOS is
+allowed separately when the grammar can finish. The ``fingerprint`` hashes every
+token's bytes, so records can show two runs used the same vocabulary.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +23,7 @@ from typing import Any
 
 
 class UnsupportedTokenizerError(ValueError):
-    pass
+    """The tokenizer does not expose what is needed to recover each token's raw bytes."""
 
 
 def qwen_byte_decoder() -> dict[str, int]:
@@ -29,12 +43,16 @@ def qwen_byte_decoder() -> dict[str, int]:
 
 @dataclass(frozen=True)
 class VocabularyEntry:
+    """One ordinary token and the bytes it decodes to."""
+
     token_id: int
     raw_bytes: bytes
 
 
 @dataclass(slots=True)
 class TrieNode:
+    """A trie node: child node index per next byte, and the tokens that end exactly here."""
+
     children: dict[int, int]
     token_ids: tuple[int, ...] = ()
 
@@ -46,6 +64,8 @@ class _TrieBuilderNode:
 
 
 class ByteTrie:
+    """All token byte strings in one prefix tree; node 0 is the root (the empty prefix)."""
+
     def __init__(self, entries: list[VocabularyEntry]) -> None:
         builders = [_TrieBuilderNode({}, [])]
         for entry in sorted(entries, key=lambda item: (item.raw_bytes, item.token_id)):
@@ -72,6 +92,8 @@ class ByteTrie:
 
 @dataclass(frozen=True)
 class VocabularyStats:
+    """Size and build facts recorded with each sampler run."""
+
     model_vocabulary_size: int
     tokenizer_vocabulary_size: int
     usable_tokens: int
@@ -88,6 +110,8 @@ class VocabularyStats:
 
 
 class Vocabulary:
+    """Token id to raw bytes, the byte trie, and which ids are EOS or special."""
+
     def __init__(
         self,
         entries: list[VocabularyEntry],
@@ -107,6 +131,7 @@ class Vocabulary:
             _raw_tokens(entries, model_vocabulary_size)
         )
         self.trie = ByteTrie(list(self.entries))
+        # Hash every id with its bytes (or a marker for none), so any change to the vocabulary shows.
         fingerprint = hashlib.sha256()
         for token_id, raw in enumerate(self.raw_tokens):
             fingerprint.update(token_id.to_bytes(4, "big", signed=False))
@@ -132,6 +157,7 @@ class Vocabulary:
             build_seconds,
         )
 
+    # A rough memory estimate for the stats (sys.getsizeof of the main structures).
     def _approximate_bytes(self) -> int:
         total = sys.getsizeof(self.raw_tokens) + sys.getsizeof(self.entries)
         total += sum(sys.getsizeof(raw) for raw in self.raw_tokens if raw is not None)
@@ -142,6 +168,7 @@ class Vocabulary:
         return total
 
     def raw_bytes(self, token_id: int) -> bytes:
+        """The bytes of an ordinary token; ``KeyError`` for special, empty, or out-of-range ids."""
         if not 0 <= token_id < len(self.raw_tokens):
             raise KeyError(f"Token ID outside model vocabulary: {token_id}")
         raw = self.raw_tokens[token_id]
@@ -150,6 +177,7 @@ class Vocabulary:
         return raw
 
     def reconstruct_bytes(self, token_ids: list[int] | tuple[int, ...]) -> bytes:
+        """The bytes a token sequence produces, skipping special and EOS tokens."""
         parts = []
         for token_id in token_ids:
             if token_id in self.special_token_ids or token_id in self.eos_token_ids:
@@ -165,6 +193,13 @@ class Vocabulary:
         model_vocabulary_size: int | None = None,
         eos_token_ids: frozenset[int] | set[int] | None = None,
     ) -> Vocabulary:
+        """Build from a Qwen (byte-level BPE) tokenizer.
+
+        ``model_vocabulary_size`` may exceed the tokenizer's: the model's output
+        layer is padded, and those extra ids exist but are never valid tokens.
+        Added tokens are taken as their literal text; others are mapped back
+        through the byte decoder.
+        """
         started = time.perf_counter()
         get_vocab = getattr(tokenizer, "get_vocab", None)
         if get_vocab is None:
@@ -236,6 +271,11 @@ class Vocabulary:
         model_vocabulary_size: int | None = None,
         eos_token_ids: frozenset[int] | set[int] | None = None,
     ) -> Vocabulary:
+        """Build from a slow Llama (SentencePiece) tokenizer, as MaskBench uses.
+
+        ``<0xNN>`` byte-fallback tokens become that byte, and ``▁`` becomes a space.
+        The fast tokenizer hides these details, so it is refused.
+        """
         started = time.perf_counter()
         if getattr(tokenizer, "is_fast", False):
             raise UnsupportedTokenizerError(
@@ -295,6 +335,7 @@ class Vocabulary:
         )
 
 
+# A dense id -> bytes table (None for ids that are not ordinary tokens), checked for clashes.
 def _raw_tokens(
     entries: list[VocabularyEntry],
     model_vocabulary_size: int,

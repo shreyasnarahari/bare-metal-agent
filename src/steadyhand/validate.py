@@ -35,13 +35,15 @@ from .registry import SemanticCheck, SteadyhandRegistry
 from .store import NotFoundError, Store, money
 from .types import ModelTurn, ToolCall, ToolResult
 
-MAX_LISTED_TOOL_NAMES = 12
+MAX_LISTED_TOOL_NAMES = 12  # an unknown-tool hint lists the registered names only up to this many
 PARSE_ERROR_HINT = "Re-emit the call in the native tool format. Do not invent a tool result."
 _CENT = Decimal("0.01")
 
 
 @dataclass(frozen=True)
 class Verdict:
+    """The outcome of validating one call: decoded arguments if valid, a typed error if not."""
+
     ok: bool
     arguments: dict[str, Any] | None = None
     arguments_sha256: str | None = None
@@ -69,6 +71,7 @@ def validate_call(
     *,
     max_errors: int = DEFAULT_MAX_ERRORS,
 ) -> Verdict:
+    """Check a call in three layers, stopping at the first that fails: name, JSON and schema, store rules."""
     # Layer 1: name.
     if call.name not in registry:
         return Verdict(ok=False, error=unknown_tool_observation(call.name, registry))
@@ -92,6 +95,7 @@ def validate_call(
 
 
 def decode_arguments(call: ToolCall) -> tuple[dict[str, Any], ErrorObservation | None]:
+    """The arguments as a dict, or a parse-error observation when they are not one strict JSON object."""
     try:
         arguments = strict_json_loads(call.arguments)
     except StrictJSONError as exc:
@@ -107,6 +111,8 @@ def schema_problems(validator: Draft202012Validator, arguments: Any) -> list[Fie
     return sorted(problems, key=lambda problem: (problem.field or "", problem.problem))
 
 
+# Turn jsonschema errors into one problem per offending field: each extra key and each missing
+# required key separately, and short wording for type and enum errors.
 def _schema_problems(validator: Draft202012Validator, arguments: Any) -> Iterator[FieldProblem]:
     for error in validator.iter_errors(arguments):
         path = list(error.absolute_path)
@@ -132,14 +138,16 @@ def json_pointer(parts: Sequence[object]) -> str:
     return "/" + "/".join(tokens) if tokens else "/"
 
 
+# "string or null" for a list of types.
 def _types(value: Any) -> str:
     return " or ".join(value) if isinstance(value, list) else str(value)
 
 
-# Observation builders
+# Observation builders: one per failure kind, each with the retry advice that fits it.
 
 
 def unknown_tool_observation(name: str, registry: SteadyhandRegistry) -> ErrorObservation:
+    """The model named a tool that does not exist; retrying the same name cannot help."""
     names = registry.names()
     hint = "Use one of the registered tools"
     hint += f": {', '.join(names)}." if len(names) <= MAX_LISTED_TOOL_NAMES else "."
@@ -153,6 +161,7 @@ def unknown_tool_observation(name: str, registry: SteadyhandRegistry) -> ErrorOb
 
 
 def arguments_parse_error(tool: str, problem: str) -> ErrorObservation:
+    """The arguments were not a strict JSON object; the model can resend them."""
     return ErrorObservation(
         error_type=ErrorType.PARSE_ERROR,
         tool=tool,
@@ -163,6 +172,7 @@ def arguments_parse_error(tool: str, problem: str) -> ErrorObservation:
 
 
 def invalid_arguments(tool: str, problems: Sequence[FieldProblem]) -> ErrorObservation:
+    """Schema or store-rule problems, field by field; the model can fix them and retry."""
     return ErrorObservation(
         error_type=ErrorType.INVALID_ARGUMENTS,
         tool=tool,
@@ -186,6 +196,7 @@ def parse_error_observation(turn: ModelTurn) -> ErrorObservation:
 
 
 def not_found_observation(tool: str, error: NotFoundError) -> ErrorObservation:
+    """The id names no row; repeating the call will not help."""
     return ErrorObservation(
         error_type=ErrorType.NOT_FOUND,
         tool=tool,
@@ -199,6 +210,7 @@ def not_found_observation(tool: str, error: NotFoundError) -> ErrorObservation:
 
 
 def timeout_observation(tool: str, policy: ToolPolicy) -> ErrorObservation:
+    """No result in time. Safe to retry only for idempotent tools; a write may already have happened."""
     if policy.idempotent:
         retryable, hint = True, f"{tool} did not finish in time. Calling it again is safe."
     else:
@@ -226,6 +238,7 @@ def transient_failure_observation(tool: str, error_type: str, policy: ToolPolicy
 
 
 def unavailable_observation(tool: str) -> ErrorObservation:
+    """The tool is down for good; use another tool or tell the user."""
     return ErrorObservation(
         ErrorType.PERMANENT_UNAVAILABLE,
         tool,
@@ -235,6 +248,7 @@ def unavailable_observation(tool: str) -> ErrorObservation:
 
 
 def outcome_unknown_observation(tool: str, problem: str) -> ErrorObservation:
+    """A write whose effect could not be confirmed either way; do not risk doing it twice."""
     return ErrorObservation(
         ErrorType.OUTCOME_UNKNOWN,
         tool,
@@ -245,6 +259,7 @@ def outcome_unknown_observation(tool: str, problem: str) -> ErrorObservation:
 
 
 def suspicious_result_observation(tool: str, hint: str, problem: str, *, retryable: bool = False) -> ErrorObservation:
+    """A successful-looking result that failed a sanity check."""
     return ErrorObservation(
         ErrorType.SUSPICIOUS_RESULT,
         tool,
@@ -255,6 +270,7 @@ def suspicious_result_observation(tool: str, hint: str, problem: str, *, retryab
 
 
 def handler_error_observation(tool: str, problem: str) -> ErrorObservation:
+    """The handler raised (a conflict, a bug, or a bad value); the same call would fail again."""
     return ErrorObservation(
         error_type=ErrorType.HANDLER_ERROR,
         tool=tool,
@@ -275,6 +291,7 @@ def require_existing(entity: str, field: str) -> SemanticCheck:
         "ticket": Store.ticket,
     }[entity]
 
+    # The check's __name__ is set below so journals and errors can name it.
     def check(store: Store, arguments: Mapping[str, Any]) -> list[FieldProblem]:
         value = arguments.get(field)
         if value is None:
@@ -299,6 +316,7 @@ def check_issue_refund(store: Store, arguments: Mapping[str, Any]) -> list[Field
     elif amount != amount.quantize(_CENT):
         problems.append(FieldProblem("amount_inr", "must have at most two decimal places", got))
     elif not problems:
+        # Refundable = order total minus refunds and ledger entries already recorded.
         order_id = arguments["order_id"]
         refundable = Decimal(store.order(order_id).total_inr) - store.refunded_total(order_id)
         if amount > refundable:

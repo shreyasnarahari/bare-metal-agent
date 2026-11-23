@@ -1,3 +1,12 @@
+"""Toolsmith's token-mask engine behind MaskBench's engine interface.
+
+MaskBench times each engine on the same schemas and token sequences: compile the
+grammar (TTFM, time to first mask), then compute the mask and commit one token
+per step (TBM, time between masks). This adapter wires in Toolsmith's grammar
+compiler, automaton, and trie-walking mask engine, using the slow Llama
+tokenizer MaskBench uses for every engine.
+"""
+
 from __future__ import annotations
 
 import importlib.metadata
@@ -10,6 +19,8 @@ from ..sampling.vocabulary import Vocabulary
 
 
 class ToolsmithMaskEngine:
+    """The methods MaskBench calls: init, compile_grammar, reset, compute_mask, commit_token."""
+
     def __init__(self, *, cache_size: int = 4096) -> None:
         self.multi = False
         self.debug = False
@@ -17,6 +28,7 @@ class ToolsmithMaskEngine:
         self.tokenizer = None
         self.tokenizer_model_id = ""
 
+    # MaskBench assigns ``tokenizer`` first, then calls init().
     def init(self) -> None:
         if self.tokenizer is None:
             raise RuntimeError("Assign a slow Llama tokenizer before init()")
@@ -37,6 +49,7 @@ class ToolsmithMaskEngine:
         except importlib.metadata.PackageNotFoundError:
             return "0.1.0"
 
+    # Timed by MaskBench as TTFM: schema to grammar to automaton, plus a fresh mask engine.
     def compile_grammar(self, schema: dict[str, Any]) -> None:
         self.compiled = GBNFCompiler().compile_schema(schema)
         self.automaton = PushdownAutomaton.from_compiled(self.compiled)
@@ -56,6 +69,7 @@ class ToolsmithMaskEngine:
         self.allowed = self.engine.mask(self.state).allowed
         return self.allowed
 
+    # False means the token was not allowed (MaskBench counts it against the engine).
     def commit_token(self, token: int) -> bool:
         if self.eos_reached or token not in self.allowed:
             return False
@@ -67,6 +81,7 @@ class ToolsmithMaskEngine:
         self.state = self.engine.advance_token(self.state, token)
         return True
 
+    # Extra fields MaskBench stores with each result.
     def get_status_extras(self) -> dict[str, Any]:
         return {
             "grammar_sha256": self.compiled.sha256,

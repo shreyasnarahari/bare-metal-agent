@@ -1,3 +1,6 @@
+"""Scoring helpers: compare tool calls with gold calls, and summarize results with intervals.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,9 +14,12 @@ from .models import CaseResult
 
 
 def _canonical(value: Any) -> str:
+    # A call as sorted compact JSON, so key order and spacing do not matter when comparing.
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
 
 
+# Gold comparison modes: "none" (no call expected), "sequential" (same calls, same order),
+# "unordered" (same calls in any order, duplicates counted).
 def calls_equal(
     actual: Sequence[dict[str, Any]],
     expected: Sequence[dict[str, Any]],
@@ -31,6 +37,7 @@ def calls_equal(
 
 
 def percentile(values: Sequence[float], probability: float) -> float | None:
+    """Nearest-rank percentile (no interpolation); ``None`` for no values."""
     if not values:
         return None
     if not 0 <= probability <= 1:
@@ -40,6 +47,7 @@ def percentile(values: Sequence[float], probability: float) -> float | None:
 
 
 def wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -> list[float]:
+    """95% Wilson score interval for a rate; well behaved near 0% and 100% unlike the normal one."""
     if total < 1:
         return [0.0, 0.0]
     proportion = successes / total
@@ -51,6 +59,7 @@ def wilson_interval(successes: int, total: int, z: float = 1.959963984540054) ->
     return [max(0.0, center - margin), min(1.0, center + margin)]
 
 
+# 95% interval for the mean of paired differences (mode A minus mode B per case), seeded.
 def paired_bootstrap(
     differences: Sequence[float],
     *,
@@ -74,6 +83,12 @@ def paired_bootstrap(
 
 
 def summarize_results(results: Iterable[CaseResult]) -> dict[str, Any]:
+    """Rates with intervals, false calls, repairs, status counts, latency, and throughput.
+
+    The false-call rate covers cases where no call was right (``no-tool`` and
+    ``irrelevance``). Reused attempts are left out of latency, since they did
+    not run again.
+    """
     records = list(results)
     total = len(records)
     parse_count = sum(record.parse_valid for record in records)
@@ -127,6 +142,8 @@ def _subset_identity(value: Any, id_key: str) -> Any:
     return getattr(value, id_key)
 
 
+# The same ``count`` items for the same seed, whatever order ``values`` arrive in: sort by id,
+# shuffle with the seed, take the first ``count``, and return them sorted by id again.
 def deterministic_subset(
     values: Sequence[Any],
     count: int,

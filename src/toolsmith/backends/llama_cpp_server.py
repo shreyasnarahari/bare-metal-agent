@@ -1,3 +1,12 @@
+"""Start, health-check, and stop a ``llama-server`` process.
+
+``LlamaCppServer`` owns one server process: it builds the command line (model,
+GPU layers, context size, parallel slots, API key, extra flags), sends output
+to a log file, waits for ``/health`` to report the model loaded, and stops the
+whole process group on exit. It refuses to start on a port that is already in
+use rather than killing whatever holds it.
+"""
+
 from __future__ import annotations
 
 import os
@@ -13,10 +22,12 @@ from .llama_cpp import LlamaCppClient, LlamaCppError, LlamaCppTimeoutError
 
 
 class LlamaCppServerError(RuntimeError):
-    pass
+    """The server could not start, or exited before becoming healthy."""
 
 
 class LlamaCppServer:
+    """One managed llama-server process. ``context_size`` is split across ``parallel`` slots."""
+
     def __init__(
         self,
         executable: str | Path,
@@ -66,6 +77,7 @@ class LlamaCppServer:
         return f"http://{self.host}:{self.port}"
 
     def settings(self) -> dict[str, Any]:
+        """The launch settings, for records (the API key is deliberately left out)."""
         return {
             "executable": str(self.executable),
             "model": str(self.model),
@@ -86,6 +98,7 @@ class LlamaCppServer:
         if not self.model.is_file():
             raise FileNotFoundError(f"GGUF model not found: {self.model}")
 
+        # Check the port first: llama-server's own bind error is buried in its log.
         with socket.socket() as probe:
             try:
                 probe.bind((self.host, self.port))
@@ -100,6 +113,7 @@ class LlamaCppServer:
             self._log_file.close()
         self._log_file = self.log_path.open("ab")
 
+        # -ngl 99 offloads every layer to the GPU; --jinja uses the GGUF's chat template for /props.
         command = [
             str(self.executable),
             "-m",
@@ -126,7 +140,7 @@ class LlamaCppServer:
                 stdin=subprocess.DEVNULL,
                 stdout=self._log_file,
                 stderr=subprocess.STDOUT,
-                start_new_session=True,
+                start_new_session=True,  # its own process group, so stop() can signal every child
             )
         except OSError as exc:
             self._log_file.close()
@@ -140,6 +154,7 @@ class LlamaCppServer:
         timeout: float = 600.0,
         poll_interval: float = 2.0,
     ) -> dict[str, Any]:
+        """Poll ``/health`` until the model is loaded; raise early if the process dies or CUDA is wrong."""
         if self._process is None:
             raise LlamaCppServerError("llama-server has not been started")
         if timeout <= 0 or poll_interval <= 0:
@@ -155,6 +170,7 @@ class LlamaCppServer:
             try:
                 return client.health()
             except LlamaCppError as exc:
+                # 503 means "still loading" and None means "not listening yet"; anything else is real.
                 if getattr(exc, "status_code", None) not in (None, 503):
                     raise
                 last_error = exc
@@ -169,6 +185,7 @@ class LlamaCppServer:
                 ) from last_error
             time.sleep(poll_interval)
 
+    # A binary built for another GPU architecture keeps running but can never serve; fail fast.
     def _fatal_cuda_log(self) -> str | None:
         if not self.log_path.exists():
             return None
@@ -182,6 +199,7 @@ class LlamaCppServer:
         )
 
     def log_tail(self, lines: int = 30) -> str:
+        """The last lines of the server log, for error messages."""
         if self._log_file is not None:
             self._log_file.flush()
         if not self.log_path.exists():
@@ -189,6 +207,7 @@ class LlamaCppServer:
         return "\n".join(self.log_path.read_text(errors="replace").splitlines()[-lines:])
 
     def stop(self, timeout: float = 20.0) -> None:
+        """SIGTERM the process group, then SIGKILL if it outlives ``timeout``. Always closes the log."""
         try:
             process = self._process
             if process is not None and process.poll() is None:

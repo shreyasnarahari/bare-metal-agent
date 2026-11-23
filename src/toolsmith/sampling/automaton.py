@@ -1,3 +1,23 @@
+"""A pushdown automaton that runs grammar IR over raw bytes.
+
+The grammar IR is compiled into a small instruction program (match a character,
+call or return from a rule, fork, jump, accept), in the style of a regex VM with
+a call stack. A state is the set of all live configurations (program counter
+plus call stack) after the input so far, so ambiguity is handled by tracking
+every possibility at once. Call stacks are persistent linked frames, which makes
+copying a state cheap; tail calls push no frame, so long strings and plain text
+do not grow the stack.
+
+Input arrives as bytes (model tokens are byte strings), and an incremental UTF-8
+decoder turns them into codepoints. A token may end in the middle of a
+multi-byte character; that state is valid, but the response cannot finish there.
+
+The token-mask engine asks this automaton, for each vocabulary token, "is the
+state still viable after these bytes?", which is how the sampler forbids tokens
+that would break the grammar. Limits on stack depth, configurations, and
+epsilon steps keep a pathological grammar from exhausting memory or time.
+"""
+
 from __future__ import annotations
 
 import json
@@ -19,19 +39,21 @@ from .ir import (
 
 
 class GrammarExecutionError(ValueError):
-    pass
+    """Base class for grammar compilation and execution failures."""
 
 
 class InvalidGrammarError(GrammarExecutionError):
-    pass
+    """The grammar cannot be executed (unknown rule, unbounded repeat of something that can be empty)."""
 
 
 class AutomatonLimitError(GrammarExecutionError):
-    pass
+    """A safety limit (instructions, stack depth, configurations, epsilon steps) was exceeded."""
 
 
 @dataclass(frozen=True)
 class StackFrame:
+    """One return address on a persistent (shared, immutable) call stack."""
+
     return_pc: int
     parent: StackFrame | None
     size: int
@@ -39,12 +61,16 @@ class StackFrame:
 
 @dataclass(frozen=True)
 class Configuration:
+    """One live thread: where it is in the program and what it will return to."""
+
     pc: int
     stack: StackFrame | None = None
 
 
 @dataclass(frozen=True)
 class UTF8State:
+    """Bytes of a partly read UTF-8 character, and how many it needs in total."""
+
     pending: tuple[int, ...] = ()
     expected: int = 1
 
@@ -53,6 +79,11 @@ class UTF8State:
         return bytes(self.pending)
 
     def feed(self, byte: int) -> tuple[UTF8State, int | None] | None:
+        """Add one byte: the new state and a completed codepoint (or ``None`` if more bytes are needed).
+
+        Returns ``None`` for invalid UTF-8, including overlong forms and surrogates,
+        which the lead-byte checks below reject as early as possible.
+        """
         if not 0 <= byte <= 255:
             raise ValueError("A byte must be between 0 and 255")
         if not self.pending:
@@ -92,12 +123,15 @@ class UTF8State:
 
 @dataclass(frozen=True)
 class AutomatonState:
+    """Every live configuration after some input, plus any pending UTF-8 bytes. Immutable."""
+
     configurations: frozenset[Configuration]
     utf8: UTF8State
     byte_offset: int = 0
 
     @property
     def viable(self) -> bool:
+        """Whether any configuration survives, i.e. the input so far is a valid grammar prefix."""
         return bool(self.configurations)
 
     @property
@@ -108,48 +142,62 @@ class AutomatonState:
         )
 
 
+# Instructions of the compiled program.
+
+
 @dataclass(frozen=True)
 class MatchLiteral:
+    """Consume exactly this codepoint, then continue at ``target``."""
+
     codepoint: int
     target: int
 
 
 @dataclass(frozen=True)
 class MatchSet:
+    """Consume one codepoint in the character set, then continue at ``target``."""
+
     characters: CharSet
     target: int
 
 
 @dataclass(frozen=True)
 class Call:
+    """Enter a rule. ``return_pc`` is where to resume afterwards; ``None`` is a tail call (no frame)."""
+
     rule: str
     return_pc: int | None
 
 
 @dataclass(frozen=True)
 class Return:
-    pass
+    """Leave the current rule and resume at the top frame's return address."""
 
 
 @dataclass(frozen=True)
 class Fork:
+    """Continue at every target at once (a choice, or a repeat's loop/exit)."""
+
     targets: tuple[int, ...]
 
 
 @dataclass(frozen=True)
 class Jump:
+    """Continue at ``target`` without consuming input."""
+
     target: int
 
 
 @dataclass(frozen=True)
 class Accept:
-    pass
+    """The root rule finished: the input is a complete sentence of the grammar."""
 
 
 Instruction: TypeAlias = MatchLiteral | MatchSet | Call | Return | Fork | Jump | Accept
 
 
 def _nullable(expression: Expression, rules: dict[str, bool]) -> bool:
+    # Whether the expression can match the empty string, given which rules can.
     if isinstance(expression, Empty):
         return True
     if isinstance(expression, Literal):
@@ -170,6 +218,8 @@ def _nullable(expression: Expression, rules: dict[str, bool]) -> bool:
 
 
 class _ProgramCompiler:
+    """Translate a grammar program into instructions, compiling each expression back to front."""
+
     def __init__(self, program: GrammarProgram, max_instructions: int) -> None:
         self.program = program
         self.expressions = program.rule_map()
@@ -180,6 +230,7 @@ class _ProgramCompiler:
         self._compute_nullability()
 
     def _compute_nullability(self) -> None:
+        # Fixed-point iteration: rules can refer to each other, so repeat until nothing changes.
         for _ in range(len(self.expressions) + 1):
             updated = {
                 name: _nullable(expression, self.rule_nullable)
@@ -198,6 +249,7 @@ class _ProgramCompiler:
         return len(self.instructions) - 1
 
     def compile(self) -> tuple[tuple[Instruction, ...], dict[str, int], int]:
+        """The instructions, each rule's entry point, and the start (a call to the root rule)."""
         accept = self.add(Accept())
         for name, expression in self.expressions.items():
             returning = self.add(Return())
@@ -206,6 +258,7 @@ class _ProgramCompiler:
         return tuple(self.instructions), self.rule_entries, start
 
     def compile_expression(self, expression: Expression, target: int) -> int:
+        """Instructions that match ``expression`` and then continue at ``target``; returns the entry."""
         if isinstance(expression, Empty):
             return self.add(Jump(target))
         if isinstance(expression, Literal):
@@ -218,6 +271,7 @@ class _ProgramCompiler:
         if isinstance(expression, RuleRef):
             if expression.name not in self.expressions:
                 raise InvalidGrammarError(f"Unknown grammar rule: {expression.name}")
+            # Followed directly by a return: a tail call, so no stack frame is needed.
             tail = isinstance(self.instructions[target], Return)
             return self.add(Call(expression.name, None if tail else target))
         if isinstance(expression, Group):
@@ -234,10 +288,12 @@ class _ProgramCompiler:
             )
             return self.add(Fork(targets))
         if isinstance(expression, Repeat):
+            # x* where x can match nothing would loop forever without consuming input.
             if expression.maximum is None and _nullable(
                 expression.expression, self.rule_nullable
             ):
                 raise InvalidGrammarError("Unbounded repetition of a nullable expression")
+            # Unbounded: the minimum copies, then a loop that forks between another body and the exit.
             if expression.maximum is None:
                 loop = self.add(Fork(()))
                 body = self.compile_expression(expression.expression, loop)
@@ -246,6 +302,7 @@ class _ProgramCompiler:
                 for _ in range(expression.minimum):
                     entry = self.compile_expression(expression.expression, entry)
                 return entry
+            # Bounded: unroll; copies past the minimum are each optional (a fork that may skip ahead).
             entry = target
             for index in reversed(range(expression.maximum)):
                 body = self.compile_expression(expression.expression, entry)
@@ -255,6 +312,8 @@ class _ProgramCompiler:
 
 
 class PushdownAutomaton:
+    """Run a compiled grammar over bytes. States are immutable, so they can be cached and shared."""
+
     def __init__(
         self,
         program: GrammarProgram,
@@ -276,6 +335,7 @@ class PushdownAutomaton:
 
     @classmethod
     def from_compiled(cls, grammar: Any, **limits: int) -> PushdownAutomaton:
+        """Build from a ``CompiledGrammar`` (which keeps the IR it was rendered from)."""
         program = getattr(grammar, "program", None)
         if not isinstance(program, GrammarProgram):
             raise InvalidGrammarError(
@@ -286,6 +346,8 @@ class PushdownAutomaton:
     def initial_state(self) -> AutomatonState:
         return AutomatonState(self._initial, UTF8State())
 
+    # Follow every instruction that consumes no input (jumps, forks, calls, returns) until each
+    # configuration waits on a match or accept. A return with an empty stack just ends that thread.
     def _closure(
         self,
         configurations: frozenset[Configuration],
@@ -340,6 +402,7 @@ class PushdownAutomaton:
                     )
         return frozenset(visited)
 
+    # Consume one codepoint in every configuration that can, then close over epsilon moves again.
     def _step(
         self,
         configurations: frozenset[Configuration],
@@ -358,6 +421,7 @@ class PushdownAutomaton:
             )
         return self._closure(frozenset(advanced))
 
+    # The state after ``data``, or None as soon as the bytes leave the grammar (or are invalid UTF-8).
     def advance_bytes(
         self,
         state: AutomatonState,
@@ -377,6 +441,7 @@ class PushdownAutomaton:
         return AutomatonState(configurations, utf8, state.byte_offset + len(data))
 
     def can_finish(self, state: AutomatonState) -> bool:
+        """Whether the input so far is a complete sentence (never in the middle of a character)."""
         if state.utf8.pending:
             return False
         return any(
@@ -385,6 +450,7 @@ class PushdownAutomaton:
         )
 
     def expected(self, state: AutomatonState) -> tuple[str, ...]:
+        """What could come next, for error messages."""
         expected = set()
         for configuration in self._closure(state.configurations):
             instruction = self.instructions[configuration.pc]
@@ -397,6 +463,7 @@ class PushdownAutomaton:
         return tuple(sorted(expected))
 
     def describe(self, state: AutomatonState) -> str:
+        """A one-line summary of a state, for debugging a dead end."""
         pending = state.utf8.pending_bytes.hex() or "none"
         return (
             f"byte {state.byte_offset}: {len(state.configurations)} configurations, "

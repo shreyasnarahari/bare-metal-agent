@@ -24,6 +24,7 @@ from .policy import Effect, PolicyError, ToolPolicy
 if TYPE_CHECKING:
     from .store import Store
 
+# A tool's extra argument check against the store (ids exist, amounts allowed), beyond its schema.
 SemanticCheck = Callable[["Store", Mapping[str, Any]], list[FieldProblem]]
 
 # Tool names a policy may point at that the model-facing registry does not hold.
@@ -41,6 +42,8 @@ def arguments_schema(handler: Callable[..., Any]) -> dict[str, Any]:
     if not parameters or parameters[0].name != "store":
         raise TypeError(f"{handler.__name__} must take the store as its first parameter")
 
+    # A stand-in whose signature is the handler's minus store and server parameters; only its
+    # schema is used (the description comes from the real handler's docstring at registration).
     def arguments_only(**arguments: Any) -> Any:
         raise NotImplementedError
 
@@ -52,6 +55,8 @@ def arguments_schema(handler: Callable[..., Any]) -> dict[str, Any]:
 
 
 class SteadyhandRegistry:
+    """Model-facing tools plus their policies, semantic checks, argument validators, and result schemas."""
+
     def __init__(self, *, reserved_names: Iterable[str] = RESERVED_TOOL_NAMES) -> None:
         self._tools = ToolRegistry()
         self._policies: dict[str, ToolPolicy] = {}
@@ -89,6 +94,7 @@ class SteadyhandRegistry:
         return tool
 
     def freeze(self) -> SteadyhandRegistry:
+        """Make the registry read-only, so it can be shared across threads and processes."""
         self._frozen = True
         return self
 
@@ -122,9 +128,11 @@ class SteadyhandRegistry:
         return self._tools.to_openai()
 
     def schemas_sha256(self) -> str:
+        """Hash of exactly what the model sees; part of every episode manifest."""
         return canonical_hash(self.schemas())
 
     def policies_sha256(self) -> str:
+        """Hash of every policy, by tool name; a policy change gives every episode a new id."""
         return canonical_hash(
             [[name, self._policies[name].as_dict()] for name in sorted(self._policies)]
         )
@@ -141,6 +149,7 @@ class SteadyhandRegistry:
     def __len__(self) -> int:
         return len(self._tools)
 
+    # A verify tool must be a registered read (registered earlier); alternatives must exist or be reserved.
     def _check_policy(self, name: str, policy: ToolPolicy) -> None:
         if policy.verify is not None:
             if policy.verify == name:

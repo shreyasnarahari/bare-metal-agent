@@ -1,3 +1,6 @@
+"""Data types shared by every evaluation runner, and the canonical hash used in manifests.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -8,6 +11,8 @@ from typing import Any
 
 
 class Mode(str, Enum):
+    """How a case is run: prompt only, grammar-constrained, grammar plus one repair, or thinking."""
+
     PROMPT = "prompt"
     GRAMMAR = "grammar"
     REPAIR = "repair"
@@ -17,6 +22,8 @@ class Mode(str, Enum):
 
 @dataclass(frozen=True)
 class RunConfig:
+    """The settings of one evaluation run (hashed into its manifest)."""
+
     run_id: str
     dataset: str
     model: str
@@ -34,6 +41,8 @@ class RunConfig:
 
 @dataclass(frozen=True)
 class AttemptRecord:
+    """One request to the model for a case; ``reused`` marks an attempt copied from another mode."""
+
     attempt: int
     raw_response: Any
     elapsed_seconds: float
@@ -45,6 +54,12 @@ class AttemptRecord:
 
 @dataclass(frozen=True)
 class CaseResult:
+    """The outcome of one case: status, attempts, parsed calls, and validity at each level.
+
+    Validity is reported separately at each level: the output parsed, matched
+    the schema, and was semantically right (``None`` when not judged).
+    """
+
     case_id: str
     category: str
     model: str
@@ -107,6 +122,7 @@ class CaseResult:
 
 
 def canonical_hash(value: Any) -> str:
+    """sha256 of compact JSON with sorted keys: the same value always gives the same hash."""
     encoded = json.dumps(
         value,
         ensure_ascii=False,

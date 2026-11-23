@@ -19,6 +19,7 @@ from .controller import normalize_arguments
 
 
 def idempotency_key(episode_id: str, tool: str, arguments: Mapping[str, Any]) -> str:
+    """``idk_`` plus 32 hex characters of the hash of (episode, tool, normalized arguments)."""
     return "idk_" + canonical_hash([episode_id, tool, normalize_arguments(dict(arguments))])[:32]
 
 

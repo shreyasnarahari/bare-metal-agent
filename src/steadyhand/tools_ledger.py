@@ -47,6 +47,7 @@ def build_alternatives() -> SteadyhandRegistry:
 
 
 def issue_refund_to_ledger(arguments: Mapping[str, Any]) -> dict[str, Any]:
+    """Map ``issue_refund`` arguments onto ``refund_via_ledger``'s (the same three fields)."""
     return {
         "order_id": arguments["order_id"],
         "amount_inr": arguments["amount_inr"],

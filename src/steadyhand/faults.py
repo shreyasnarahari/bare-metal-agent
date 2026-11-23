@@ -40,6 +40,7 @@ from .store import Store
 from .types import ToolCall, ToolResult
 from .validate import timeout_observation, transient_failure_observation, unavailable_observation
 
+# Errors a retry may cure, and the one that never goes away.
 TRANSIENT_ERROR_TYPES = ("timeout", "rate_limit", "server_error")
 PERMANENT_ERROR_TYPE = "permanent_unavailable"
 
@@ -49,6 +50,13 @@ class FaultConfigError(ValueError):
 
 
 class FaultMode(str, Enum):
+    """How a tool misbehaves.
+
+    Explicit faults return an error (transient or permanent). Implicit faults
+    return a plausible but wrong value (a "lie"). A lost acknowledgment makes
+    the change, then reports a timeout, so the caller cannot tell it happened.
+    """
+
     EXPLICIT_TRANSIENT = "explicit_transient"
     EXPLICIT_PERMANENT = "explicit_permanent"
     IMPLICIT_TRANSIENT = "implicit_transient"
@@ -57,15 +65,19 @@ class FaultMode(str, Enum):
 
     @property
     def permanent(self) -> bool:
+        """A permanent fault holds for every later call to the tool, not just the pinned one."""
         return self in (FaultMode.EXPLICIT_PERMANENT, FaultMode.IMPLICIT_PERMANENT)
 
     @property
     def implicit(self) -> bool:
+        """An implicit fault returns a wrong value instead of an error."""
         return self in (FaultMode.IMPLICIT_TRANSIENT, FaultMode.IMPLICIT_PERMANENT)
 
 
 @dataclass(frozen=True)
 class FaultSpec:
+    """One fault: which tool, at which of its calls, how it fails, and (for lies) how the value is altered."""
+
     tool: str
     call_index: int  # per tool, 0-based; a permanent mode holds from here on
     mode: FaultMode
@@ -107,6 +119,7 @@ class FaultSpec:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> FaultSpec:
+        """Rebuild a spec from its manifest form."""
         return cls(
             tool=value["tool"],
             call_index=value["call_index"],
@@ -137,6 +150,8 @@ class RandomOverlay:
 
 @dataclass(frozen=True)
 class FaultSchedule:
+    """All faults for one episode, at most one pin per (tool, call index); its hash goes in the manifest."""
+
     seed: int
     pins: tuple[FaultSpec, ...]
 
@@ -167,10 +182,12 @@ class FaultSchedule:
         return permanent
 
     def as_dict(self) -> dict[str, Any]:
+        """The full schedule, stored in the manifest so replay rebuilds it instead of re-drawing it."""
         return {"seed": self.seed, "pins": [pin.as_dict() for pin in self.pins]}
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> FaultSchedule:
+        """Rebuild a schedule from its manifest form."""
         return cls(seed=value["seed"], pins=tuple(FaultSpec.from_dict(pin) for pin in value["pins"]))
 
 
@@ -182,6 +199,8 @@ def build_schedule(seed: int, pins: Sequence[FaultSpec], *, overlay: RandomOverl
         generator = random.Random(seed)
         for tool in sorted(overlay.tools):
             for call_index in range(overlay.max_call_index + 1):
+                # Draw all three values every time, even for skipped slots, so one slot's outcome
+                # never shifts the random sequence for the slots after it.
                 draw = generator.random()
                 mode = FaultMode(generator.choice(overlay.modes))
                 error_type = generator.choice(TRANSIENT_ERROR_TYPES)
@@ -242,6 +261,7 @@ def merge_patch(target: Any, patch: Any) -> Any:
     return result
 
 
+# Runs the real handler against the given store (the episode's, or a throwaway clone).
 Invoke = Callable[[Store], ToolResult]
 
 
@@ -254,6 +274,7 @@ class FaultInjector:
         self._counts: dict[str, int] = {}
 
     def next_index(self, tool: str) -> int:
+        """The index the next call to ``tool`` will get (0 for its first call)."""
         return self._counts.get(tool, 0)
 
     def reserve(self, tool: str) -> int:
@@ -281,6 +302,7 @@ class FaultInjector:
         if spec is None:
             return invoke(store)
 
+        # The journal record of what happened, which may differ from the pinned mode (see notes).
         def fault(mode: FaultMode, *, committed: bool = False, note: str | None = None) -> InjectedFault:
             return InjectedFault(
                 tool=call.name,
@@ -308,6 +330,7 @@ class FaultInjector:
                 fault=fault(spec.mode),
             )
 
+        # Explicit faults: the handler never runs; the model gets the same error a real failure gives.
         if spec.mode is FaultMode.EXPLICIT_TRANSIENT:
             return refused(transient_failure_observation(call.name, spec.error_type or "timeout", policy))
         if spec.mode is FaultMode.EXPLICIT_PERMANENT:
@@ -319,6 +342,7 @@ class FaultInjector:
             if not real.ok:
                 return replace(real, handler_called=False, fault=fault(spec.mode, note="base_call_failed"))
             value = merge_patch(real.value, spec.implicit_patch or {})
+            # A lie must still look like a real result, or it would be caught for the wrong reason.
             if result_schema is not None:
                 errors = sorted(error.message for error in Draft202012Validator(result_schema).iter_errors(value))
                 if errors:
@@ -337,6 +361,7 @@ class FaultInjector:
                 error=timeout_observation(call.name, policy),
                 fault=fault(spec.mode, committed=True),
             )
+        # The handler itself timed out or failed: record what actually happened, not the pin.
         if real.error is not None and real.error.error_type is ErrorType.TIMEOUT:
             return replace(real, fault=fault(FaultMode.EXPLICIT_TRANSIENT, note="handler_timeout"))
         return replace(

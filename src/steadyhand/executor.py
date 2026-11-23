@@ -86,6 +86,7 @@ class SequentialExecutor:
         if tool.handler is None:
             return refused(handler_error_observation(call.name, "this tool has no handler"), digest)
 
+        # The key is added server-side only for handlers that take one; the model never supplies it.
         handler_arguments = dict(arguments)
         if idempotency_key is not None and _accepts_key(tool.handler):
             handler_arguments["idempotency_key"] = idempotency_key
@@ -93,6 +94,7 @@ class SequentialExecutor:
         def invoke(target: Store) -> ToolResult:
             return self._invoke(call, tool.handler, policy, handler_arguments, digest, target, started)
 
+        # With faults scheduled, the injector decides whether ``invoke`` runs and what comes back.
         if injector is None:
             return invoke(store)
         result = injector.apply(
@@ -138,6 +140,7 @@ class SequentialExecutor:
             return failed(not_found_observation(call.name, raised))
         if raised is not None:
             return failed(handler_error_observation(call.name, f"{type(raised).__name__}: {raised}"))
+        # A result must be plain JSON: it goes into the conversation and the journal as is.
         try:
             json.dumps(value, allow_nan=False)
         except (TypeError, ValueError) as exc:
@@ -160,6 +163,7 @@ class SequentialExecutor:
         arguments: dict[str, Any],
         timeout_s: float,
     ) -> tuple[bool, Any, BaseException | None]:
+        """``(finished, value, exception)``; ``finished`` is False when the handler outlived its timeout."""
         outcome: dict[str, Any] = {}
 
         def target() -> None:
@@ -177,6 +181,7 @@ class SequentialExecutor:
         return True, outcome.get("value"), outcome.get("error")
 
 
+# Whether a handler has an idempotency_key parameter (cached: signatures never change).
 @lru_cache(maxsize=None)
 def _accepts_key(handler: Any) -> bool:
     return "idempotency_key" in inspect.signature(handler).parameters

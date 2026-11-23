@@ -1,3 +1,6 @@
+"""Group results by model, mode, and category, and render the summary as a Markdown table.
+"""
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -9,6 +12,7 @@ from .models import CaseResult
 
 
 def summarize_by_group(results: Iterable[CaseResult]) -> dict[str, Any]:
+    """``summarize_results`` per ``model/mode/category`` group, in sorted order."""
     groups: dict[tuple[str, str, str], list[CaseResult]] = defaultdict(list)
     for result in results:
         groups[(result.model, result.mode, result.category)].append(result)
@@ -19,6 +23,7 @@ def summarize_by_group(results: Iterable[CaseResult]) -> dict[str, Any]:
 
 
 def markdown_summary(summary: dict[str, Any], *, title: str) -> str:
+    """A Markdown table of the grouped summary (only measured results, never placeholders)."""
     lines = [
         f"# {title}",
         "",

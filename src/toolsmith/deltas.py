@@ -1,3 +1,12 @@
+"""OpenAI-style streaming chunks: build them from parser events, and fold them back.
+
+The shim streams ``chat.completion.chunk`` objects like the OpenAI API does.
+``OpenAIStreamAdapter`` turns each incremental parser event (a bit of reasoning,
+content, or tool-call arguments) into one chunk. ``aggregate_chunks`` does the
+reverse for tests and records: it rebuilds the final assistant message from a
+list of chunks.
+"""
+
 from __future__ import annotations
 
 import json
@@ -16,20 +25,25 @@ from .streaming import (
     ToolCallStart,
 )
 
+# The sentinel event that ends an OpenAI-compatible stream.
 DONE = "data: [DONE]\n\n"
 
 
 def sse_json(payload: dict[str, Any]) -> str:
+    """One SSE event carrying ``payload`` as compact JSON."""
     return f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
 
 
 def sse_error(message: str, *, error_type: str, code: str) -> str:
+    """An in-stream error event, for failures after the HTTP 200 headers were already sent."""
     return sse_json(
         {"error": {"message": message, "type": error_type, "code": code}}
     )
 
 
 class OpenAIStreamAdapter:
+    """Builds the chunks of one streamed completion; every chunk shares its id and timestamp."""
+
     def __init__(
         self,
         model: str,
@@ -44,13 +58,16 @@ class OpenAIStreamAdapter:
         self.include_usage = include_usage
 
     def role_chunk(self) -> dict[str, Any]:
+        """The first chunk, which announces the assistant role."""
         return self._chunk({"role": "assistant", "content": ""})
 
     def convert(self, event: ParserEvent) -> dict[str, Any] | None:
+        """The chunk for one parser event, or ``None`` when the event has nothing to send."""
         if isinstance(event, ReasoningDelta):
             return self._chunk({"reasoning_content": event.text})
         if isinstance(event, ContentDelta):
             return self._chunk({"content": event.text})
+        # A tool call opens with its id and name; its arguments then arrive as text deltas.
         if isinstance(event, ToolCallStart):
             return self._chunk(
                 {
@@ -76,16 +93,18 @@ class OpenAIStreamAdapter:
                 }
             )
         if isinstance(event, ToolCallEnd):
-            return None
+            return None  # OpenAI streams have no explicit end-of-call marker
         raise TypeError(f"Unsupported parser event: {type(event).__name__}")
 
     def finish_chunk(self, response: ParsedResponse) -> dict[str, Any]:
+        """The last content chunk: an empty delta with the finish reason."""
         return self._chunk(
             {},
             finish_reason="tool_calls" if response.tool_calls else "stop",
         )
 
     def usage_chunk(self, usage: dict[str, int]) -> dict[str, Any] | None:
+        """A usage-only chunk (no choices), sent only if the client asked for usage."""
         if not self.include_usage:
             return None
         return {
@@ -119,6 +138,12 @@ class OpenAIStreamAdapter:
 
 
 def aggregate_chunks(chunks: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """Rebuild the assistant message, finish reason, and usage from streamed chunks.
+
+    Content and reasoning are concatenated. Tool calls are keyed by their
+    ``index``: the first delta for an index carries its id and name, later ones
+    append argument text.
+    """
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
     calls: dict[int, dict[str, Any]] = {}

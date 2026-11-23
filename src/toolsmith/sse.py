@@ -1,3 +1,11 @@
+"""Incremental decoder for server-sent events (SSE) carrying JSON payloads.
+
+llama-server and the shim stream responses as ``data: {...}`` lines separated by
+blank lines, ending with ``data: [DONE]``. Network chunks can split a line, or
+even a UTF-8 character, anywhere, so bytes are buffered until whole lines and
+whole events are available.
+"""
+
 from __future__ import annotations
 
 import codecs
@@ -6,11 +14,14 @@ from typing import Any
 
 
 class SSEDecodeError(ValueError):
-    pass
+    """The stream is not valid UTF-8 SSE with JSON-object payloads."""
 
 
 class SSEJSONDecoder:
+    """Feed raw bytes; get back each complete JSON event. ``done_received`` marks ``[DONE]``."""
+
     def __init__(self) -> None:
+        # An incremental decoder keeps a multi-byte character split across chunks until it is whole.
         self._utf8 = codecs.getincrementaldecoder("utf-8")(errors="strict")
         self._buffer = ""
         self._data_lines: list[str] = []
@@ -26,6 +37,7 @@ class SSEJSONDecoder:
         return self._decode_lines(final=False)
 
     def finish(self) -> list[dict[str, Any]]:
+        # End of stream: flush the decoder and dispatch any event that lacked a final blank line.
         try:
             self._buffer += self._utf8.decode(b"", final=True)
         except UnicodeDecodeError as exc:
@@ -50,6 +62,7 @@ class SSEJSONDecoder:
         return events
 
     def _process_line(self, line: str) -> dict[str, Any] | None:
+        # SSE rules: a blank line ends an event, ":" starts a comment, and only data fields matter here.
         if not line:
             return self._dispatch()
         if line.startswith(":"):
@@ -64,6 +77,7 @@ class SSEJSONDecoder:
         return None
 
     def _dispatch(self) -> dict[str, Any] | None:
+        # One event may span several data lines; they are joined with newlines, per the SSE spec.
         if not self._data_lines:
             return None
         payload = "\n".join(self._data_lines)

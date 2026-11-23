@@ -29,6 +29,11 @@ def notebook_source(cell_id, path=NOTEBOOK_PATH):
     return "".join(next(cell for cell in load(path)["cells"] if cell["id"] == cell_id)["source"])
 
 
+def first_code_line(source):
+    """The first line that is not blank or a comment (cells open with a header comment)."""
+    return next(line for line in source.splitlines() if line.strip() and not line.lstrip().startswith("#"))
+
+
 def journal_records(path):
     return [strict_json_loads(line) for line in Path(path).read_text(encoding="utf-8").splitlines()]
 
@@ -142,7 +147,7 @@ def test_the_live_cells_keep_one_model_and_fill_the_slots():
     assert "'q8_0'" not in sweep  # the KV type comes from the rung the server cell kept
     assert "render_report(" in sweep and "slot_context=steadyhand_preset.per_slot_context" in sweep
     assert "max_workers=steadyhand_parallel" in smoke and "/slots" in smoke
-    assert notebook_source("cleanup").startswith("if 'stop_steadyhand_runtime' in globals():")
+    assert first_code_line(notebook_source("cleanup")) == "if 'stop_steadyhand_runtime' in globals():"
 
 
 # Overlap check (part 1)
@@ -375,3 +380,10 @@ def test_records_carry_a_session_id_and_the_intro_explains_resuming(tmp_path, mo
     assert namespace["SESSION_ID"] == session  # stable for this kernel
     assert namespace["RUNTIME_STAMP"]()["runtime"]["session_id"] == session
     assert "run all cells from the top" in notebook_source("introduction")
+
+
+def test_every_code_cell_opens_with_a_header_comment():
+    for path in (NOTEBOOK_PATH, TOOLSMITH_NOTEBOOK):
+        for cell in load(path)["cells"]:
+            if cell["cell_type"] == "code":
+                assert "".join(cell["source"]).startswith("# "), (path.name, cell["id"])

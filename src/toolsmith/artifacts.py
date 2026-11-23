@@ -1,3 +1,13 @@
+"""Safe file handling for big artifacts and growing records.
+
+- ``is_gguf`` checks a model file by magic bytes and exact size, so a truncated
+  download or copy is never loaded.
+- ``copy_file_atomic`` copies through a temporary file and renames it into
+  place, so an interrupted copy never leaves a half-written destination.
+- ``copy_snapshot`` and ``MirroredFile`` keep durable copies of files that are
+  still being appended to (checkpoints, scores), always ending on a whole line.
+"""
+
 from __future__ import annotations
 
 import os
@@ -10,6 +20,7 @@ from typing import Any
 
 
 def is_gguf(path: str | Path, expected_size: int | None = None) -> bool:
+    """True for a file that starts with the GGUF magic bytes (and has exactly ``expected_size`` bytes)."""
     candidate = Path(path)
     try:
         if not candidate.is_file():
@@ -31,6 +42,7 @@ def copy_file_atomic(
     chunk_size: int = 8 * 1024 * 1024,
     progress: Callable[[int, int], None] | None = None,
 ) -> Path:
+    """Copy ``source`` to ``destination`` atomically, optionally checking size and reporting progress."""
     source_path = Path(source)
     destination_path = Path(destination)
     if chunk_size < 1:
@@ -58,6 +70,7 @@ def copy_file_atomic(
                 copied += len(chunk)
                 if progress is not None:
                     progress(copied, total)
+        # A source that changed size while copying is an error; growing files use copy_snapshot.
         if copied != total:
             raise OSError(f"Copied {copied} of {total} bytes from {source_path}")
         os.replace(temporary, destination_path)

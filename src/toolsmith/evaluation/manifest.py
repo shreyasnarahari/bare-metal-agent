@@ -1,3 +1,6 @@
+"""Run manifests: exactly what produced a set of results.
+"""
+
 from __future__ import annotations
 
 import platform
@@ -8,6 +11,8 @@ from typing import Any
 from .models import RunConfig, canonical_hash
 
 
+# The config, dataset summary, environment, git commit (and whether the tree had local edits),
+# Python and platform, plus a hash of all of it.
 def build_manifest(
     config: RunConfig,
     *,

@@ -1,3 +1,6 @@
+"""The custom constrained sampler: grammar IR, pushdown automaton, vocabulary trie, token masks,
+and mask controllers for Hugging Face generation."""
+
 from .automaton import (
     AutomatonLimitError,
     AutomatonState,

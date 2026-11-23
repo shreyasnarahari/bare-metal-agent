@@ -48,14 +48,18 @@ from .tools_ledger import ARGUMENT_MAPS, build_alternatives
 from .types import ToolCall, ToolResult
 from .validate import outcome_unknown_observation, suspicious_result_observation, validate_call
 
+# Errors only the model can fix (it sent a bad call), and errors that come from the tool's transport.
 ARGUMENT_ERRORS = frozenset({"invalid_arguments", "unknown_tool", "parse_error"})
 TRANSPORT_ERRORS = frozenset({"timeout", "rate_limit", "server_error"})
+# Backoff: 0.5 s doubling per attempt, at most 2 s per wait and 10 s per episode.
 BASE_WAIT_S = 0.5
 MAX_WAIT_S = 2.0
 MAX_TOTAL_WAIT_S = 10.0
 
 
 class RecoveryAction(str, Enum):
+    """What a strategy decides after a result: show it, retry, verify a write, switch tools, or give up."""
+
     RETURN_TO_MODEL = "return_to_model"
     RETRY = "retry"
     VERIFY = "verify"
@@ -95,10 +99,12 @@ class RecoveryContext:
 
     @property
     def validated(self) -> bool:
+        """Whether the call passed validation (only valid calls may be retried or verified)."""
         return self.arguments is not None and self.policy is not None
 
     def backoff(self) -> float | None:
         """The next exponential wait with deterministic jitter, or None when the budget is spent."""
+        # Jitter comes from a hash of the call id and attempt, not a random number, so replays match.
         fraction = int(canonical_hash([self.call.id, self.attempts])[:8], 16) / 0xFFFFFFFF
         wait = min(self.budget.max_wait_s, BASE_WAIT_S * (2**self.attempts) * (1 + 0.25 * fraction))
         wait = round(wait, 6)
@@ -129,6 +135,7 @@ class RecoveryContext:
         return result
 
     def record(self, purpose: str, call: ToolCall, result: ToolResult, *, key: str | None, waited_s: float) -> None:
+        """Journal one policy-layer attempt (retry, verify, or switch)."""
         self.journal.policy_attempt(
             step=self.step,
             tool_call_id=self.call.id,
@@ -144,13 +151,17 @@ class RecoveryContext:
 
 
 class RecoveryStrategy(Protocol):
+    """A recovery policy: flags for what it turns on, and its decisions after a failure or a success."""
+
     name: str
     keyed_writes: bool  # send non-idempotent writes with a server-side idempotency key
     sanity_checks: bool  # run opt-in invariant checks on successful results
     raw_errors: bool  # show the model a bare error string instead of the typed shape
 
+    # Called after a failed result, with the typed observation.
     def on_observation(self, ctx: RecoveryContext, observation: dict[str, Any]) -> RecoveryAction: ...
 
+    # Called after a successful result (which may have just failed a sanity check).
     def on_success(self, ctx: RecoveryContext, observation: dict[str, Any]) -> RecoveryAction: ...
 
 
@@ -236,6 +247,7 @@ class Escalate(Switch):
         return RecoveryAction.RETURN_TO_MODEL
 
 
+# The six strategies compared in the evaluation, weakest first.
 STRATEGIES: dict[str, Callable[[], RecoveryStrategy]] = {
     "raw_error": RawError,
     "typed_hint": TypedHint,
@@ -248,17 +260,23 @@ DEFAULT_STRATEGY = "typed_hint"
 
 
 def strategy_for(name: str) -> RecoveryStrategy:
+    """A fresh strategy instance by name."""
     try:
         return STRATEGIES[name]()
     except KeyError:
         raise ValueError(f"Unknown recovery policy {name!r}; choose one of {sorted(STRATEGIES)}") from None
 
 
+# The decision rules the strategies share.
+
+
 def _writes(ctx: RecoveryContext) -> bool:
+    # A non-idempotent write: repeating it would repeat its effect.
     return ctx.policy is not None and ctx.policy.effect is Effect.NON_IDEMPOTENT_WRITE
 
 
 def _safe_retry(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
+    # Retry in place only reads and idempotent writes, on errors the policy lists, within its attempts.
     policy = ctx.policy
     return (
         ctx.validated
@@ -271,6 +289,7 @@ def _safe_retry(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
 
 
 def _needs_verify(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
+    # An unsafe write that may have happened (timeout or transport error): check before retrying, once.
     error_type = observation.get("error_type")
     return (
         ctx.validated
@@ -281,6 +300,7 @@ def _needs_verify(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
 
 
 def _can_switch(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
+    # A permanently unavailable tool with an alternative, not yet tried in this recovery.
     return (
         ctx.validated
         and not ctx.switched
@@ -299,6 +319,7 @@ def _note_with_key(value: Any, key: str) -> Any:
     return None if note is None else {"order_id": value.get("order_id"), "note": note}
 
 
+# For each verifiable write: the verify tool's arguments, and how to find the keyed row in its result.
 VERIFY_PROBES: dict[str, tuple[Callable[[Mapping[str, Any]], dict[str, Any]], Callable[[Any, str], Any]]] = {
     "issue_refund": (lambda arguments: {"order_id": arguments["order_id"]}, _refund_with_key),
     "add_order_note": (lambda arguments: {"order_id": arguments["order_id"]}, _note_with_key),
@@ -309,6 +330,8 @@ VERIFY_PROBES: dict[str, tuple[Callable[[Mapping[str, Any]], dict[str, Any]], Ca
 
 @dataclass(frozen=True)
 class RecoveryOutcome:
+    """What the model will see, how it was recovered, and whether the episode must escalate."""
+
     result: ToolResult
     recovered_by: str | None = None
     escalate_reason: str | None = None
@@ -322,6 +345,7 @@ def apply_recovery(strategy: RecoveryStrategy, ctx: RecoveryContext, result: Too
     recovered_by: str | None = None
     acted = False
     while True:
+        # A success: run the strategy's sanity check (if any), then let it accept or escalate.
         if result.ok:
             suspicious = False
             if strategy.sanity_checks and ctx.validated and ctx.call.name in SANITY_CHECKS:
@@ -339,6 +363,7 @@ def apply_recovery(strategy: RecoveryStrategy, ctx: RecoveryContext, result: Too
                 return RecoveryOutcome(result, recovered_by, reason, suspicious, True)
             return RecoveryOutcome(_render(strategy, result), recovered_by, None, suspicious, acted)
 
+        # A failure: ask the strategy what to do, act, and loop on the new result.
         assert result.error is not None
         action = strategy.on_observation(ctx, result.error.as_dict())
         if action is RecoveryAction.RETURN_TO_MODEL:
@@ -370,12 +395,16 @@ def apply_recovery(strategy: RecoveryStrategy, ctx: RecoveryContext, result: Too
         return RecoveryOutcome(result, recovered_by, reason, False, acted)
 
 
+# The raw_error baseline shows errors as bare strings; every other strategy shows the typed shape.
 def _render(strategy: RecoveryStrategy, result: ToolResult) -> ToolResult:
     if strategy.raw_errors and result.error is not None:
         return replace(result, error=replace(result.error, raw=True))
     return result
 
 
+# Did the keyed write already happen? Ask the verify tool. Found: report success without writing
+# again. Not found: retry once with the same key (safe either way). Probe failed: escalate,
+# because the outcome is unknown. Without a key or probe, just retry with the key.
 def _verify(ctx: RecoveryContext, failed: ToolResult) -> tuple[ToolResult, str | None, str | None]:
     ctx.verified = True
     key = ctx.idempotency_key
@@ -403,6 +432,7 @@ def _verify(ctx: RecoveryContext, failed: ToolResult) -> tuple[ToolResult, str |
     return retried, ("retry" if retried.ok else None), None
 
 
+# Call the policy's first alternative once, with mapped arguments, validated and keyed like any call.
 def _switch(
     ctx: RecoveryContext,
     failed: ToolResult,

@@ -1,3 +1,13 @@
+"""Run the custom constrained sampler inside Hugging Face ``model.generate``.
+
+``ConstrainedLogitsProcessor`` plugs a mask controller into generation: before
+each step it commits the token generated last step, asks the controller for the
+mask, and sets every disallowed token's logit to ``-inf``. ``generate_constrained``
+and ``generate_unconstrained`` run the same pipeline with and without it, so
+their outputs and timings can be compared directly. Greedy decoding (the
+default) with a fixed seed makes runs repeatable.
+"""
+
 from __future__ import annotations
 
 import time
@@ -15,6 +25,8 @@ from .vocabulary import Vocabulary
 
 @dataclass(frozen=True)
 class GenerationResult:
+    """One generation: text, bytes, token ids, why it stopped, timings, and mask statistics."""
+
     text: str
     raw_bytes: bytes
     token_ids: tuple[int, ...]
@@ -31,6 +43,7 @@ class GenerationResult:
 
 
 def _torch() -> Any:
+    # torch is imported lazily so the rest of toolsmith works without it.
     try:
         import torch
     except ImportError as exc:
@@ -41,6 +54,8 @@ def _torch() -> Any:
 
 
 class ConstrainedLogitsProcessor:
+    """A ``transformers`` logits processor that applies a controller's mask at every step."""
+
     def __init__(
         self,
         controller: FixedMaskController | TriggeredMaskController,
@@ -50,6 +65,8 @@ class ConstrainedLogitsProcessor:
         self.torch = _torch()
 
     def __call__(self, input_ids: Any, scores: Any) -> Any:
+        """Masked logits for the next token (called by ``generate`` once per step)."""
+        # The token chosen at the previous step is only visible now, as the last input id.
         token_id = self.synchronizer.synchronize(input_ids)
         if token_id is not None:
             self.controller.commit(token_id)
@@ -59,6 +76,7 @@ class ConstrainedLogitsProcessor:
         width = int(scores.shape[1])
         torch = self.torch
         masked = scores.clone()
+        # Active grammar: keep only the allowed ids. Free text: drop only the blocked ids.
         if decision.allowed_token_ids is not None:
             allowed = tuple(
                 token_id for token_id in decision.allowed_token_ids if token_id < width
@@ -77,6 +95,7 @@ class ConstrainedLogitsProcessor:
                     0,
                     torch.tensor(blocked, dtype=torch.long, device=scores.device),
                 ] = float("-inf")
+            # Logit columns past the vocabulary (padding) are never valid tokens.
             if width > self.controller.vocabulary.model_vocabulary_size:
                 masked[0, self.controller.vocabulary.model_vocabulary_size :] = float("-inf")
         if not bool(torch.isfinite(masked[0]).any().item()):
@@ -85,10 +104,12 @@ class ConstrainedLogitsProcessor:
 
 
 def _synchronize_cuda(torch: Any, device: Any) -> None:
+    # GPU work is asynchronous; wait for it so wall-clock timings measure the real work.
     if getattr(device, "type", None) == "cuda":
         torch.cuda.synchronize(device)
 
 
+# The shared generation path; ``controller=None`` is plain, unconstrained generation.
 def _generate(
     model: Any,
     tokenizer: Any,
@@ -109,6 +130,8 @@ def _generate(
         from transformers import LogitsProcessorList
     except ImportError as exc:
         raise ImportError("Install toolsmith[colab] to use the Hugging Face sampler") from exc
+    # Beam search, multiple sequences, and speculative decoding would break the controller's
+    # one-token-per-step bookkeeping, so they are refused.
     options = dict(generate_options or {})
     for key in ("num_beams", "num_return_sequences"):
         if key in options and options[key] != 1:
@@ -147,6 +170,8 @@ def _generate(
     elapsed = time.perf_counter() - started
     generated = tuple(int(token) for token in output[0, prompt_tokens:].tolist())
     if controller is not None:
+        # The processor never sees the final token (no step follows it), so commit any tokens it
+        # missed, then check the grammar is complete.
         processed = controller.generated_ids
         if generated[: len(processed)] != processed:
             raise RuntimeError("Controller/generated token prefixes diverged")
@@ -176,7 +201,7 @@ def _generate(
         mask_seconds = ()
         activation_step = None
         cache_info = {}
-    text = raw.decode("utf-8", errors="strict")
+    text = raw.decode("utf-8", errors="strict")  # an incomplete character here is a real failure
     return GenerationResult(
         text,
         raw,
@@ -203,6 +228,7 @@ def generate_constrained(
     seed: int = 0,
     generate_options: dict[str, Any] | None = None,
 ) -> GenerationResult:
+    """Generate with ``controller`` enforcing its grammar at every step."""
     return _generate(
         model,
         tokenizer,
@@ -229,6 +255,7 @@ def generate_unconstrained(
     seed: int = 0,
     generate_options: dict[str, Any] | None = None,
 ) -> GenerationResult:
+    """Generate the same way with no constraint, as the baseline."""
     return _generate(
         model,
         tokenizer,

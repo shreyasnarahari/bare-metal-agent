@@ -13,6 +13,7 @@ from typing import Any
 from .errors import one_line
 from .types import EpisodeStatus
 
+# The system instruction every episode starts with (its hash is part of the episode id).
 SYSTEM_PROMPT = (
     "You are a customer-support agent for a small online store. "
     "Call a tool only when you need facts from the store or need to change it; otherwise answer directly. "
@@ -28,6 +29,7 @@ FAILURE_AWARE_ADDENDUM = (
     "or ask the user. If retryable is false, do not send the same call again."
 )
 PROMPT_VARIANTS = {"plain": "", "failure_aware": FAILURE_AWARE_ADDENDUM}
+# Sent before an optional final tool-free turn that rewords the controller's give-up message.
 PARAPHRASE_REQUEST = (
     "Stop working on the task now. Without calling any tool, tell the user in one or two "
     "sentences that you could not finish it, using only this summary:\n"
@@ -38,11 +40,13 @@ _BUDGET_NAMES = {
     "completion_token": "completion token",
     "wall_clock": "wall-clock",
 }
+# Long goals and arguments are shortened in give-up messages.
 _MAX_GOAL_CHARS = 160
 _MAX_ARGUMENT_CHARS = 120
 
 
 def system_prompt_for(variant: str = "plain", *, base: str = SYSTEM_PROMPT) -> str:
+    """The system prompt with the variant's addendum (none for "plain")."""
     try:
         addendum = PROMPT_VARIANTS[variant]
     except KeyError:
@@ -74,6 +78,7 @@ def render_final_message(status: EpisodeStatus, records: Sequence[Mapping[str, A
     return None
 
 
+# "Stopped: step budget exhausted (8/8 steps, 1200 prompt tokens, ...)." from a budget check record.
 def _budget_line(check: Mapping[str, Any]) -> str:
     budgets = check["budgets"]
     fired = check["exhausted"]
@@ -96,10 +101,13 @@ def _budget_line(check: Mapping[str, Any]) -> str:
     return f"Stopped: {name} budget exhausted ({', '.join(parts)})."
 
 
+# Show the limit only for the budget that fired (and always for steps).
 def _count(value: int, limit: int, fired: bool, unit: str) -> str:
     return f"{value}/{limit} {unit}" if fired or unit == "steps" else f"{value} {unit}"
 
 
+# "Tried: get_order (ok x1), issue_refund (timeout x2)." counted from tool results, policy
+# retries, and unparsed model output, in first-seen order.
 def _tried_line(records: Sequence[Mapping[str, Any]]) -> str:
     counts: dict[tuple[str, str], int] = {}
     for record in records:
@@ -118,6 +126,7 @@ def _tried_line(records: Sequence[Mapping[str, Any]]) -> str:
     return "Tried: " + ", ".join(f"{tool} ({outcome} x{count})" for (tool, outcome), count in counts.items()) + "."
 
 
+# Why the episode escalated: a repeated blocked call, or the reason a recovery strategy gave.
 def _escalation_line(records: Sequence[Mapping[str, Any]]) -> str:
     for record in reversed(records):
         if record.get("event") == "guard_tripped" and record.get("action") == "escalate":
@@ -134,6 +143,7 @@ def _escalation_line(records: Sequence[Mapping[str, Any]]) -> str:
     return "Stopped because the task cannot proceed."
 
 
+# The user's request (the last user message at the start), shortened to one line.
 def _goal(records: Sequence[Mapping[str, Any]]) -> str:
     started = next((record for record in records if record.get("event") == "episode_started"), None)
     messages = (started or {}).get("messages", [])
@@ -144,6 +154,7 @@ def _goal(records: Sequence[Mapping[str, Any]]) -> str:
     return one_line(goal, _MAX_GOAL_CHARS).rstrip(".") if goal else "the user's request"
 
 
+# The most recent record of ``event`` that matches ``predicate``.
 def _last(records: Sequence[Mapping[str, Any]], event: str, predicate: Any) -> Mapping[str, Any] | None:
     for record in reversed(records):
         if record.get("event") == event and predicate(record):

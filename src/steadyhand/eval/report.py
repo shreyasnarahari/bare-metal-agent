@@ -40,8 +40,10 @@ FAILURE_CLASSES = (
     "budget",
     "outcome only",
 )
+# Error types that mean the model sent a bad call (as opposed to a tool failing).
 _MODEL_ERRORS = ("unknown_tool", "invalid_arguments", "repeated_call", "parse_error")
 
+# How the report gets an episode's journal records (tests pass an in-memory reader).
 JournalReader = Callable[[EpisodeScore], Sequence[Mapping[str, Any]]]
 
 
@@ -151,6 +153,11 @@ def render_report(
     journal_reader: JournalReader = _default_reader,
     title: str = "Steadyhand results",
 ) -> str:
+    """The full RESULTS.md: setup, results with intervals, failure taxonomy, examples, context.
+
+    Every number comes from the scores and journals passed in; nothing is typed
+    in by hand, and empty inputs give empty cells rather than placeholders.
+    """
     rows = summarize(scores)
     out: list[str] = [f"# {title}", ""]
     out += ["Generated from episode journals by `steadyhand.eval.report`. Every number below traces to a "
@@ -304,12 +311,14 @@ def results_section(markdown: str) -> str:
 
 
 def write_report(path: str | Path, markdown: str) -> Path:
+    """Write the report, creating its folder."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(markdown, encoding="utf-8")
     return destination
 
 
+# Table cell formatting; a missing value is an empty cell, never a zero.
 def _percent(value: float | None) -> str:
     return "" if value is None else f"{value:.1%}"
 

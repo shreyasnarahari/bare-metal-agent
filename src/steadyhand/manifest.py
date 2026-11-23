@@ -56,11 +56,18 @@ IDENTITY_FIELDS = (
     "recovery_policy",
     "system_prompt_variant",
 )
+# Server shape fields: checked on resume, but not part of the episode id.
 SERVER_FIELDS = ("server_parallel", "context_size", "per_slot_context")
 
 
 @dataclass(frozen=True)
 class EpisodeManifest:
+    """Everything that determines an episode's behavior, written before it runs.
+
+    The identity fields hash to the episode id. ``completed`` flips to true when
+    the journal is finished, so a rerun knows to skip it.
+    """
+
     episode_id: str
     steadyhand_version: str
     toolsmith_version: str
@@ -94,6 +101,7 @@ class EpisodeManifest:
     completed: bool = False
 
     def identity(self) -> dict[str, Any]:
+        """The fields hashed into the episode id."""
         return {name: getattr(self, name) for name in IDENTITY_FIELDS}
 
     def as_dict(self) -> dict[str, Any]:
@@ -112,10 +120,12 @@ class EpisodeManifest:
 
 
 def episode_id_for(identity: Mapping[str, Any]) -> str:
+    """``ep_`` plus 16 hex characters of the identity's hash: the same inputs, the same id."""
     return "ep_" + canonical_hash(dict(identity))[:16]
 
 
 def system_prompt_sha256(messages: Sequence[Mapping[str, Any]]) -> str:
+    """Hash of the system messages only, so prompt variants get distinct ids."""
     return canonical_hash([message.get("content") for message in messages if message.get("role") == "system"])
 
 
@@ -187,6 +197,7 @@ def _check_prompt_variant(messages: Sequence[Mapping[str, Any]], variant: str) -
 
 
 def load_manifest(path: str | Path) -> EpisodeManifest:
+    """Read a manifest strictly (no unknown keys, no duplicate keys, no NaN)."""
     try:
         value = strict_json_loads(Path(path).read_text(encoding="utf-8"))
     except StrictJSONError as exc:
@@ -210,7 +221,7 @@ def create_manifest(path: str | Path, manifest: EpisodeManifest) -> bool:
         encoding="utf-8",
     )
     try:
-        os.link(temporary, destination)
+        os.link(temporary, destination)  # fails if the destination exists: exactly one creator wins
         return True
     except FileExistsError:
         return False
@@ -219,6 +230,7 @@ def create_manifest(path: str | Path, manifest: EpisodeManifest) -> bool:
 
 
 def mark_completed(path: str | Path) -> EpisodeManifest:
+    """Set ``completed`` (atomically rewritten): the episode will not run again."""
     completed = replace(load_manifest(path), completed=True)
     atomic_write_json(path, completed.as_dict())
     return completed

@@ -1,3 +1,14 @@
+"""Which JSONSchemaBench schemas Toolsmith's compiler supports, and whether its grammars are exact.
+
+``compile_coverage`` classifies each schema (compiled, explicitly unsupported,
+invalid, over a limit, or crashed) and times the compile (TTFM, in
+microseconds). Each schema compiles in its own process with memory, CPU, and
+wall-clock limits, so a pathological schema cannot take down the notebook.
+``replay_schema`` then runs the benchmark's valid and invalid instances through
+the automaton: a valid instance rejected, or an invalid one accepted, is a
+grammar bug.
+"""
+
 from __future__ import annotations
 
 import json
@@ -15,6 +26,8 @@ from ..sampling.automaton import AutomatonLimitError, InvalidGrammarError, Pushd
 
 @dataclass(frozen=True)
 class CoverageResult:
+    """One schema's compile outcome, time to first mask, and (if unsupported) where and why."""
+
     unique_id: str
     status: str
     ttfm_us: int
@@ -28,6 +41,7 @@ class CoverageResult:
 
 
 def compile_coverage(schema: dict[str, Any], unique_id: str = "unknown") -> CoverageResult:
+    """Compile one schema to a grammar and an automaton, classifying any failure."""
     started = time.perf_counter()
     try:
         compiled = GBNFCompiler().compile_schema(schema)
@@ -64,6 +78,7 @@ def compile_coverage(schema: dict[str, Any], unique_id: str = "unknown") -> Cove
     )
 
 
+# Feed each benchmark instance (as compact JSON) through the automaton and compare with its label.
 def replay_schema(schema: dict[str, Any], tests: list[dict[str, Any]], unique_id: str = "unknown") -> dict[str, Any]:
     coverage = compile_coverage(schema, unique_id)
     result = coverage.as_dict()
@@ -86,12 +101,14 @@ def replay_schema(schema: dict[str, Any], tests: list[dict[str, Any]], unique_id
     return result
 
 
+# Runs in a child process: cap memory and CPU time, then compile and send the result back.
 def _isolated_worker(schema, unique_id, memory_mb, cpu_seconds, queue):
     resource.setrlimit(resource.RLIMIT_AS, (memory_mb * 1024**2,) * 2)
     resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
     queue.put(compile_coverage(schema, unique_id).as_dict())
 
 
+# compile_coverage in a fresh process; a timeout or crash becomes a result instead of an error.
 def isolated_compile_coverage(
     schema: dict[str, Any],
     unique_id: str,

@@ -1,3 +1,25 @@
+"""Incremental parser for Qwen3.5's native tool-call format.
+
+Qwen3.5 writes each call as XML-like markup instead of JSON::
+
+    <tool_call>
+    <function=get_weather>
+    <parameter=city>
+    Paris
+    </parameter>
+    </function>
+    </tool_call>
+
+Parameter values are bare text, so the parser uses the tool's JSON Schema to
+decide what each value means: ``21`` stays a string for a string parameter but
+becomes a number for a number parameter. As parameters arrive, the parser emits
+them as fragments of one JSON arguments object (``{"city":"Paris"}``), so
+callers see the same events as for Qwen3 and the OpenAI API.
+
+The surrounding structure (optional reasoning, text, holding back partial tags)
+mirrors ``toolsmith.streaming``; see that module for the general approach.
+"""
+
 from __future__ import annotations
 
 import json
@@ -21,11 +43,13 @@ from .streaming import (
 )
 from .validation import strict_json_loads
 
+# Tags that switch the parser between reasoning, text, and tool-call states.
 _MARKERS = ("<tool_call>", "</tool_call>", "<think>", "</think>")
 _PARAMETER_END = "</parameter>"
 
 
 def _safe_length(text: str, markers: Sequence[str]) -> int:
+    # Emit everything except a tail that could be the start of a marker split across chunks.
     hold = 0
     for marker in markers:
         maximum = min(len(marker) - 1, len(text))
@@ -36,6 +60,8 @@ def _safe_length(text: str, markers: Sequence[str]) -> int:
 
 
 def _trim_framing_newlines(value: str) -> str:
+    # The template puts each value on its own line; drop exactly one newline at each end,
+    # so a value that really starts or ends with a newline keeps the rest.
     if value.startswith("\n"):
         value = value[1:]
     if value.endswith("\n"):
@@ -48,6 +74,7 @@ def _strict_json(value: str) -> Any:
 
 
 def _same_json_value(left: Any, right: Any) -> bool:
+    # True == 1 in Python, but they are different JSON values, so the types must match too.
     return type(left) is type(right) and left == right
 
 
@@ -56,6 +83,13 @@ def _is_nullable(schema: Mapping[str, Any]) -> bool:
 
 
 class _XMLCallParser:
+    """State machine for one ``<function=...>...</function>`` block inside ``<tool_call>``.
+
+    States: function_open -> function_name -> parameter_or_function_end ->
+    (parameter_name -> parameter_value -> parameter_or_function_end)* ->
+    function_done. Each step waits for more text when the buffer runs out.
+    """
+
     def __init__(self, owner: Qwen35IncrementalParser) -> None:
         self.owner = owner
         self.buffer = ""
@@ -76,6 +110,8 @@ class _XMLCallParser:
                 code="invalid_tool_call_xml",
             )
 
+    # True: the buffer starts with ``literal`` (consumed). None: it may, once more text arrives.
+    # False: it cannot.
     def _literal(self, literal: str) -> bool | None:
         if self.buffer.startswith(literal):
             self.buffer = self.buffer[len(literal):]
@@ -171,6 +207,7 @@ class _XMLCallParser:
                 self.buffer = self.buffer[end + 1:]
                 self.state = "parameter_value"
             elif self.state == "parameter_value":
+                # A value runs to </parameter>. Structural tags before that mean the model broke the format.
                 end = self.buffer.find(_PARAMETER_END)
                 reserved = [
                     position
@@ -196,6 +233,13 @@ class _XMLCallParser:
 
 
 class Qwen35IncrementalParser:
+    """Feed text chunks with ``feed``, then call ``finish``; ``response`` holds the result.
+
+    ``tools`` supplies each parameter's schema for value conversion. ``expect_thinking``
+    works as in the Qwen3 parser, except that a ``<tool_call>`` also ends reasoning
+    that was never closed (Qwen3.5 sometimes skips ``</think>`` before a call).
+    """
+
     def __init__(
         self,
         tools: Sequence[Tool],
@@ -257,6 +301,7 @@ class Qwen35IncrementalParser:
                 self._emit_content(self._buffer, events)
                 self._buffer = ""
             self._finished = True
+            # Re-parse each call's assembled JSON strictly and re-serialize it compactly.
             calls = []
             for call in self._calls:
                 raw_arguments = "".join(call["argument_parts"])
@@ -311,6 +356,7 @@ class Qwen35IncrementalParser:
             else:
                 raise AssertionError(self._state)
 
+    # Decide how the response begins (explicit <think>, a bare </think>, a tool call, or text).
     def _process_start(self, events: list[ParserEvent]) -> bool:
         if not self._buffer:
             return False
@@ -344,6 +390,7 @@ class Qwen35IncrementalParser:
             return True
         return False
 
+    # Stream reasoning until </think> or, if the model skipped it, until a <tool_call>.
     def _process_thinking(self, events: list[ParserEvent]) -> bool:
         closing = self._buffer.find("</think>")
         tool_open = self._buffer.find("<tool_call>")
@@ -396,6 +443,7 @@ class Qwen35IncrementalParser:
             self._current_call = None
         return True
 
+    # Pass the markup to the call parser until </tool_call>; a nested <tool_call> is an error.
     def _process_tool_call(self, events: list[ParserEvent]) -> bool:
         closing = self._buffer.find("</tool_call>")
         nested = self._buffer.find("<tool_call>")
@@ -433,6 +481,7 @@ class Qwen35IncrementalParser:
         if call_id in self._used_ids:
             raise ToolCallParseError("Duplicate tool-call ID", code="duplicate_tool_call_id")
         self._used_ids.add(call_id)
+        # The JSON arguments object opens now and is filled one parameter at a time.
         call = {
             "index": len(self._calls),
             "id": call_id,
@@ -445,6 +494,7 @@ class Qwen35IncrementalParser:
         events.append(ToolCallStart(call["index"], call_id, name))
         events.append(ToolCallArgumentsDelta(call["index"], "{"))
 
+    # The JSON Schema of one parameter, or None for an unknown tool or parameter.
     def _schema_for(self, function_name: str, parameter_name: str) -> Mapping[str, Any] | None:
         for tool in self._tools:
             if tool.name != function_name:
@@ -457,6 +507,9 @@ class Qwen35IncrementalParser:
         return None
 
     def _convert_value(self, function_name: str, name: str, raw: str) -> Any:
+        # Interpret bare parameter text by the schema: strings stay text; numbers, booleans, null,
+        # arrays, and objects are decoded as JSON. A value that does not decode stays text, so
+        # validation (not the parser) reports the type error.
         schema = self._schema_for(function_name, name)
         if schema is None:
             return raw
@@ -465,6 +518,7 @@ class Qwen35IncrementalParser:
                 return _strict_json(raw)
             except (ValueError, json.JSONDecodeError):
                 return raw
+        # An enum may mix types: an exact string member wins, otherwise try JSON.
         enum = schema.get("enum")
         if isinstance(enum, list):
             for value in enum:
@@ -487,6 +541,7 @@ class Qwen35IncrementalParser:
                 return raw
         return raw
 
+    # Append one "name":value pair to the call's JSON arguments and stream it as a delta.
     def _on_parameter(self, name: str, raw: str, events: list[ParserEvent]) -> None:
         if self._current_call is None:
             raise ToolCallParseError("Parameter arrived before a function name")
@@ -502,6 +557,7 @@ class Qwen35IncrementalParser:
         self._current_call["argument_parts"].append(fragment)
         events.append(ToolCallArgumentsDelta(self._current_call["index"], fragment))
 
+    # </function>: close the JSON arguments object.
     def _on_function_end(self, events: list[ParserEvent]) -> None:
         if self._current_call is None:
             raise ToolCallParseError("Function closing tag arrived before a name")
@@ -520,6 +576,8 @@ class Qwen35IncrementalParser:
 
 
 class Qwen35ToolCallParser:
+    """Parse a finished Qwen3.5 response in one call (a wrapper around the incremental parser)."""
+
     def __init__(
         self,
         tools: Sequence[Tool],

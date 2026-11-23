@@ -39,10 +39,12 @@ TOOLMAZE_RECOVERIES = ("retry", "switch", "stop")
 if set(MULTI_TURN_CATEGORIES) & set(BFCL_CATEGORIES):  # pragma: no cover - guards a future edit
     raise RuntimeError("Multi-turn categories must stay separate from the single-turn BFCL categories")
 
+# BFCL ids are "<category>_<index>", e.g. multi_turn_base_12.
 _ID = re.compile(r"(?P<category>[a-z_]+?)_(?P<index>\d+)$")
 
 
 def multi_turn_category(entry_id: str) -> str:
+    """The multi-turn category of a BFCL id; any other id is refused."""
     match = _ID.fullmatch(entry_id)
     if match is None or match.group("category") not in MULTI_TURN_CATEGORIES:
         raise ValueError(f"Not a BFCL multi-turn id: {entry_id!r}")
@@ -51,6 +53,8 @@ def multi_turn_category(entry_id: str) -> str:
 
 @dataclass(frozen=True)
 class MultiTurnEntry:
+    """One BFCL multi-turn conversation: its user turns, tool classes, and withheld functions."""
+
     entry_id: str
     category: str
     turns: tuple[tuple[dict[str, Any], ...], ...]  # user turns, each a list of messages
@@ -59,6 +63,7 @@ class MultiTurnEntry:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> MultiTurnEntry:
+        """Build from a BFCL dataset row."""
         return cls(
             entry_id=row["id"],
             category=multi_turn_category(row["id"]),
@@ -70,6 +75,8 @@ class MultiTurnEntry:
 
 @dataclass(frozen=True)
 class Eligibility:
+    """Whether an entry's tools compile to a grammar, and if not, where (JSON Pointer) and why."""
+
     entry_id: str
     eligible: bool
     pointer: str | None = None
@@ -96,6 +103,7 @@ def check_eligibility(
     protocol: ToolProtocol = ToolProtocol.QWEN35,
     convert: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
 ) -> list[Eligibility]:
+    """Check every entry; ineligible ones are reported, never run without the grammar."""
     results = []
     for entry in entries:
         support = constraint_support(entry_tools(entry, docs_by_class, convert), protocol)
@@ -126,6 +134,8 @@ def subset_label(name: str, ids: Sequence[str], full_size: int) -> dict[str, Any
 
 @dataclass(frozen=True)
 class MultiTurnOutcome:
+    """How one multi-turn entry went, with or without Steadyhand's guards."""
+
     entry_id: str
     loop: str  # "guarded" (validation and guards on) or "bare" (execute calls only)
     eligible: bool
@@ -151,6 +161,8 @@ def score_multi_turn(outcomes: Sequence[MultiTurnOutcome]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class ToolMazeInstance:
+    """One ToolMaze task: a topology, a failure mode, and the recovery a good agent shows."""
+
     instance_id: str
     base_task_id: str
     topology: str
@@ -159,6 +171,7 @@ class ToolMazeInstance:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> ToolMazeInstance:
+        """Build from a ToolMaze row; an unknown gold recovery is refused."""
         recovery = row["gold_recovery"]
         if recovery not in TOOLMAZE_RECOVERIES:
             raise ValueError(f"Unknown ToolMaze recovery {recovery!r}")
@@ -173,6 +186,8 @@ def toolmaze_subset(instances: Sequence[ToolMazeInstance], topologies: Sequence[
 
 @dataclass(frozen=True)
 class ToolMazeOutcome:
+    """How one ToolMaze instance went, and whether the agent's recovery matched the gold."""
+
     instance_id: str
     success: bool
     perturbed: bool

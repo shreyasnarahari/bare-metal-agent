@@ -1,3 +1,11 @@
+"""One bounded repair attempt for invalid model output.
+
+When a non-streaming response fails parsing or validation, the service may ask
+the model once more. The repair prompt quotes the bad output and the validator's
+diagnostics as JSON strings (so they cannot pose as instructions) and asks the
+model to regenerate the whole answer, never to patch it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -9,6 +17,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RepairPolicy:
+    """How many repairs to allow and how much of the bad output and errors to quote."""
+
     max_repairs: int = 1
     max_output_chars: int = 12_000
     max_error_chars: int = 4_000
@@ -21,6 +31,7 @@ class RepairPolicy:
 
 
 def _bounded(text: str, limit: int) -> str:
+    # Long outputs are cut so a runaway generation cannot blow up the repair prompt.
     if len(text) <= limit:
         return text
     return text[:limit] + "\n[truncated by Toolsmith]"
@@ -32,7 +43,9 @@ def build_repair_messages(
     diagnostics: str,
     policy: RepairPolicy,
 ) -> list[dict[str, Any]]:
+    """The original conversation plus one user turn asking for a complete, corrected answer."""
     repaired = deepcopy([dict(message) for message in messages])
+    # json.dumps quotes the untrusted text, so the model sees it as data, not as a new prompt.
     invalid = json.dumps(
         _bounded(raw_output, policy.max_output_chars),
         ensure_ascii=False,

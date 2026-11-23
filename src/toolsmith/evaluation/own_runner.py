@@ -1,3 +1,6 @@
+"""Run Toolsmith's own 200-case evaluation set through the shim, checkpointed and resumable.
+"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -29,12 +32,15 @@ def infrastructure_error(case_id: str, exc: BaseException, result: CaseResult) -
 
 
 class OwnRunner:
+    """One model and mode over the own set: ``execute`` runs and scores one case against its gold calls."""
+
     def __init__(self, client: Any, config: RunConfig, tools: list[dict[str, Any]]) -> None:
         self.client = client
         self.config = config
         self.tools = tools
 
     def execute(self, case: dict[str, Any]) -> CaseResult:
+        """Send one case and score it. A model failure is a result; a serving failure raises."""
         started = time.perf_counter()
         try:
             response = self.client.chat.completions.create(
@@ -56,6 +62,7 @@ class OwnRunner:
         except Exception as exc:
             elapsed = time.perf_counter() - started
             code = exception_error_code(exc)
+            # A malformed response body is the model's problem (bad JSON), not the backend's.
             if code == "backend_error" and isinstance(
                 exc, (json.JSONDecodeError, KeyError, TypeError, ValueError)
             ):
@@ -73,6 +80,7 @@ class OwnRunner:
                 raise infrastructure_error(case["case_id"], exc, result) from exc
             return result
         elapsed = time.perf_counter() - started
+        # Semantic: the calls equal the gold calls. A no-tool case also needs a non-empty text answer.
         semantic = calls_equal(calls, case["expected_calls"], case["comparison"])
         if case["comparison"] == "none":
             semantic = semantic and bool((message.get("content") or "").strip())
@@ -120,6 +128,8 @@ class OwnRunner:
         return CheckpointRunner(checkpoint, manifest_sha256, manifest=manifest).run(cases, self.execute, workers=workers)
 
 
+# Same reuse rule as BFCL: grammar-mode results that were already right are copied (marked
+# reused), and only repair-eligible cases run again with repair enabled.
 def run_repair_with_reuse(
     grammar_results: list[CaseResult],
     cases: list[dict[str, Any]],

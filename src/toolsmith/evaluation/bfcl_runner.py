@@ -1,3 +1,6 @@
+"""Run BFCL cases through the shim, checkpointed, and hand the results to BFCL's checker.
+"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -20,6 +23,8 @@ from .runner import EVAL_WORKERS, CheckpointRunner
 
 
 class BFCLRunner:
+    """One BFCL category in one mode: ``execute`` runs a case, ``run`` runs them all resumably."""
+
     def __init__(
         self,
         client: Any,
@@ -34,6 +39,7 @@ class BFCLRunner:
         self.tools_converter = tools_converter
 
     def execute(self, entry: dict[str, Any]) -> CaseResult:
+        """Run one BFCL entry. Grammar modes first check the tools can be constrained at all."""
         case_id = entry["id"]
         category = case_id.rsplit("_", 1)[0]
         tools = self.tools_converter(entry["function"])
@@ -82,6 +88,7 @@ class BFCLRunner:
             if is_infrastructure_error(exc):
                 raise infrastructure_error(case_id, exc, result) from exc
             return result
+        # The BFCL-format result is kept in metadata; BFCL's checker decides semantic correctness later.
         details = response.get("toolsmith", {})
         repairs = details.get("repair_attempts", 0)
         return CaseResult(
@@ -146,6 +153,7 @@ def score_entries(results: list[Any], *, full: bool) -> list[dict[str, Any]]:
     return entries
 
 
+# Run BFCL's official scorer over the result files Toolsmith wrote.
 def evaluate_bfcl(
     *,
     registry_name: str,
@@ -162,6 +170,8 @@ def evaluate_bfcl(
     main([registry_name], categories, result_dir, score_dir, partial_eval=partial)
 
 
+# Repair mode reuses grammar-mode results that were already right, and runs a repair only for
+# cases that could benefit (see repair_eligible), so it costs one extra pass at most.
 def run_bfcl_repair_with_reuse(
     grammar_results,
     entries,

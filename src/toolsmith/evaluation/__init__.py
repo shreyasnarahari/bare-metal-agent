@@ -1,3 +1,6 @@
+"""Evaluation harnesses: Toolsmith's own set, BFCL, JSONSchemaBench, and MaskBench, with resumable
+checkpoints, manifests, metrics, and reports."""
+
 from .metrics import calls_equal, deterministic_subset, summarize_results
 from .models import AttemptRecord, CaseResult, Mode, RunConfig, canonical_hash
 from .runner import CheckpointRunner, ManifestMismatchError, atomic_write_json

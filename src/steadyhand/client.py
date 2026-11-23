@@ -85,6 +85,7 @@ class SteadyhandClient:
 
     @property
     def profile(self) -> ModelProfile:
+        """The model profile of the wrapped service."""
         return self.service.profile
 
     def settings(self) -> dict[str, Any]:
@@ -108,6 +109,7 @@ class SteadyhandClient:
         *,
         tool_choice: str | dict[str, Any] = "auto",
     ) -> ModelTurn:
+        """One chat completion through the shim, as a ``ModelTurn`` (failures become failure turns)."""
         request = ChatCompletionRequest(
             model=self.profile.model,
             messages=deepcopy([dict(message) for message in messages]),
@@ -206,6 +208,7 @@ def is_model_output_error(exc: APIError) -> bool:
 
 
 def backend_error_code(exc: LlamaCppError) -> str:
+    """The abort code for a backend failure (a sweep reruns the timeout and connection ones)."""
     if isinstance(exc, CompletionTruncatedError):
         return "completion_truncated"
     if isinstance(exc, LlamaCppTimeoutError):
@@ -233,6 +236,7 @@ class LiveSettings:
         *,
         api_key: str | None = None,
     ) -> LiveSettings:
+        """Read ``TOOLSMITH_BASE_URL`` (must be localhost) and ``LOCAL_KEY`` (or ``api_key``)."""
         env = os.environ if environ is None else environ
         base_url = (env.get("TOOLSMITH_BASE_URL") or "").strip()
         if not base_url:

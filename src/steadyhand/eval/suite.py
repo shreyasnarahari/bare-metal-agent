@@ -92,6 +92,8 @@ class SweepMismatch(RuntimeError):
 
 @dataclass(frozen=True)
 class FaultVariant:
+    """One way a task is run under faults: which faults, and what the right recovery and outcome are."""
+
     name: str
     pins: tuple[dict[str, Any], ...]
     gold_recovery: str
@@ -99,6 +101,7 @@ class FaultVariant:
     possible: bool | None = None
 
     def schedule(self, seed: int) -> FaultSchedule:
+        """The fault schedule for this variant, seeded by the task."""
         return build_schedule(seed, [FaultSpec.from_dict(pin) for pin in self.pins])
 
     def as_dict(self) -> dict[str, Any]:
@@ -112,6 +115,8 @@ class FaultVariant:
 
 @dataclass(frozen=True)
 class Task:
+    """One mock-store task: the goal, a scripted reference solution, the gold store diff, and fault variants."""
+
     task_id: str
     category: str
     goal: str
@@ -166,23 +171,29 @@ class Task:
         }
 
     def variants(self) -> list[str]:
+        """``clean`` plus every fault variant the task declares."""
         return [CLEAN, *self.faults]
 
     def gold_for(self, variant: str) -> dict[str, Any]:
+        """The expected store changes; a fault variant may override them (a lost write, an escalation)."""
         override = self.faults[variant].gold if variant != CLEAN else None
         return self.gold if override is None else override
 
     def possible_for(self, variant: str) -> bool:
+        """Whether the task can be completed under this variant (a permanent fault may make it impossible)."""
         override = self.faults[variant].possible if variant != CLEAN else None
         return self.possible if override is None else override
 
     def gold_recovery_for(self, variant: str) -> str:
+        """The recovery a good policy shows here (switch, verify, retry, stop, or none)."""
         return "none" if variant == CLEAN else self.faults[variant].gold_recovery
 
     def schedule_for(self, variant: str) -> FaultSchedule | None:
+        """The variant's fault schedule (``None`` for clean)."""
         return None if variant == CLEAN else self.faults[variant].schedule(self.seed)
 
     def writes(self) -> bool:
+        """Whether the reference solution changes the store."""
         registry = shared_registry()
         return any(
             registry.policy(call["name"]).effect.value != "read"
@@ -193,11 +204,13 @@ class Task:
 
 
 def load_tasks(path: str | Path = DATASET_PATH) -> list[Task]:
+    """All tasks from the JSONL dataset (strict JSON, every field checked)."""
     lines = Path(path).read_text(encoding="utf-8").splitlines()
     return [Task.from_dict(strict_json_loads(line)) for line in lines if line.strip()]
 
 
 def dataset_sha256(tasks: Iterable[Task]) -> str:
+    """Hash of the tasks; a sweep manifest records it, so a changed dataset is caught."""
     return canonical_hash([task.as_dict() for task in tasks])
 
 
@@ -206,6 +219,8 @@ def dataset_sha256(tasks: Iterable[Task]) -> str:
 
 @dataclass(frozen=True)
 class StoreDiff:
+    """What an episode changed in the store, in the terms the gold uses."""
+
     refunds: dict[str, list[str]]  # order -> amounts of new refunds and ledger entries
     tickets_created: int
     notes_added: dict[str, int]
@@ -213,10 +228,12 @@ class StoreDiff:
     order_status: dict[str, str]
 
     def writes(self) -> bool:
+        # Whether the episode changed anything at all.
         return bool(self.refunds or self.tickets_created or self.notes_added or self.ticket_status or self.order_status)
 
 
 def store_diff(before: Store, after: Store) -> StoreDiff:
+    """Compare the store before and after: new refunds (and ledger entries), tickets, notes, status changes."""
     old_refunds = {refund.refund_id for refund in before.refunds}
     old_ledger = {entry.entry_id for entry in before.ledger}
     refunds: dict[str, list[str]] = {}
@@ -253,12 +270,15 @@ def store_diff(before: Store, after: Store) -> StoreDiff:
 
 @dataclass(frozen=True)
 class DiffScore:
+    """Whether the diff equals the gold, how many effects were duplicated, and every mismatch."""
+
     matches: bool
     duplicate_side_effects: int
     problems: tuple[str, ...]
 
 
 def score_diff(diff: StoreDiff, gold: Mapping[str, Any]) -> DiffScore:
+    """Score a diff against the gold. Extra refunds, tickets, or notes also count as duplicate effects."""
     problems: list[str] = []
     duplicates = 0
     gold_refunds = gold.get("refunds_for_order", {})
@@ -287,6 +307,8 @@ def score_diff(diff: StoreDiff, gold: Mapping[str, Any]) -> DiffScore:
 
 @dataclass(frozen=True)
 class EpisodeScore:
+    """One scored episode: task, variant, policy, outcome, duplicates, cost, and where its journal is."""
+
     task_id: str
     category: str
     variant: str
@@ -312,6 +334,7 @@ class EpisodeScore:
 
     @property
     def recovery_match(self) -> bool:
+        """Whether the episode recovered the way the gold says it should."""
         return self.recovery_class == self.gold_recovery
 
     def as_dict(self) -> dict[str, Any]:
@@ -475,6 +498,8 @@ def validate_tasks(tasks: Sequence[Task], fixture: Store | None = None) -> dict[
     }
 
 
+# Run a task's reference calls (through validation, like the loop) and check they produce the gold;
+# an impossible task's reference must change nothing.
 def _check_reference(task: Task, registry: SteadyhandRegistry, fixture: Store) -> list[str]:
     store = fixture.clone()
     executor = SequentialExecutor()
@@ -514,6 +539,7 @@ class ScriptedTaskModel:
         self._turns = 0
 
     def settings(self) -> dict[str, Any]:
+        """Settings shaped like a real client's, so manifests and journals look the same."""
         return {
             "profile": self.profile,
             "model": f"scripted/{self.behavior}",
@@ -533,6 +559,7 @@ class ScriptedTaskModel:
         *,
         tool_choice: str | dict[str, Any] = "auto",
     ) -> ModelTurn:
+        """The next scripted turn: the next reference step, a retry of failed calls, or the final answer."""
         self._turns += 1
         if tool_choice == "none":
             return self._text("I could not finish this request.")
@@ -550,6 +577,7 @@ class ScriptedTaskModel:
             return self._text(self.task.final_answer)
         return self._calls([dict(call) for call in self.task.reference[self._step]])
 
+    # The last turn's calls that came back with ok=false, paired with their observations.
     def _failures(self, messages: Sequence[Mapping[str, Any]]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
         observations = {}
         for message in messages:
@@ -561,6 +589,7 @@ class ScriptedTaskModel:
             if call["id"] in observations and not observations[call["id"]].get("ok")
         ]
 
+    # Which failed calls to send again (each step is retried at most once).
     def _retry_choice(self, failures: list[tuple[dict[str, Any], dict[str, Any]]]) -> list[dict[str, Any]]:
         if self._retried_step == self._step:
             return []
@@ -570,6 +599,7 @@ class ScriptedTaskModel:
             return []
         return [{"name": call["name"], "arguments": call["arguments"]} for call, _ in failures]
 
+    # A tool-call turn with fixed token counts, so budgets behave the same on every run.
     def _calls(self, calls: list[dict[str, Any]]) -> ModelTurn:
         tool_calls = []
         self._last_calls = []
@@ -590,6 +620,7 @@ class ScriptedTaskModel:
             error_code=None,
         )
 
+    # A final text turn.
     def _text(self, content: str) -> ModelTurn:
         return ModelTurn(
             kind=TurnKind.TEXT,
@@ -627,6 +658,7 @@ def run_task(
     registry = shared_registry()
     before = fixture.clone()
     store = fixture.clone()
+    # Two clones: ``before`` stays untouched for the diff, ``store`` is the one the episode changes.
     messages = initial_messages(task.goal, variant=prompt_variant)
     faults = task.schedule_for(variant)
     budgets = budgets or Budgets()
@@ -656,6 +688,8 @@ def run_task(
 
 @dataclass(frozen=True)
 class SweepUnit:
+    """One episode of a sweep: a task, a fault variant, a policy, and a prompt variant."""
+
     task: Task
     variant: str
     policy: str
@@ -663,6 +697,7 @@ class SweepUnit:
 
     @property
     def key(self) -> str:
+        """The unit's id in the scores file."""
         return f"{self.task.task_id}|{self.variant}|{self.policy}|{self.prompt_variant}"
 
 
@@ -697,6 +732,7 @@ class SweepSpec:
         return value
 
     def units(self, tasks: Sequence[Task]) -> list[SweepUnit]:
+        """Every (task, variant, policy, prompt) the sweep covers, in a fixed order."""
         by_id = {task.task_id: task for task in tasks}
         units = []
         for task_id in self.task_ids:
@@ -722,6 +758,7 @@ class SweepInterrupted(RuntimeError):
 
 
 def infrastructure_abort(score: EpisodeScore) -> bool:
+    """Whether an episode aborted because the server failed (so a rerun may succeed)."""
     return score.aborted and score.error_code in INFRASTRUCTURE_ABORTS
 
 
@@ -809,6 +846,7 @@ def run_sweep(
     scores_path = sweep_dir / f"{spec.sweep_id}.scores.jsonl"
     mirror = Path(mirror_dir) if mirror_dir is not None else None
 
+    # A local file with its Drive copy (if any); copies go through the journal copier when given.
     def mirrored(path: Path) -> MirroredFile:
         return MirroredFile(
             path, mirror / path.name if mirror is not None else None, every_seconds=mirror_seconds,
@@ -842,6 +880,7 @@ def run_sweep(
     aborts_in_a_row = [0]
     stop = threading.Event()
 
+    # Run and score one unit, record it, and count infrastructure aborts in a row.
     def work(unit: SweepUnit) -> EpisodeScore | None:
         if stop.is_set():
             return None
@@ -915,6 +954,7 @@ def run_cpu_suite(
     return [EpisodeScore.from_dict(score) for group in groups for score in group]
 
 
+# Runs in a pool process: every variant and policy for one task, on the scripted model.
 def _cpu_task(job: tuple[dict[str, Any], list[str], str, str, list[str] | None]) -> list[dict[str, Any]]:
     task_value, policies, directory, behavior, variants = job
     task = Task.from_dict(task_value)

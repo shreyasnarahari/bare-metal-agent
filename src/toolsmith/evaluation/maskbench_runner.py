@@ -1,3 +1,6 @@
+"""Run MaskBench for Toolsmith's engine and the peer engines, and summarize mask timings.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,9 +13,11 @@ from ..background import run_logged
 from .metrics import percentile
 from .runner import atomic_write_json
 
+# MaskBench runner flags for the peer engines: LLGuidance, XGrammar, llama.cpp, Outlines Core, GRID.
 PEER_FLAGS = ("--llg", "--xgr", "--llamacpp", "--outlines", "--grid")
 
 
+# Run Toolsmith's engine over the schema files in this process, skipping files already done.
 def run_maskbench_files(
     engine: Any,
     files: list[str | Path],
@@ -39,6 +44,7 @@ def run_maskbench_files(
 
 
 def timing_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Error counts and TTFM/TBM percentiles (microseconds) over MaskBench results."""
     mask_times = [
         value
         for result in results
@@ -69,6 +75,7 @@ def timing_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# The command line for one peer engine, single-threaded, in the peers' own Python environment.
 def peer_command(python: str | Path, flag: str, tokenizer: str, output: Path, files: Sequence[str | Path]) -> list[str]:
     return [
         str(python), "-m", "maskbench.runner", flag, "--num-threads", "1",

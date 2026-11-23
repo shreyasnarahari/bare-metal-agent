@@ -1,3 +1,25 @@
+"""Compile JSON Schemas and tool definitions into GBNF grammars for constrained decoding.
+
+llama.cpp can restrict sampling to strings a GBNF grammar accepts. This module
+builds such grammars from:
+
+- one JSON Schema (``compile_schema``), for ``response_format=json_schema``;
+- a request's tools plus ``tool_choice`` (``compile_tools``), so the model can
+  only emit well-formed native tool calls (Qwen3 JSON or Qwen3.5 XML) whose
+  arguments match each tool's schema, or plain text where that is allowed.
+
+Only a strict, explicit subset of Draft 2020-12 is supported: scalar types,
+enums, objects with ``additionalProperties: false``, arrays with inline
+``items``, and ``anyOf [X, null]``. Anything else raises
+``SchemaNotSupportedError`` with a JSON Pointer to the offending keyword, rather
+than producing a grammar that silently accepts more than the schema allows.
+
+Grammars are built as an IR (``toolsmith.sampling.ir``) and rendered to GBNF;
+the custom sampler compiles the same IR into an automaton, so both paths enforce
+exactly the same language. Rule names are numbered in build order, so the same
+input always renders byte-identical grammar text (its sha256 is recorded).
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -29,6 +51,7 @@ from .sampling.ir import (
 )
 
 _DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema"
+# Keywords allowed on every schema node. Annotation keywords are accepted and ignored.
 _COMMON_KEYWORDS = {
     "$schema",
     "default",
@@ -41,11 +64,15 @@ _COMMON_KEYWORDS = {
 _OBJECT_KEYWORDS = _COMMON_KEYWORDS | {"additionalProperties", "properties", "required"}
 _ARRAY_KEYWORDS = _COMMON_KEYWORDS | {"items"}
 _NULLABLE_KEYWORDS = _COMMON_KEYWORDS | {"anyOf"}
+# Plain text in "auto"/"none" mode must never contain these, or it would read as protocol markup.
 _PROTOCOL_MARKERS = ("<tool_call>", "</tool_call>", "<think>", "</think>")
+# Whitespace between JSON tokens, capped at 4 characters so the model cannot stall on blanks.
 _WS = RuleRef("json-ws")
 
 
 class SchemaNotSupportedError(ValueError):
+    """The schema uses something outside the supported subset; ``pointer`` says where."""
+
     def __init__(
         self,
         message: str,
@@ -60,11 +87,13 @@ class SchemaNotSupportedError(ValueError):
 
 
 class GrammarConfigurationError(ValueError):
-    pass
+    """Bad request-level settings: tool_choice, duplicate tools, or a limit exceeded."""
 
 
 @dataclass(frozen=True)
 class ToolChoice:
+    """A normalized ``tool_choice``: mode is auto, none, required, or named (with ``name``)."""
+
     mode: str
     name: str | None = None
 
@@ -80,6 +109,8 @@ ToolChoiceValue: TypeAlias = str | Mapping[str, Any] | ToolChoice | None
 
 @dataclass(frozen=True)
 class CompiledGrammar:
+    """GBNF text plus the IR it came from; ``limitations`` lists what the grammar cannot enforce."""
+
     text: str
     mode: str
     tool_names: tuple[str, ...] = ()
@@ -89,6 +120,7 @@ class CompiledGrammar:
 
     @property
     def sha256(self) -> str:
+        """Identifies the exact grammar in records, so two runs can be shown to use the same one."""
         return hashlib.sha256(self.text.encode("utf-8")).hexdigest()
 
     @property
@@ -100,6 +132,11 @@ def resolve_tool_choice(
     tools: Sequence[Tool],
     value: ToolChoiceValue,
 ) -> ToolChoice:
+    """Normalize an OpenAI ``tool_choice`` value and check it against the registered tools.
+
+    ``None`` means auto. A named choice must be exactly
+    ``{"type": "function", "function": {"name": ...}}`` and name a registered tool.
+    """
     names = {tool.name for tool in tools}
     if isinstance(value, ToolChoice):
         choice = value
@@ -140,6 +177,8 @@ def resolve_tool_choice(
 
 
 class _RuleBuilder:
+    """Collects named grammar rules, enforces the rule limit, and adds shared JSON primitives once."""
+
     def __init__(self, max_rules: int) -> None:
         self.max_rules = max_rules
         self.rules: dict[str, Expression] = {}
@@ -149,6 +188,7 @@ class _RuleBuilder:
             Repeat(CharSet.from_characters(" \t\r\n"), 0, 4),
         )
 
+    # Fresh rule names are numbered in creation order, which keeps rendering deterministic.
     def name(self, prefix: str) -> str:
         name = f"{prefix}-{self.next_id}"
         self.next_id += 1
@@ -163,9 +203,11 @@ class _RuleBuilder:
         return name
 
     def primitive(self, kind: str) -> str:
+        """The shared rule for a JSON scalar (string, integer, number, boolean, null), added on first use."""
         name = f"json-{kind}"
         if name in self.rules:
             return name
+        # A JSON string character: anything but a quote, backslash, or control character, or an escape.
         if kind == "string":
             self.add(
                 "json-char",
@@ -210,6 +252,7 @@ class _RuleBuilder:
                     Literal('"'),
                 ),
             )
+        # JSON numbers: no leading zeros or "+"; a number may add a fraction and an exponent.
         elif kind in {"integer", "number"}:
             digits = CharSet((CharRange(ord("0"), ord("9")),))
             integral = Group(
@@ -254,6 +297,7 @@ class _RuleBuilder:
 
 
 def _pointer_token(value: str) -> str:
+    # Escape one JSON Pointer segment (RFC 6901): ~ becomes ~0, / becomes ~1.
     return value.replace("~", "~0").replace("/", "~1")
 
 
@@ -287,6 +331,7 @@ def nullable_value_schema(
 
 
 def _json_literal(value: Any) -> Literal:
+    # A value as the exact compact JSON text the model must write (keys, enum members, names).
     encoded = json.dumps(
         value,
         ensure_ascii=False,
@@ -297,6 +342,8 @@ def _json_literal(value: Any) -> Literal:
 
 
 class GBNFCompiler:
+    """Builds grammars for one tool protocol, within depth, rule, and tool-count limits."""
+
     def __init__(
         self,
         *,
@@ -316,6 +363,7 @@ class GBNFCompiler:
         self.max_tools = max_tools
 
     def compile_schema(self, schema: Mapping[str, Any]) -> CompiledGrammar:
+        """A grammar for one JSON value matching ``schema``, with optional surrounding whitespace."""
         self._check_schema(schema)
         builder = _RuleBuilder(self.max_rules)
         value_rule = self._compile_node(builder, schema, "", 0)
@@ -332,6 +380,13 @@ class GBNFCompiler:
         tools: Sequence[Tool],
         tool_choice: ToolChoiceValue = "auto",
     ) -> CompiledGrammar | None:
+        """A grammar for a response under ``tool_choice``, or ``None`` when there are no tools.
+
+        - none: plain text only.
+        - named: exactly one call to that tool.
+        - required: one or more calls (to any tool), separated by whitespace.
+        - auto: either plain text or one or more calls.
+        """
         tools = tuple(tools)
         try:
             ensure_unique_tool_names(tools)
@@ -391,6 +446,7 @@ class GBNFCompiler:
             limitations,
         )
 
+    # Whole-schema checks before compiling: a JSON object, finite values, valid Draft 2020-12.
     def _check_schema(self, schema: Mapping[str, Any]) -> None:
         if not isinstance(schema, Mapping):
             raise SchemaNotSupportedError("A schema must be a JSON object")
@@ -416,6 +472,7 @@ class GBNFCompiler:
                 keyword="$schema",
             )
 
+    # Per-node checks: depth, a single supported type (or an enum), and only allowed keywords.
     def _validate_node(
         self,
         schema: Mapping[str, Any],
@@ -477,6 +534,7 @@ class GBNFCompiler:
     ) -> tuple[Mapping[str, Any], int] | None:
         return nullable_value_schema(schema)
 
+    # Compile one schema node to a rule and return the rule's name (dispatch by shape).
     def _compile_node(
         self,
         builder: _RuleBuilder,
@@ -497,6 +555,7 @@ class GBNFCompiler:
             return self._compile_array(builder, schema, pointer, depth)
         return builder.primitive(schema_type)
 
+    # An enum is a choice between the exact JSON texts of its (scalar) members.
     def _compile_enum(
         self,
         builder: _RuleBuilder,
@@ -539,6 +598,7 @@ class GBNFCompiler:
             expression = Group(expression)
         return builder.add(builder.name("enum"), expression)
 
+    # anyOf [X, null] (how pydantic writes Optional[X]): the inner value or the literal null.
     def _compile_nullable(
         self,
         builder: _RuleBuilder,
@@ -569,6 +629,8 @@ class GBNFCompiler:
         expression = Group(choice(RuleRef(inner_rule), RuleRef(builder.primitive("null"))))
         return builder.add(builder.name("nullable"), expression)
 
+    # Objects list properties in schema order. Required ones always appear; optional ones may
+    # be skipped but keep their order, so the grammar stays small and deterministic.
     def _compile_object(
         self,
         builder: _RuleBuilder,
@@ -621,12 +683,15 @@ class GBNFCompiler:
 
         required_names = [name for name in properties if name in required]
         optional_names = [name for name in properties if name not in required]
+        # Required members, comma-separated.
         required_parts: list[Expression] = []
         for property_name in required_names:
             if required_parts:
                 required_parts.extend([Literal(","), _WS])
             required_parts.append(RuleRef(key_value_rules[property_name]))
         members: Expression = sequence(*required_parts)
+        # Optional members: one alternative per possible first optional property, each followed
+        # by the rest in order (any of which may be skipped).
         if optional_names:
             alternatives = []
             for start in range(len(optional_names)):
@@ -664,6 +729,8 @@ class GBNFCompiler:
         )
         return builder.add(name, expression)
 
+    # ``names[0]`` (required here unless ``first_is_optional``), then each later name optional,
+    # as a chain of helper rules so the grammar grows linearly, not combinatorially.
     def _optional_sequence(
         self,
         builder: _RuleBuilder,
@@ -695,6 +762,7 @@ class GBNFCompiler:
             expression = sequence(expression, RuleRef(rest_name))
         return expression
 
+    # Arrays: "[" then zero or more comma-separated items of the inline items schema, then "]".
     def _compile_array(
         self,
         builder: _RuleBuilder,
@@ -734,6 +802,8 @@ class GBNFCompiler:
             ),
         )
 
+    # Qwen3.5 enums: string members appear as bare text, others as JSON. Members must not contain
+    # protocol markup, and no two may encode to the same text (the parser could not tell them apart).
     def _compile_xml_enum(
         self,
         builder: _RuleBuilder,
@@ -773,6 +843,11 @@ class GBNFCompiler:
         return builder.add(builder.name("xml-enum"), expression)
 
     def _add_xml_text(self, builder: _RuleBuilder) -> str:
+        """Free text for a Qwen3.5 string parameter that never contains any XML protocol marker.
+
+        Built as a small automaton: one rule per "partial marker seen so far" state,
+        with transitions on the next character, so a marker can never complete.
+        """
         if "xml-text" in builder.rules:
             return "xml-text"
         markers = (
@@ -836,6 +911,8 @@ class GBNFCompiler:
         builder.add("xml-text", choice(EMPTY, *transitions("")))
         return "xml-text"
 
+    # Qwen3.5 arguments: one <parameter=name> block per property, newline-separated, in schema
+    # order. String values are free text, enums bare members, and other types JSON.
     def _compile_xml_object(
         self,
         builder: _RuleBuilder,
@@ -879,6 +956,7 @@ class GBNFCompiler:
                     pointer=property_pointer,
                     keyword="properties",
                 )
+            # Compiled as JSON first even when unused, so unsupported keywords are still rejected.
             json_rule = self._compile_node(
                 builder,
                 property_schema,
@@ -942,6 +1020,7 @@ class GBNFCompiler:
                 members = optional(Group(optional_expression))
         return members
 
+    # The Qwen3.5 version of _optional_sequence, with newlines instead of commas.
     def _xml_optional_sequence(
         self,
         builder: _RuleBuilder,
@@ -974,6 +1053,7 @@ class GBNFCompiler:
         return expression
 
     def _compile_tool(self, builder: _RuleBuilder, tool: Tool) -> str:
+        """The rule for one complete tool call in this compiler's protocol, tags included."""
         self._check_schema(tool.parameters)
         if tool.parameters.get("type") != "object":
             raise SchemaNotSupportedError(
@@ -992,6 +1072,7 @@ class GBNFCompiler:
                     Literal("</function>\n</tool_call>"),
                 ),
             )
+        # Qwen3: <tool_call>{"name": "<tool>", "arguments": {...}}</tool_call>, keys in that order.
         arguments = self._compile_node(builder, tool.parameters, "", 0)
         return builder.add(
             builder.name("tool"),
@@ -1021,6 +1102,12 @@ class GBNFCompiler:
         )
 
     def _add_plain_text(self, builder: _RuleBuilder) -> None:
+        """Plain text that never contains a protocol marker, for auto and none modes.
+
+        Same automaton construction as ``_add_xml_text``. The text may start with
+        whitespace but must then have a visible character, so an empty or blank
+        answer is not accepted as "text".
+        """
         prefixes = sorted(
             {
                 marker[:length]

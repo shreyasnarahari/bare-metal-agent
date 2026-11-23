@@ -1,3 +1,6 @@
+"""Evaluation policies: service settings per mode, error classification, and the repair rules.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -13,6 +16,8 @@ from .models import CaseResult, Mode
 
 
 class DeferredSchemaValidator:
+    """Checks tool choice and names but accepts any arguments, so BFCL's checker judges the schema."""
+
     def __init__(self, tools: Sequence[Tool], choice: ToolChoice) -> None:
         self.delegate = ToolCallValidator(tools, choice)
         for name in self.delegate.validators:
@@ -23,6 +28,7 @@ class DeferredSchemaValidator:
 
 
 def service_options(mode: Mode, *, defer_bfcl_schema: bool = False) -> dict[str, Any]:
+    """``ToolsmithService`` settings for a mode: grammars on for grammar and repair, one repair for repair."""
     if mode not in {Mode.PROMPT, Mode.GRAMMAR, Mode.REPAIR, Mode.THINKING}:
         raise ValueError(f"No Toolsmith service policy for {mode}")
     use_grammars = mode in {Mode.GRAMMAR, Mode.REPAIR}
@@ -52,6 +58,7 @@ def _explicit_code(exc: BaseException) -> str | None:
 
 
 def exception_error_code(exc: BaseException) -> str:
+    """The error's code, or ``backend_error`` when it carries none."""
     return _explicit_code(exc) or "backend_error"
 
 
@@ -87,6 +94,7 @@ def is_infrastructure_error(exc: BaseException) -> bool:
     return _explicit_code(exc) in INFRASTRUCTURE_CODES
 
 
+# Whether every call names a known tool and its arguments match that tool's schema.
 def calls_match_schema(
     definitions: Sequence[Mapping[str, Any]],
     calls: Sequence[Mapping[str, Any]],
@@ -111,6 +119,11 @@ def calls_match_schema(
 
 
 def repair_eligible(result: CaseResult) -> bool:
+    """Whether a repair could change this result: a wrong answer or a model-output error.
+
+    Not eligible: already repaired or ineligible cases, and failures a retry cannot
+    fix (backend errors, timeouts, truncation, unsupported schemas).
+    """
     if result.status in {"repaired", "constraint_unsupported"}:
         return False
     if result.status == "success":
@@ -127,6 +140,7 @@ def repair_eligible(result: CaseResult) -> bool:
 
 
 def reuse_grammar_result(result: CaseResult) -> bool:
+    """A grammar-mode result that was fully right: repair mode copies it instead of rerunning."""
     return (
         result.status == "success"
         and result.parse_valid

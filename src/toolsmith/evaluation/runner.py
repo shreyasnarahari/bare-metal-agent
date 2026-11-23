@@ -1,3 +1,13 @@
+"""Resumable evaluation runs: checkpoints, manifests, and serving-failure handling.
+
+A run writes one JSON line per finished case to a checkpoint, each stamped with
+the hash of the run's manifest (config, dataset, runtime). Rerunning skips the
+cases already there, and refuses a checkpoint written under a different
+manifest, naming the fields that changed, so results from two configurations
+are never mixed. A case whose request failed because the server did (not the
+model) is never recorded; the run stops and a rerun retries it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -54,6 +64,7 @@ class InfrastructureFailure(RuntimeError):
         self.failures = failures
 
 
+# Nested dicts as dotted paths ("runtime.parallel"), for readable manifest differences.
 def _flatten(value: Any, prefix: str = "") -> dict[str, Any]:
     if isinstance(value, Mapping):
         flat: dict[str, Any] = {}
@@ -75,6 +86,7 @@ def manifest_differences(recorded: Mapping[str, Any], current: Mapping[str, Any]
     return lines
 
 
+# The manifest dict is kept beside its checkpoint as <name>.manifest.json.
 def manifest_sidecar(path: str | Path) -> Path:
     path = Path(path)
     return path.with_name(path.name + ".manifest.json")
@@ -117,6 +129,7 @@ class CheckpointRunner:
         self.manifest_sha256 = manifest_sha256
         self.manifest = manifest
         self.completed: dict[str, CaseResult] = {}
+        # Load finished cases; every line must carry this run's manifest hash.
         if self.path.exists():
             for line in self.path.read_text().splitlines():
                 envelope = json.loads(line)
@@ -147,6 +160,7 @@ class CheckpointRunner:
             "manifest_sha256": self.manifest_sha256,
             "result": result.as_dict(),
         }
+        # fsync per case: a crash right after this line still keeps the case on disk.
         with self.path.open("a", encoding="utf-8") as output:
             output.write(json.dumps(envelope, ensure_ascii=False, allow_nan=False) + "\n")
             output.flush()
@@ -175,6 +189,7 @@ class CheckpointRunner:
         *,
         workers: int = EVAL_WORKERS,
     ) -> list[CaseResult]:
+        """Run every case not yet checkpointed (``workers`` at a time) and return all results in input order."""
         if workers < 1:
             raise ValueError("workers must be positive")
         ordered_ids: list[Any] = []
@@ -280,6 +295,7 @@ def write_identified_json(path: str | Path, value: Mapping[str, Any], identity: 
 
 
 def atomic_write_json(path: str | Path, value: Any) -> Path:
+    """Write JSON to a temporary file, then rename it into place: readers never see half a file."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")

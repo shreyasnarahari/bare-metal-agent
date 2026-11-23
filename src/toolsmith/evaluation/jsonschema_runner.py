@@ -1,3 +1,6 @@
+"""Run a JSONSchemaBench split through an engine and score it with JSONSchemaBench's evaluator.
+"""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +11,8 @@ from typing import Any
 from .runner import EVAL_WORKERS
 
 
+# Generate for every selected schema (``workers`` at a time, one per server slot), then
+# score coverage, compliance, and performance with the pinned JSONSchemaBench evaluator.
 def run_selected_generation(
     engine: Any,
     split: str,

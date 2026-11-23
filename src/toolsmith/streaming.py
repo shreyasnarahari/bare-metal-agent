@@ -1,3 +1,23 @@
+"""Incremental parser for Qwen3's native tool-call format.
+
+A Qwen3 response can contain, in order: an optional ``<think>...</think>``
+reasoning block, plain text, and any number of tool calls written as
+``<tool_call>{"name": ..., "arguments": {...}}</tool_call>``.
+
+``Qwen3IncrementalParser`` reads that text as it streams in and emits events
+(reasoning delta, content delta, tool-call start, argument delta, tool-call end)
+as soon as each piece is certain. Two rules make streaming safe:
+
+- Text that might be the start of a tag (``<tool`` at the end of a chunk) is
+  held back until the next chunk shows whether it is one.
+- Inside a tool call, the JSON envelope is parsed by a small state machine so
+  the call's name can be announced before its arguments finish, while the
+  arguments are passed through as raw text deltas.
+
+When the response ends, the parser checks every tag was closed and every
+argument object is strict JSON, then builds the final ``ParsedResponse``.
+"""
+
 from __future__ import annotations
 
 import json
@@ -10,12 +30,15 @@ from .json_utils import StrictJSONError, strict_json_loads
 
 
 class ToolCallParseError(ValueError):
+    """The response breaks the native protocol; ``code`` names how (e.g. ``unclosed_tool_call``)."""
+
     def __init__(self, message: str, *, code: str = "invalid_tool_call") -> None:
         super().__init__(message)
         self.code = code
 
 
 def _argument_json(text: str) -> Any:
+    # Final check on a finished call's arguments; parse errors keep the tool-call error type.
     try:
         return strict_json_loads(text)
     except StrictJSONError as exc:
@@ -27,6 +50,8 @@ def _argument_json(text: str) -> Any:
 
 @dataclass(frozen=True)
 class ParsedToolCall:
+    """One complete tool call; ``arguments`` is compact JSON text, as the OpenAI API sends it."""
+
     id: str
     name: str
     arguments: str
@@ -41,9 +66,14 @@ class ParsedToolCall:
 
 @dataclass(frozen=True)
 class ParsedResponse:
+    """The whole parsed answer: visible text, reasoning, and tool calls (each may be empty)."""
+
     content: str | None = None
     reasoning_content: str | None = None
     tool_calls: list[ParsedToolCall] = field(default_factory=list)
+
+
+# Streaming events, in the order the parser emits them for one response.
 
 
 @dataclass(frozen=True)
@@ -80,7 +110,12 @@ ParserEvent: TypeAlias = (
 
 
 class _TrimmedText:
-    """Keep streamed text identical to the stripped final message."""
+    """Keep streamed text identical to the stripped final message.
+
+    Leading whitespace is dropped, and trailing whitespace is held back until
+    more non-whitespace text follows, so the concatenated deltas always equal
+    the final ``.strip()``-ed content.
+    """
 
     def __init__(self) -> None:
         self._parts: list[str] = []
@@ -120,6 +155,12 @@ class _CallBuilder:
 
 
 class _JSONValueScanner:
+    """Find where a JSON object or array ends in streamed text, without decoding it.
+
+    Tracks brackets and string/escape state only, so the arguments value can be
+    forwarded as it arrives; strict decoding happens once the call is complete.
+    """
+
     def __init__(self) -> None:
         self.stack: list[str] = []
         self.in_string = False
@@ -157,6 +198,13 @@ class _JSONValueScanner:
 
 
 class _EnvelopeParser:
+    """State machine for the ``{"name": ..., "arguments": {...}}`` object inside one tool call.
+
+    States: start_object -> key_or_end -> colon -> value -> comma_or_end -> ...
+    -> done. Each step returns early (waiting for more text) when the buffer
+    runs out. Only the keys ``name`` and ``arguments`` are allowed, once each.
+    """
+
     def __init__(self, owner: Qwen3IncrementalParser) -> None:
         self.owner = owner
         self.decoder = json.JSONDecoder()
@@ -173,6 +221,7 @@ class _EnvelopeParser:
         self._process(events)
 
     def finish(self, events: list[ParserEvent]) -> None:
+        # The closing </tool_call> arrived: the envelope must be complete, valid JSON, with both keys.
         self._process(events)
         if self.state != "done" or self._non_whitespace(self.position) != len(self.buffer):
             raise ToolCallParseError(
@@ -252,6 +301,7 @@ class _EnvelopeParser:
                 )
                 if position == len(self.buffer):
                     return
+                # The name is a short string, decoded whole; the owner announces the call as soon as it is known.
                 if self.current_key == "name":
                     decoded = self._decode(position)
                     if decoded is None:
@@ -263,6 +313,7 @@ class _EnvelopeParser:
                     self.position = end
                     self.state = "comma_or_end"
                     self.owner._on_name(name, events)
+                # The arguments object is forwarded piece by piece while the scanner finds its end.
                 else:
                     if self.value_scanner is None:
                         if self.buffer[position] != "{":
@@ -294,6 +345,7 @@ class _EnvelopeParser:
             else:
                 raise AssertionError(self.state)
 
+    # A JSON value starting at ``position``, or None if the buffer does not hold all of it yet.
     def _decode(self, position: int) -> tuple[Any, int] | None:
         try:
             return self.decoder.raw_decode(self.buffer, position)
@@ -307,6 +359,15 @@ class _EnvelopeParser:
 
 
 class Qwen3IncrementalParser:
+    """Feed text chunks with ``feed``, then call ``finish``; ``response`` holds the result.
+
+    ``expect_thinking`` says whether the template asked for reasoning: ``True``
+    means a response with no ``<think>`` tag is reasoning until ``</think>``
+    (Qwen3 omits the opening tag when the template already wrote it), ``False``
+    means plain text from the start, and ``None`` decides from the first tags seen.
+    After any parse error the parser refuses further input.
+    """
+
     def __init__(
         self,
         id_factory: Callable[[], str] | None = None,
@@ -314,6 +375,7 @@ class Qwen3IncrementalParser:
         expect_thinking: bool | None = None,
     ) -> None:
         self._id_factory = id_factory or (lambda: f"call_{uuid.uuid4().hex[:24]}")
+        # States: start -> (thinking | omitted_thinking) -> text <-> tool_call.
         self._expect_thinking = expect_thinking
         self._state = "start"
         self._buffer = ""
@@ -326,7 +388,9 @@ class Qwen3IncrementalParser:
         self._used_ids: set[str] = set()
         self._envelope: _EnvelopeParser | None = None
         self._current_call: _CallBuilder | None = None
+        # Argument text that arrives before the call's name (if "arguments" comes first) waits here.
         self._pending_arguments: list[str] = []
+        # Whether the tool-call scan is inside a JSON string, where tag-like text is just data.
         self._in_string = False
         self._escaped = False
 
@@ -337,6 +401,7 @@ class Qwen3IncrementalParser:
         return self._response
 
     def feed(self, text: str) -> list[ParserEvent]:
+        """Add a chunk of model output; returns the events it made certain."""
         self._ensure_open()
         if not isinstance(text, str):
             raise TypeError("Parser input must be a string")
@@ -350,6 +415,7 @@ class Qwen3IncrementalParser:
         return events
 
     def finish(self) -> list[ParserEvent]:
+        """End of output: flush held text, check every block closed, and build ``response``."""
         self._ensure_open()
         events: list[ParserEvent] = []
         try:
@@ -372,6 +438,7 @@ class Qwen3IncrementalParser:
             self._response = ParsedResponse(
                 content=self._content.value(),
                 reasoning_content=self._reasoning.value(),
+                # Arguments are re-serialized compactly so every call has one canonical JSON form.
                 tool_calls=[
                     ParsedToolCall(
                         id=call.id,
@@ -397,6 +464,7 @@ class Qwen3IncrementalParser:
         if self._failed:
             raise RuntimeError("Parser is in a failed state")
 
+    # Run state handlers until one needs more input (returns False).
     def _drain(self, events: list[ParserEvent]) -> None:
         while True:
             if self._state == "start":
@@ -414,6 +482,8 @@ class Qwen3IncrementalParser:
             else:
                 raise AssertionError(self._state)
 
+    # Decide how the response begins: an explicit <think>, a bare </think> (the template opened
+    # the block), or straight text. Waits while the opening could still be a partial tag.
     def _process_start(self, events: list[ParserEvent]) -> bool:
         if not self._buffer:
             return False
@@ -446,6 +516,7 @@ class Qwen3IncrementalParser:
             return True
         return False
 
+    # Stream reasoning up to </think>, holding back any tail that could be the start of it.
     def _process_thinking(self, events: list[ParserEvent]) -> bool:
         closing = self._buffer.find("</think>")
         if closing != -1:
@@ -459,6 +530,7 @@ class Qwen3IncrementalParser:
             self._buffer = self._buffer[safe:]
         return False
 
+    # Stream visible text until the next tag. A closing tag with no opening one is an error.
     def _process_text(self, events: list[ParserEvent]) -> bool:
         candidates = [
             (position, marker)
@@ -499,6 +571,8 @@ class Qwen3IncrementalParser:
             self._escaped = False
         return True
 
+    # Pass tool-call text to the envelope parser until </tool_call>. Tags inside JSON strings
+    # are ignored, so an argument value may safely contain "</tool_call>".
     def _process_tool_call(self, events: list[ParserEvent]) -> bool:
         position = 0
         while position < len(self._buffer):
@@ -544,6 +618,7 @@ class Qwen3IncrementalParser:
             self._buffer = self._buffer[safe:]
         return False
 
+    # Called by the envelope parser: start the call, then release any arguments that came first.
     def _on_name(self, name: str, events: list[ParserEvent]) -> None:
         if self._current_call is not None:
             return
@@ -583,6 +658,8 @@ class Qwen3IncrementalParser:
 
     @staticmethod
     def _safe_length(text: str, markers: tuple[str, ...]) -> int:
+        # How much of ``text`` can be emitted now: everything except a tail that is a prefix of
+        # some marker ("<tool" might become "<tool_call>" with the next chunk).
         hold = 0
         for marker in markers:
             maximum = min(len(marker) - 1, len(text))

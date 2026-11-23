@@ -117,10 +117,12 @@ class JournalFormatError(ReplayMismatch):
 
 
 def new_episode_id() -> str:
+    """A random id for an ad-hoc episode (claimed episodes derive theirs from the manifest)."""
     return f"ep_{uuid.uuid4().hex[:16]}"
 
 
 def manifest_path_for(journal_path: str | Path) -> Path:
+    """``<episode_id>.manifest.json`` beside ``<episode_id>.jsonl``."""
     path = Path(journal_path)
     return path.with_name(f"{path.stem}.manifest.json")
 
@@ -188,6 +190,7 @@ def read_journal(path: str | Path, *, allow_torn_tail: bool = False) -> list[dic
 
 
 def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
+    """Check one record against the frozen schema: a known event, the next seq, exactly its fields."""
     event = record.get("event")
     if event not in EVENT_FIELDS:
         raise JournalFormatError(f"Unknown journal event {event!r}", seq=expected_seq, field="event")
@@ -211,6 +214,13 @@ def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
 
 
 class EpisodeJournal:
+    """Append-only record of one episode, or (with ``expected``) a checker that replays one.
+
+    Every record gets the next ``seq``. While records from ``expected`` remain,
+    each new event is compared with the recorded one instead of being written;
+    after that it is written, or, with ``write=False``, refused.
+    """
+
     def __init__(
         self,
         path: str | Path,
@@ -222,6 +232,7 @@ class EpisodeJournal:
     ) -> None:
         if not _EPISODE_ID.fullmatch(episode_id):
             raise ValueError(f"Episode ids must be short and filename-safe: {episode_id!r}")
+        # Secrets in the environment (HF_TOKEN, LOCAL_KEY) are always redacted, even if not passed in.
         environment = tuple(os.environ.get(name, "") for name in ENVIRONMENT_SECRETS)
         self.path = Path(path)
         self.episode_id = episode_id
@@ -255,6 +266,7 @@ class EpisodeJournal:
         return self._seq < len(self._expected)
 
     def append(self, event: str, **fields: Any) -> dict[str, Any]:
+        """Write (or, while replaying, verify) the next record, and return it as stored."""
         record = {"event": event, "episode_id": self.episode_id, "seq": self._seq, **fields}
         if self.verifying:
             recorded = self._expected[self._seq]
@@ -284,6 +296,8 @@ class EpisodeJournal:
             raise ReplayMismatch(
                 f"The episode ended before the recorded {recorded.get('event')}", seq=self._seq, field="event"
             )
+
+    # One method per event type, so every field is named and checked at the call site.
 
     def episode_started(
         self,

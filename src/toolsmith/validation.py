@@ -1,3 +1,16 @@
+"""Validate what the model produced before it reaches a client.
+
+Two validators share one reporting style (JSON Pointer paths, sorted, capped):
+
+- ``ToolCallValidator`` checks a parsed response against the request's
+  ``tool_choice`` (none, required, or one named tool) and checks every call's
+  arguments: a registered tool, strict JSON, and the tool's JSON Schema.
+- ``StructuredOutputValidator`` checks a ``response_format=json_schema`` answer.
+
+Each failure carries a stable ``code`` (``unknown_tool``,
+``schema_validation_failed``, ...) that the API, repair, and evaluation use.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -12,6 +25,8 @@ from .registry import Tool, ensure_unique_tool_names
 
 
 class ToolCallValidationError(ValueError):
+    """Tool calls broke the tool choice or a schema; ``details`` lists each problem."""
+
     def __init__(
         self,
         message: str,
@@ -25,6 +40,8 @@ class ToolCallValidationError(ValueError):
 
 
 class StructuredOutputValidationError(ValueError):
+    """A structured response is not strict JSON or does not match its schema."""
+
     def __init__(
         self,
         message: str,
@@ -38,10 +55,12 @@ class StructuredOutputValidationError(ValueError):
 
 
 def _pointer(parts: Sequence[object]) -> str:
+    # RFC 6901 JSON Pointer: escape ~ before /, so a key like "a/b" stays one segment.
     tokens = [str(part).replace("~", "~0").replace("/", "~1") for part in parts]
     return "/" + "/".join(tokens) if tokens else "/"
 
 
+# Errors are sorted by location so the same bad output always produces the same message.
 def _schema_details(
     validator: Draft202012Validator,
     value: Any,
@@ -59,6 +78,8 @@ def _schema_details(
 
 
 class StructuredOutputValidator:
+    """Strict-JSON decode a structured response and validate it against a Draft 2020-12 schema."""
+
     def __init__(self, schema: Mapping[str, Any], *, max_errors: int = 20) -> None:
         if max_errors < 1:
             raise ValueError("max_errors must be positive")
@@ -87,6 +108,8 @@ class StructuredOutputValidator:
 
 
 class ToolCallValidator:
+    """Check a parsed response's tool calls against the tool choice and each tool's schema."""
+
     def __init__(
         self,
         tools: Sequence[Tool],
@@ -104,7 +127,9 @@ class ToolCallValidator:
         }
 
     def validate(self, response: ParsedResponse) -> None:
+        """Raise ``ToolCallValidationError`` on the first tool-choice violation, or on every bad call."""
         calls = response.tool_calls
+        # Tool-choice rules first: they fail the whole response at once.
         if self.choice.mode == "none" and calls:
             raise ToolCallValidationError(
                 "The model returned a tool call despite tool_choice='none'",
@@ -122,6 +147,7 @@ class ToolCallValidator:
                     code="tool_choice_violation",
                 )
 
+        # Then every call is checked, so one error message reports all bad calls together.
         failures: list[tuple[str, str, tuple[str, ...]]] = []
         for call in calls:
             validator = self.validators.get(call.name)
@@ -150,6 +176,7 @@ class ToolCallValidator:
                     )
                 )
         if failures:
+            # A single failure keeps its specific code; several get the generic one.
             code = failures[0][0] if len(failures) == 1 else "tool_call_validation_failed"
             details = tuple(
                 detail

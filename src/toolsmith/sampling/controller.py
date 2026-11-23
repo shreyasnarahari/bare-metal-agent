@@ -1,3 +1,20 @@
+"""Mask controllers: decide, token by token, what a generation step may produce.
+
+A controller holds the grammar state for one generation. Before each step the
+generation loop asks it for a ``MaskDecision`` (which tokens are allowed, or
+which are blocked); after sampling it ``commit``s the chosen token.
+
+- ``FixedMaskController`` constrains the whole response to the grammar.
+- ``TriggeredMaskController`` lets the model write freely (for example its
+  reasoning) and switches the grammar on only once it writes the trigger
+  ``<tool_call>``. A token that would complete the trigger is checked together
+  with the bytes that follow it inside the same token, so the model cannot sneak
+  invalid arguments past the switch.
+
+Only batch size 1, one token appended per step, is supported; anything else
+(beam search, rewinding, speculative decoding) is rejected loudly.
+"""
+
 from __future__ import annotations
 
 import time
@@ -10,10 +27,12 @@ from .vocabulary import Vocabulary
 
 
 class UnsupportedGenerationError(ValueError):
-    pass
+    """The generation setup is not batch-1, one-token-per-step decoding."""
 
 
 class IncompleteConstrainedGeneration(RuntimeError):
+    """Generation stopped (token limit, EOS) before the grammar could finish; keeps what was made."""
+
     def __init__(
         self,
         message: str,
@@ -30,6 +49,8 @@ class IncompleteConstrainedGeneration(RuntimeError):
 
 @dataclass(frozen=True)
 class MaskDecision:
+    """One step's constraint: an allow-list when active, or a (usually short) block-list when free."""
+
     allowed_token_ids: tuple[int, ...] | None
     blocked_token_ids: tuple[int, ...]
     elapsed_seconds: float
@@ -40,11 +61,14 @@ class MaskDecision:
 
 
 class BatchOneSynchronizer:
+    """Track the token Hugging Face appended since the last step, and reject other decoding modes."""
+
     def __init__(self) -> None:
         self.previous_length: int | None = None
         self.prompt_length: int | None = None
 
     def synchronize(self, input_ids: object) -> int | None:
+        """The token added since the previous call (``None`` on the first call, which sees the prompt)."""
         shape = getattr(input_ids, "shape", None)
         if shape is None or len(shape) != 2 or int(shape[0]) != 1:
             raise UnsupportedGenerationError(
@@ -65,6 +89,8 @@ class BatchOneSynchronizer:
 
 
 class _BaseController:
+    """Shared bookkeeping: generated ids, EOS, mask timings, and the end-of-generation check."""
+
     def __init__(self, vocabulary: Vocabulary) -> None:
         self.vocabulary = vocabulary
         self.generated_token_ids: list[int] = []
@@ -86,6 +112,7 @@ class _BaseController:
         raise NotImplementedError
 
     def finalize(self, stop_reason: str) -> None:
+        """Raise if generation stopped where the grammar cannot end."""
         if not self.can_finish():
             raise IncompleteConstrainedGeneration(
                 f"Generation ended with an incomplete constrained response ({stop_reason})",
@@ -96,6 +123,8 @@ class _BaseController:
 
 
 class FixedMaskController(_BaseController):
+    """The grammar applies from the first token to the last."""
+
     def __init__(
         self,
         vocabulary: Vocabulary,
@@ -130,6 +159,7 @@ class FixedMaskController(_BaseController):
         )
 
     def commit(self, token_id: int) -> None:
+        """Advance the grammar by the sampled token (EOS only where the grammar can finish)."""
         if token_id in self.vocabulary.eos_token_ids:
             if not self.automaton.can_finish(self.state):
                 raise DeadEndError("EOS is not valid before the grammar can finish")
@@ -147,16 +177,22 @@ class FixedMaskController(_BaseController):
 
 @dataclass(frozen=True)
 class _FreeState:
+    """Free text so far; ``suffix`` is the longest tail that could still grow into the trigger."""
+
     suffix: bytes = b""
 
 
 @dataclass(frozen=True)
 class _TriggeredState:
+    """Either still free (``free``) or constrained (``active`` automaton state), never both."""
+
     free: _FreeState | None
     active: AutomatonState | None
 
 
 class TriggeredMaskController(_BaseController):
+    """Free generation until ``trigger``, then the grammar (which starts with the trigger itself)."""
+
     def __init__(
         self,
         vocabulary: Vocabulary,
@@ -183,12 +219,15 @@ class TriggeredMaskController(_BaseController):
         self._free_cache: OrderedDict[bytes, tuple[int, ...]] = OrderedDict()
         self.free_cache_hits = 0
         self.free_cache_misses = 0
+        # Ids with no byte form (padding, special tokens other than EOS) are blocked in free mode.
         self._unusable = tuple(
             token_id
             for token_id in range(vocabulary.model_vocabulary_size)
             if vocabulary.raw_tokens[token_id] is None
             and token_id not in vocabulary.eos_token_ids
         )
+        # Only tokens containing the trigger's first byte can start or complete the trigger, so
+        # free-mode checks look at those alone instead of the whole vocabulary.
         self._contains_trigger_start = frozenset(
             entry.token_id
             for entry in vocabulary.entries
@@ -199,6 +238,7 @@ class TriggeredMaskController(_BaseController):
     def active(self) -> bool:
         return self.free_state is None
 
+    # The longest tail of ``data`` that is a proper prefix of the trigger.
     def _longest_suffix(self, data: bytes) -> bytes:
         maximum = min(len(self.trigger) - 1, len(data))
         for size in range(maximum, 0, -1):
@@ -207,6 +247,8 @@ class TriggeredMaskController(_BaseController):
                 return candidate
         return b""
 
+    # Feed a token's bytes in free mode. If they complete the trigger, the grammar starts there
+    # and the rest of the same token must already be valid under it; None means invalid.
     def _advance_free(
         self,
         free: _FreeState,
@@ -235,6 +277,7 @@ class TriggeredMaskController(_BaseController):
             return None
         return _TriggeredState(None, active)
 
+    # Whether a token could interact with the trigger from the current free state.
     def _relevant(self, token_id: int, raw: bytes) -> bool:
         if token_id in self._contains_trigger_start:
             return True
@@ -243,6 +286,8 @@ class TriggeredMaskController(_BaseController):
             self.trigger[len(suffix) : len(suffix) + 1]
         )
 
+    # Free mode: block unusable ids and any trigger-completing token whose remaining bytes break the
+    # grammar. The answer depends only on the trigger suffix, so it is cached per suffix.
     def _free_blocked(self) -> tuple[tuple[int, ...], int, bool]:
         suffix = self.free_state.suffix if self.free_state is not None else b""
         cached = self._free_cache.get(suffix)
@@ -267,6 +312,7 @@ class TriggeredMaskController(_BaseController):
         return result, candidates, False
 
     def mask(self) -> MaskDecision:
+        """An allow-list once the grammar is active; a block-list while still free."""
         started = time.perf_counter()
         self.mask_calls += 1
         if self.free_state is None:
@@ -305,7 +351,7 @@ class TriggeredMaskController(_BaseController):
                 raise DeadEndError(
                     f"Token {token_id} is invalid at trigger/grammar position: {self.describe()}"
                 )
-            if was_free and advanced.free is None:
+            if was_free and advanced.free is None:  # the trigger was written by this token
                 self.activation_step = len(self.generated_token_ids)
             self.free_state = advanced.free
             if advanced.active is not None:
@@ -313,6 +359,7 @@ class TriggeredMaskController(_BaseController):
         self.generated_token_ids.append(token_id)
 
     def can_finish(self) -> bool:
+        # Free text may end anywhere; once triggered, the call must be complete.
         return self.free_state is not None or self.automaton.can_finish(self.state)
 
     def describe(self) -> str:

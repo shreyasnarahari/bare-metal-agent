@@ -17,6 +17,8 @@ if TYPE_CHECKING:
 
 
 class TurnKind(str, Enum):
+    """What one model turn was: a final answer, tool calls, or a failure."""
+
     TEXT = "text"
     TOOL_CALLS = "tool_calls"
     # The model's output failed to parse or validate. The model can repair it,
@@ -28,6 +30,8 @@ class TurnKind(str, Enum):
 
 
 class EpisodeStatus(str, Enum):
+    """Where an episode is: running, or one of its four endings."""
+
     RUNNING = "running"
     DONE = "done"
     BUDGET_EXHAUSTED = "budget_exhausted"
@@ -45,6 +49,7 @@ class ToolCall:
 
     @classmethod
     def from_openai(cls, call: Mapping[str, Any]) -> ToolCall:
+        """From an OpenAI ``tool_calls`` entry; dict arguments are re-encoded as compact JSON."""
         function = call.get("function") or {}
         arguments = function.get("arguments", "{}")
         if not isinstance(arguments, str):
@@ -56,6 +61,7 @@ class ToolCall:
         )
 
     def to_openai(self) -> dict[str, Any]:
+        """Back to an OpenAI ``tool_calls`` entry."""
         return {
             "id": self.id,
             "type": "function",
@@ -65,6 +71,8 @@ class ToolCall:
 
 @dataclass(frozen=True)
 class ModelTurn:
+    """One model response as the loop sees it: the assistant message, its calls, usage, or an error."""
+
     kind: TurnKind
     assistant_message: dict[str, Any] | None
     tool_calls: tuple[ToolCall, ...]
@@ -91,6 +99,7 @@ class ModelTurn:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
     ) -> ModelTurn:
+        """A failed turn (parse error or fatal error) with no message and no calls."""
         if kind not in (TurnKind.PARSE_ERROR, TurnKind.FATAL_ERROR):
             raise ValueError(f"{kind} is not a failure kind")
         return cls(
@@ -150,6 +159,7 @@ class ToolResult:
         return self.error.model_dict()
 
     def content(self) -> str:
+        """The observation as the text of a ``tool`` message."""
         return observation_content(self.observation())
 
 
@@ -160,6 +170,8 @@ def observation_content(observation: Mapping[str, Any]) -> str:
 
 @dataclass(frozen=True)
 class EpisodeResult:
+    """How an episode ended: status, final conversation and answer, token totals, and its journal."""
+
     status: EpisodeStatus
     messages: list[dict[str, Any]]
     steps: int

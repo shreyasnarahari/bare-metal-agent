@@ -35,8 +35,9 @@ OrderStatus = Literal["placed", "shipped", "delivered", "cancelled"]
 TicketStatus = Literal["open", "pending", "resolved"]
 ORDER_STATUSES: tuple[str, ...] = OrderStatus.__args__
 TICKET_STATUSES: tuple[str, ...] = TicketStatus.__args__
-CANCELLABLE_STATUSES = frozenset({"placed"})
+CANCELLABLE_STATUSES = frozenset({"placed"})  # shipped or delivered orders cannot be cancelled
 
+# New rows get ids like "ref_7" from a per-kind counter seeded by the fixture.
 _ID_PREFIXES = {"note": "note", "refund": "ref", "ticket": "tkt"}
 _CENT = Decimal("0.01")
 
@@ -73,6 +74,7 @@ def public_dict(row: Any) -> Any:
 
 
 def _strip_unset_keys(value: Any) -> Any:
+    # Recursively drop "idempotency_key": None entries (nested rows such as notes included).
     if isinstance(value, dict):
         return {
             key: _strip_unset_keys(item)
@@ -82,6 +84,9 @@ def _strip_unset_keys(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_unset_keys(item) for item in value]
     return value
+
+
+# Rows. Frozen rows never change after creation; Order and Ticket change status in place.
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,7 @@ class Order:
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> Order:
+        """Rebuild an order (with its line items and notes) from fixture JSON."""
         values = dict(row)
         values["items"] = [LineItem(**item) for item in values.get("items", [])]
         values["notes"] = [Note(**note) for note in values.get("notes", [])]
@@ -156,6 +162,7 @@ class Ticket:
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> Ticket:
+        """Rebuild a ticket (with its status history) from fixture JSON."""
         values = dict(row)
         values["transitions"] = [
             StatusTransition(**transition) for transition in values.get("transitions", [])
@@ -220,10 +227,13 @@ class Store:
         self._tickets = _index(tickets, "ticket_id")
         self._refunds = _index(refunds, "refund_id")
         self._ledger = _index(ledger or [], "entry_id")
+        # Idempotency key -> receipt (kind, id...) of the row it created, rebuilt from the rows.
         self._idempotency: dict[str, tuple[str, ...]] = {}
         self._reindex_keys()
+        # Reentrant, so a handler holding the lock can call other store methods.
         self.lock = threading.RLock()
 
+    # Locks cannot be copied or pickled: drop it for clone() and process pools, recreate it after.
     def __getstate__(self) -> dict[str, Any]:
         state = dict(self.__dict__)
         state.pop("lock")
@@ -235,6 +245,7 @@ class Store:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, fixture_sha256: str | None = None) -> Store:
+        """Build a store from fixture-shaped JSON (the inverse of ``to_dict``)."""
         return cls(
             version=data["version"],
             clock=data["clock"],
@@ -265,9 +276,11 @@ class Store:
         return data
 
     def snapshot_sha256(self) -> str:
+        """Hash of the whole public state; journals record it before and after each episode."""
         return canonical_hash(self.to_dict())
 
     def clone(self) -> Store:
+        """An independent deep copy for one episode."""
         with self.lock:
             return deepcopy(self)
 
@@ -283,7 +296,8 @@ class Store:
         return _lookup(self._tickets, "ticket", ticket_id)
 
     def orders_for(self, customer_id: str, status: str | None = None) -> list[Order]:
-        self.customer(customer_id)
+        """A customer's orders, optionally only those with ``status``."""
+        self.customer(customer_id)  # raises NotFoundError for an unknown customer
         return [
             order
             for order in self._orders.values()
@@ -458,11 +472,13 @@ class Store:
         order.cancelled_at = self.clock
         return order
 
+    # Allocate the next id of a kind ("tkt_12") and advance its counter.
     def _next_id(self, kind: str) -> str:
         number = self._counters[kind]
         self._counters[kind] = number + 1
         return f"{_ID_PREFIXES[kind]}_{number}"
 
+    # The receipt for a known key; reusing a key for a different kind of row is a conflict.
     def _existing(self, kind: str, key: str | None) -> tuple[str, ...] | None:
         if key is None:
             return None
@@ -475,6 +491,7 @@ class Store:
         if key is not None:
             self._idempotency[key] = receipt
 
+    # Rebuild the key index from the rows themselves (after loading or unpickling).
     def _reindex_keys(self) -> None:
         for refund in self._refunds.values():
             self._remember(refund.idempotency_key, ("refund", refund.refund_id))
@@ -493,11 +510,13 @@ def load_fixture(path: str | Path | None = None) -> Store:
     data = json.loads(fixture_path.read_text(encoding="utf-8"))
     digest = canonical_hash(data)
     store = Store.from_dict(data, fixture_sha256=digest)
+    # The store must serialize back to exactly the fixture, or hashes in journals would drift.
     if store.snapshot_sha256() != digest:
         raise ValueError(f"Fixture does not round-trip through Store: {fixture_path}")
     return store
 
 
+# Rows keyed by their id, in fixture order; duplicate ids are rejected.
 def _index(rows: list[Any], key: str) -> dict[str, Any]:
     indexed: dict[str, Any] = {}
     for row in rows:

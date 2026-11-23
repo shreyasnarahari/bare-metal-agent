@@ -395,7 +395,8 @@ def test_long_cells_check_drive_and_network_calls_cannot_hang():
     hardware = "".join(notebook_cell("hardware")["source"])
 
     for cell_id in ("day10-own-qwen3", "day10-bfcl-qwen35", "day10-schema-coverage", "day10-maskbench"):
-        assert "".join(notebook_cell(cell_id)["source"]).startswith("ensure_drive()"), cell_id
+        code = [line for line in "".join(notebook_cell(cell_id)["source"]).splitlines() if line.strip() and not line.startswith("#")]
+        assert code[0].startswith("ensure_drive()"), cell_id
     assert setup.count("check=True, timeout=1800)") == 2
     assert "'HF_HUB_DOWNLOAD_TIMEOUT': '60'" in hardware and "'GIT_HTTP_LOW_SPEED_TIME': '60'" in hardware
 

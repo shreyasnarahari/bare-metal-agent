@@ -1,3 +1,12 @@
+"""Glue between BFCL (the Berkeley Function Calling Leaderboard) and Toolsmith.
+
+Converts BFCL's function definitions into OpenAI tools with BFCL's own
+converter, checks whether Toolsmith's grammar compiler can constrain a case's
+tools at all (cases it cannot are reported as ineligible for the grammar modes,
+never silently run unconstrained), and turns OpenAI responses back into BFCL's
+result format.
+"""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +17,7 @@ from ..grammar import GBNFCompiler, GrammarConfigurationError, SchemaNotSupporte
 from ..registry import Tool
 from ..protocols import ToolProtocol
 
+# The non-live, single-turn Python AST categories this project evaluates.
 BFCL_CATEGORIES = (
     "simple_python",
     "multiple",
@@ -19,12 +29,15 @@ BFCL_CATEGORIES = (
 
 @dataclass(frozen=True)
 class ConstraintSupport:
+    """Whether a case's tools compile to a grammar, and if not, why (with a JSON Pointer)."""
+
     eligible: bool
     error: dict[str, Any] | None = None
     grammar_sha256: str | None = None
 
 
 def convert_bfcl_tools(functions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """BFCL function definitions as OpenAI tools, using BFCL's own type mapping."""
     try:
         from bfcl_eval.constants.enums import ModelStyle
         from bfcl_eval.constants.type_mappings import GORILLA_TO_OPENAPI
@@ -34,6 +47,7 @@ def convert_bfcl_tools(functions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return convert_to_tool(functions, GORILLA_TO_OPENAPI, ModelStyle.OPENAI_COMPLETIONS)
 
 
+# Try compiling the case's tools; any unsupported schema makes the case ineligible for grammar modes.
 def constraint_support(
     definitions: list[dict[str, Any]],
     protocol: ToolProtocol = ToolProtocol.QWEN3,
@@ -51,6 +65,7 @@ def constraint_support(
 
 
 def openai_message_to_bfcl_result(message: dict[str, Any]) -> Any:
+    """BFCL's result shape: ``[{name: arguments_json}, ...]`` for calls, or the text answer."""
     calls = message.get("tool_calls") or []
     if not calls:
         return message.get("content") or ""
@@ -60,6 +75,7 @@ def openai_message_to_bfcl_result(message: dict[str, Any]) -> Any:
     ]
 
 
+# One line of a BFCL result file: id, result, latency, and token counts.
 def result_entry(
     case_id: str,
     response: dict[str, Any],
@@ -78,6 +94,7 @@ def result_entry(
 
 
 def decoded_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
+    """The response's tool calls as ``{"name", "arguments"}`` with arguments decoded."""
     calls = response["choices"][0]["message"].get("tool_calls") or []
     return [
         {
@@ -89,6 +106,7 @@ def decoded_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def eligible_ids(results: list[Any]) -> set[str]:
+    """Ids of cases the grammar could constrain (constrained scores use only these)."""
     return {
         result.case_id
         for result in results

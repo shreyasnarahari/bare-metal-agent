@@ -1,3 +1,9 @@
+"""A BFCL model handler for Toolsmith results, so BFCL's official checker can score them.
+
+The handler is registered under a name per model and mode; BFCL then reads the
+result files Toolsmith wrote and scores them with its own AST checker.
+"""
+
 from __future__ import annotations
 
 import json
@@ -5,6 +11,7 @@ from typing import Any
 
 
 def decode_standardized_result(result: Any) -> list[dict[str, Any]]:
+    """``[{name: arguments}]`` with JSON-string arguments decoded, as BFCL's checker expects."""
     if not isinstance(result, list):
         raise TypeError("A function-calling result must be a list")
     decoded = []
@@ -22,6 +29,7 @@ def decode_standardized_result(result: Any) -> list[dict[str, Any]]:
 
 
 def handler_type() -> type:
+    """The handler class, built lazily so bfcl-eval is needed only when scoring."""
     try:
         from bfcl_eval.model_handler.base_handler import BaseHandler
         from bfcl_eval.model_handler.utils import convert_to_function_call
@@ -43,6 +51,7 @@ def handler_type() -> type:
 
 
 def register_handler(registry_name: str, *, model_name: str) -> Any:
+    """Add the handler to BFCL's model registry under ``registry_name`` (in this process only)."""
     try:
         from bfcl_eval.constants.model_config import MODEL_CONFIG_MAPPING, ModelConfig
     except ImportError as exc:

@@ -1,3 +1,11 @@
+"""Strict JSON decoding for model output and recorded evidence.
+
+Python's ``json`` module quietly accepts things a tool-call argument must not
+contain: ``NaN``/``Infinity`` and duplicate object keys (where the last value
+silently wins). ``strict_json_loads`` rejects both and reports every decoding
+problem as one exception type.
+"""
+
 from __future__ import annotations
 
 import json
@@ -6,10 +14,12 @@ from typing import Any
 
 
 class StrictJSONError(ValueError):
-    pass
+    """Input is not strict JSON (malformed, non-finite number, or duplicate key)."""
 
 
 def strict_json_loads(text: str) -> Any:
+    """``json.loads`` that rejects ``NaN``/``Infinity``, overflowing floats, and duplicate keys."""
+
     def reject_constant(constant: str) -> None:
         raise StrictJSONError(f"Invalid JSON numeric constant: {constant}")
 
@@ -27,6 +37,7 @@ def strict_json_loads(text: str) -> Any:
             result[key] = value
         return result
 
+    # The hooks run while decoding, so a bad value fails at the exact place it appears.
     try:
         return json.loads(
             text,

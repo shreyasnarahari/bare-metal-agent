@@ -1,3 +1,13 @@
+"""A JSONSchemaBench engine backed by the Toolsmith shim.
+
+``JSONSchemaEngineCore`` sends one ``response_format=json_schema`` request per
+schema and maps the outcome to JSONSchemaBench's compile and decoding statuses.
+``create_engine_class`` wraps it in JSONSchemaBench's ``Engine`` interface; it
+is built lazily because the benchmark package is installed only on Colab. A
+serving failure raises instead of being scored, so a dead server cannot count
+as failed generations.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +21,8 @@ from .runner import InfrastructureError
 
 @dataclass(frozen=True)
 class JSONGenerationResult:
+    """One generation and its compile/decoding status, in JSONSchemaBench's terms."""
+
     generation: str
     compile_status: str
     decoding_status: str
@@ -22,6 +34,8 @@ class JSONGenerationResult:
 
 
 class JSONSchemaEngineCore:
+    """Ask the shim for a JSON answer matching each schema, in the configured mode."""
+
     def __init__(
         self,
         client: Any,
@@ -38,6 +52,7 @@ class JSONSchemaEngineCore:
         self.seed = seed
 
     def generate(self, messages: list[dict[str, Any]], schema: dict[str, Any]) -> JSONGenerationResult:
+        """One structured-output request. Unsupported schemas count as compile failures."""
         thinking = self.mode is Mode.THINKING
         try:
             response = self.client.chat.completions.create(
@@ -97,6 +112,7 @@ class JSONSchemaEngineCore:
 
 
 def create_engine_class() -> type:
+    """JSONSchemaBench's ``Engine`` subclass for Toolsmith (its ``Config`` is attached as ``.Config``)."""
     try:
         from core.engine import Engine, EngineConfig
         from core.types import (

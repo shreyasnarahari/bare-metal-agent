@@ -64,13 +64,15 @@ from .types import (
 )
 from .validate import Verdict, parse_error_observation, suspicious_result_observation, validate_call
 
-MAX_PARALLEL_READS = 4
+MAX_PARALLEL_READS = 4  # read-only calls in one message share at most this many threads
+# What the model sees for a write that was skipped because an earlier result looked wrong.
 SKIPPED_WRITE_HINT = (
     "Not run: an earlier result in this turn failed a consistency check. Re-check with the read tools before writing."
 )
 
 
 def observation_message(call: ToolCall, result: ToolResult) -> dict[str, Any]:
+    """The ``tool`` message that answers ``call`` in the conversation history."""
     return {"role": "tool", "tool_call_id": call.id, "content": result.content()}
 
 
@@ -92,6 +94,8 @@ class _Episode:
 
 @dataclass
 class _Plan:
+    """What was decided about one call before it runs: validation, guard, idempotency key, fault slot."""
+
     call: ToolCall
     verdict: Verdict
     decision: GuardDecision
@@ -164,6 +168,7 @@ def run_episode(
     tools = registry.schemas()
     final_content: str | None = None
 
+    # The first journal record pins everything replay must match: settings, store, tools, policies.
     journal.episode_started(
         settings=settings,
         fixture_sha256=store.fixture_sha256,
@@ -179,6 +184,7 @@ def run_episode(
     )
     try:
         while controller.running:
+            # 1. Stop before calling the model if the run was cancelled or a budget is used up.
             if cancel is not None and cancel.is_set():
                 controller.cancel()
                 break
@@ -191,11 +197,14 @@ def run_episode(
                 controller.abort("completion_truncated", check.slot_overflow)
                 break
 
+            # 2. One model turn. Call ids are numbered by step, so replay sees the same ids.
             messages_sha256 = canonical_hash(history)
             turn = _visible_or_parse_error(client.complete(history, tools).with_call_ids(controller.steps))
             controller.record_usage(turn)
             journal.model_turn(step=controller.steps, turn=turn, messages_sha256=messages_sha256)
 
+            # 3. Classify the turn: text ends the episode; a fatal error aborts it; a parse error
+            #    becomes an observation the model can fix on its next step.
             if turn.kind is TurnKind.TEXT:
                 final_content = turn.content
                 history.append(turn.assistant_message or {"role": "assistant", "content": turn.content})
@@ -212,6 +221,7 @@ def run_episode(
                 controller.finish_step()
                 continue
 
+            # 4. Tool calls: escalate a resend of a blocked call, otherwise run the turn's calls.
             history.append(turn.assistant_message)
             if _escalate_repeat(turn, controller, journal):
                 break
@@ -222,6 +232,7 @@ def run_episode(
                 break
             controller.finish_step()
 
+        # Controller endings get a final message rendered from the journal (optionally paraphrased).
         status = controller.state
         if status in (EpisodeStatus.BUDGET_EXHAUSTED, EpisodeStatus.ESCALATED):
             final_content = render_final_message(status, journal.records)
@@ -310,10 +321,13 @@ def _escalate_repeat(turn: ModelTurn, controller: EpisodeController, journal: Ep
 def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
     """Run one assistant message's calls. Returns an escalation reason, or None to keep going."""
     registry = episode.registry
+    # Only a message made entirely of reads runs in parallel; any write makes it sequential.
     parallel = len(calls) > 1 and all(
         call.name in registry and registry.policy(call.name).effect is Effect.READ for call in calls
     )
     if parallel:
+        # Plan in call order first (validation, guard, fault slots), run concurrently, then finish
+        # (recover and journal) in call order again, so the journal does not depend on timing.
         plans = [_plan(call, episode, reserve_fault_index=True) for call in calls]
         width = min(MAX_PARALLEL_READS, len(plans))
         with ThreadPoolExecutor(max_workers=width, thread_name_prefix="steadyhand-read") as pool:
@@ -325,6 +339,7 @@ def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
                 return reason
         return None
 
+    # Sequential: once a result fails a sanity check, the turn's remaining writes are skipped.
     skip_writes = False
     for call in calls:
         plan = _plan(call, episode, reserve_fault_index=False)
@@ -339,6 +354,11 @@ def _run_tool_turn(calls: Sequence[ToolCall], episode: _Episode) -> str | None:
 
 
 def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool) -> _Plan:
+    """Validate the call and show it to the guard; for a runnable call, add its key and fault slot.
+
+    Writes get an idempotency key when the strategy uses keyed writes. Parallel reads
+    reserve their fault index now, in call order, because they may finish in any order.
+    """
     verdict = validate_call(call, episode.registry, episode.store)
     decision = episode.controller.guard.observe(call)
     plan = _Plan(call=call, verdict=verdict, decision=decision)
@@ -352,6 +372,7 @@ def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool) -> _P
 
 
 def _first_attempt(plan: _Plan, episode: _Episode) -> ToolResult:
+    """Run the call once through the executor (faults injected there, if scheduled)."""
     options: dict[str, Any] = {}
     if episode.injector is not None:
         options["injector"] = episode.injector
@@ -368,6 +389,8 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
     step = controller.steps
     escalate_reason: str | None = None
     suspicious = False
+    # Three cases: the guard blocked the call, it was skipped after a suspicious result, or it
+    # ran (or failed validation) and the recovery strategy decides what the model sees.
     if plan.decision.blocked:
         last_outcome = controller.guard.last_outcome(plan.decision.key)
         journal.guard_tripped(
@@ -435,6 +458,7 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
                 recovered_by=outcome.recovered_by,
                 escalated=escalate_reason,
             )
+    # The guard remembers each outcome, so a block can tell the model what happened last time.
     if not plan.decision.blocked:
         controller.guard.record_outcome(plan.decision.key, result)
     episode.history.append(observation_message(call, result))
@@ -443,6 +467,7 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
 
 
 def _is_write(call: ToolCall, registry: SteadyhandRegistry) -> bool:
+    """Whether the call changes the store (any effect other than read)."""
     return call.name in registry and registry.policy(call.name).effect is not Effect.READ
 
 

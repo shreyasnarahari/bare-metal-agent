@@ -30,7 +30,8 @@ from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from .errors import ErrorObservation, ErrorType, FieldProblem
 from .types import EpisodeStatus, ModelTurn, ToolCall, ToolResult
 
-DEFAULT_GUARD_LIMIT = 3
+DEFAULT_GUARD_LIMIT = 3  # the third identical call is blocked
+# Unicode categories that print nothing (controls, format characters, separators).
 _INVISIBLE_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Zl", "Zp", "Zs"})
 
 
@@ -39,6 +40,8 @@ class ControllerError(RuntimeError):
 
 
 class Event(str, Enum):
+    """Something that happened in the episode; the transition table decides what it leads to."""
+
     TEXT_ANSWER = "text_answer"  # assistant text with a visible character
     STEP_COMPLETED = "step_completed"  # a tool turn or a parse-error turn finished
     BUDGET_CROSSED = "budget_crossed"  # checked before the next model call
@@ -49,6 +52,7 @@ class Event(str, Enum):
     CANCELLED = "cancelled"
 
 
+# Every allowed (state, event) pair. All transitions leave RUNNING; the four endings are final.
 RUNNING = EpisodeStatus.RUNNING
 TRANSITIONS: dict[tuple[EpisodeStatus, Event], EpisodeStatus] = {
     (RUNNING, Event.TEXT_ANSWER): EpisodeStatus.DONE,
@@ -63,6 +67,7 @@ TRANSITIONS: dict[tuple[EpisodeStatus, Event], EpisodeStatus] = {
 
 
 def transition(state: EpisodeStatus, event: Event) -> EpisodeStatus:
+    """The next state, or ``ControllerError`` for an event not allowed in ``state``."""
     try:
         return TRANSITIONS[(state, event)]
     except KeyError:
@@ -81,6 +86,8 @@ def has_visible_character(text: str | None) -> bool:
 
 @dataclass(frozen=True)
 class Budgets:
+    """Limits checked before every model call; crossing one ends the episode as budget_exhausted."""
+
     max_steps: int = 8
     max_prompt_tokens: int = 24_000
     max_completion_tokens: int = 8_000
@@ -154,6 +161,8 @@ def call_hash(name: str, arguments: str) -> str:
 
 @dataclass(frozen=True)
 class GuardDecision:
+    """What the loop guard decided about one call, and how many times it has seen it."""
+
     blocked: bool
     key: str
     count: int
@@ -172,6 +181,7 @@ class LoopGuard:
         self._last_outcome: dict[str, str] = {}
 
     def key(self, call: ToolCall) -> str:
+        """The identity of a call: tool name plus normalized arguments."""
         return call_hash(call.name, call.arguments)
 
     def is_blocked(self, call: ToolCall) -> bool:
@@ -179,6 +189,7 @@ class LoopGuard:
         return self.key(call) in self._blocked
 
     def count(self, call: ToolCall) -> int:
+        """How many times the model has sent this exact call."""
         return self._counts.get(self.key(call), 0)
 
     def observe(self, call: ToolCall, *, via: str = "model") -> GuardDecision:
@@ -200,10 +211,12 @@ class LoopGuard:
         self._last_outcome[key] = "ok" if result.ok else result.error.error_type.value  # type: ignore[union-attr]
 
     def last_outcome(self, key: str) -> str | None:
+        """"ok" or the error type of the call's last run, or ``None`` if it never ran."""
         return self._last_outcome.get(key)
 
 
 def repeated_call_observation(tool: str, last_outcome: str | None) -> ErrorObservation:
+    """What the model sees for a blocked call; the hint depends on how the call went last time."""
     if last_outcome == "ok":
         hint = (
             "This exact call already succeeded. Do not repeat it; use the earlier result, "
@@ -246,23 +259,28 @@ class EpisodeController:
         self.error_message: str | None = None
         self.escalation_reason: str | None = None
         self._clock = clock
+        # The clock is read only when a wall-clock budget is set, so replays see the same reads.
         self._started = clock() if self.budgets.max_wall_clock_s is not None else None
 
     @property
     def running(self) -> bool:
+        """Whether the episode has not ended yet."""
         return self.state is EpisodeStatus.RUNNING
 
     def apply(self, event: Event) -> EpisodeStatus:
+        """Move the state machine on ``event``."""
         self.state = transition(self.state, event)
         return self.state
 
     def elapsed_s(self) -> float | None:
+        """Seconds since the episode started, or ``None`` without a wall-clock budget."""
         return None if self._started is None else self._clock() - self._started
 
     def check_budgets(self) -> BudgetCheck:
         """Decide, before a model call, whether that call may start."""
         budgets = self.budgets
         elapsed = self.elapsed_s()
+        # The first budget at or past its limit wins, in this fixed order.
         exhausted = None
         if self.steps >= budgets.max_steps:
             exhausted = "step"
@@ -295,11 +313,13 @@ class EpisodeController:
         )
 
     def record_usage(self, turn: ModelTurn) -> None:
+        """Add a turn's tokens; the last prompt size predicts whether the next prompt fits the slot."""
         self.prompt_tokens += turn.prompt_tokens
         self.completion_tokens += turn.completion_tokens
         if turn.prompt_tokens:
             self.last_prompt_tokens = turn.prompt_tokens
 
+    # Thin wrappers that name each event at the call site in the loop.
     def finish_step(self) -> None:
         self.steps += 1
         self.apply(Event.STEP_COMPLETED)

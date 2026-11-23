@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-BACKOFF_STRATEGIES = ("exp",)
+BACKOFF_STRATEGIES = ("exp",)  # exponential backoff is the only strategy so far
 
 
 class PolicyError(ValueError):
@@ -20,6 +20,8 @@ class PolicyError(ValueError):
 
 
 class Effect(str, Enum):
+    """What a call does to the store: nothing, the same change however often, or a new change each time."""
+
     READ = "read"
     IDEMPOTENT_WRITE = "idempotent_write"
     NON_IDEMPOTENT_WRITE = "non_idempotent_write"
@@ -31,6 +33,8 @@ class Effect(str, Enum):
 
 @dataclass(frozen=True)
 class RetrySpec:
+    """Automatic retries for a tool: which error types, how many extra attempts, which backoff."""
+
     on: tuple[str, ...]  # error types, e.g. timeout, rate_limit, server_error
     max_attempts: int  # extra attempts after the first call
     backoff: str = "exp"  # applied in part 6
@@ -54,6 +58,12 @@ class RetrySpec:
 
 @dataclass(frozen=True)
 class ToolPolicy:
+    """Everything Steadyhand knows about a tool beyond its schema, checked for consistency.
+
+    ``verify`` names a read tool that can confirm whether a write happened, and
+    ``alternatives`` name tools to switch to when this one keeps failing.
+    """
+
     effect: Effect
     timeout_s: float
     idempotent: bool
@@ -69,6 +79,7 @@ class ToolPolicy:
             raise PolicyError(
                 f"idempotent={self.idempotent} contradicts effect {self.effect.value!r}"
             )
+        # Retrying a non-idempotent write could make the change twice.
         if not self.idempotent and self.retry is not None and self.retry.max_attempts > 0:
             raise PolicyError("A non-idempotent tool cannot have automatic retries")
         if len(set(self.alternatives)) != len(self.alternatives):
