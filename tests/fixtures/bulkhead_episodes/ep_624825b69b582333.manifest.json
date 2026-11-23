@@ -1,5 +1,5 @@
 {
-  "episode_id": "ep_1ad3512bd97b9906",
+  "episode_id": "ep_624825b69b582333",
   "steadyhand_version": "0.1.0",
   "toolsmith_version": "0.1.0",
   "journal_version": 1,
@@ -32,8 +32,8 @@
   "server_parallel": null,
   "context_size": null,
   "per_slot_context": null,
-  "security_spec_sha256": "eb1ade8deeca2ad900b0cf670cda2a7a50da4d5431abf399a27e4fc792f12c65",
-  "task_policy_sha256": "f8faace79334fb5063a55b7b1b93e183c55890210d2d7c231a69491375320dc1",
+  "security_spec_sha256": "64a13370b42a020bdbd6a76b3d606b7ccbc1cb4ce2553930e36bf5130c5253ec",
+  "task_policy_sha256": "b42664c8f2e511b25a3c5a5ff7ec9b74bfe8aa50b1cd3ca93b114ccef9602ff5",
   "security_config": {
     "version": 1,
     "task_policy": {
@@ -55,7 +55,6 @@
       "rules": [],
       "fs_read": [
         "$WORKSPACE",
-        "/etc/ssl",
         "/lib",
         "/lib64",
         "/usr"
@@ -152,7 +151,6 @@
       "sandbox": {
         "fs_read": [
           "$WORKSPACE",
-          "/etc/ssl",
           "/lib",
           "/lib64",
           "/usr"
@@ -190,7 +188,6 @@
       "sandbox": {
         "fs_read": [
           "$WORKSPACE",
-          "/etc/ssl",
           "/lib",
           "/lib64",
           "/usr"

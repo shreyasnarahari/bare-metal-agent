@@ -29,6 +29,12 @@ byte counts. Verdicts, rule ids, taint labels, request hashes, and every
 observation compare exactly, so editing any of them is a ``ReplayMismatch``
 naming the record and field.
 
+Security records are evidence of what the control plane decided and what a
+backend reported, not proof of enforcement. Replay re-derives the decisions and
+serves recorded ``sandbox_execution`` results back, which shows the control
+plane reproduces; it does not show that a kernel enforced anything. Only a live
+run under the real backend (``steadyhand.replay.live_replay_report``) tests that.
+
 A journal built with ``expected=`` records is in verify mode: each appended
 record is compared with the recorded line at the same ``seq`` instead of
 being written. Replay uses it with ``write=False``; resume uses it with

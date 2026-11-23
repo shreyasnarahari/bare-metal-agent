@@ -18,10 +18,13 @@ never runs a handler. The thread timeout here is not a security boundary.
 
 A tool that needs a backend (``Effect.EXEC``, a sandboxed spec, or a network
 or filesystem sink; see ``bulkhead.replay.requires_backend``) never runs
-in-process, whoever calls this executor. Without a ``backend`` runner it is
+in-process, whoever calls this executor: its handler is never called and the
+thread timeout below never applies to it. Without a ``backend`` runner it is
 refused as a ``sandbox_violation`` before the injector. With one, the runner
-replaces the handler: a live sandbox backend (parts 4 and 5), or in replay the
-recorded backend, which serves recorded runs and never re-executes them.
+replaces the handler: a live sandbox backend (``bulkhead.backends.bwrap``
+from part 4), or in replay the recorded backend, which serves recorded runs
+and never re-executes them. The runner holds no store lock while the external
+process runs; exec tools never touch the in-memory store.
 
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only
@@ -59,12 +62,10 @@ from .validate import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from bulkhead.manifest import SecuritySpec
-
     from .faults import FaultInjector
 
-    # Runs a call that needs a backend: (call, arguments, arguments hash, spec, via) -> result.
-    BackendRunner = Callable[[ToolCall, dict[str, Any], str, SecuritySpec | None, str], ToolResult]
+    # Runs a call that needs a backend: (call, arguments, arguments hash, registry, via) -> result.
+    BackendRunner = Callable[[ToolCall, dict[str, Any], str, SteadyhandRegistry, str], ToolResult]
 
 
 class SequentialExecutor:
@@ -124,7 +125,7 @@ class SequentialExecutor:
         def invoke(target: Store) -> ToolResult:
             if needs_backend:
                 assert backend is not None
-                return backend(call, dict(arguments), digest, spec, via)
+                return backend(call, dict(arguments), digest, registry, via)
             return self._invoke(call, tool.handler, policy, handler_arguments, digest, target, started)
 
         # With faults scheduled, the injector decides whether ``invoke`` runs and what comes back.

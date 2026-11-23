@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 (threat model and capability probe), 2 (policy, manifests, and approvals), and 3 (taint, audit, and replay) are implemented. **No tool runs in a sandbox yet.**
+**Status:** parts 1 (threat model and capability probe), 2 (policy, manifests, and approvals), 3 (taint, audit, and replay), and 4 (the tier-2 namespace/seccomp jailer and exec tools) are implemented. **The bubblewrap backend has not yet run on a host that has bubblewrap**, so its namespace and filesystem isolation is untested; see part 4 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -134,7 +134,7 @@ The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab
 
 An approval becomes a one-shot grant for that exact call. `run_approved_episode` runs it as a new linked episode (`run_label="approved-<id>"`, with a parent reference). The denied episode's files never change.
 
-Exec tools (`run_python`, `run_shell`, opt-in via `build_registry(exec_tools=True)`) are registered but always denied until part 4 adds a sandbox backend. The executor never runs them in-process. With `security=None`, behavior, episode ids, and golden manifests are unchanged.
+Exec tools (`run_python`, `run_shell`, opt-in via `build_registry(exec_tools=True)`) are denied unless the episode has a sandbox backend (part 4). The executor never runs them in-process. With `security=None`, behavior, episode ids, and golden manifests are unchanged.
 
 ### Taint, audit, and replay (part 3)
 
@@ -146,6 +146,58 @@ Taint is coarse, episode-level information-flow control. It is not per-value tra
 - **Journal:** every security event (`policy_decision`, `approval_requested`, `taint_transition`, `sandbox_execution`, `egress_decision`) is strictly checked in the episode's own journal when written and when read.
 - **Replay:** default replay re-derives every decision, taint change, and observation. Exec, sandboxed, filesystem, and network calls are served from their recorded `sandbox_execution` runs, so replay never spawns a process or opens a socket. It shows the control plane reproduces; it does not show the kernel enforced anything. `live_replay_report` re-executes under a supplied backend and writes a separate comparison report.
 - **Fixtures:** the golden secured episodes in `tests/fixtures/bulkhead_episodes/` cover clean, tainted, same-turn, denied, approved, and sandboxed runs. The sandboxed one uses a scripted test backend, not a sandbox.
+
+### Tier-2 jailer and exec tools (part 4)
+
+`bulkhead.backends.bwrap.BwrapBackend` runs allowed `run_python` and `run_shell` calls in bubblewrap. Its label is `bwrap-namespace-phase`: cgroup limits and cgroup tree cleanup arrive in part 5, so this is not yet the complete T2 profile. The backend refuses to construct unless a probe report proves bubblewrap namespaces, mounts, network isolation, and seccomp on this machine. A sandbox that fails to build for one call is a `sandbox_violation`. Neither case ever falls back to running on the host.
+
+```python
+from bulkhead.backends.bwrap import BwrapBackend
+from bulkhead.probe import run_probe
+
+backend = BwrapBackend(run_probe(), "work/bulkhead")  # raises BackendUnavailable without proof
+run_episode(..., security=SecurityConfig(policy, available_tiers=(SandboxTier.T2,)), backend=backend)
+```
+
+- **Namespaces:** fresh user, PID, IPC, UTS, network, and cgroup namespaces, with `--die-with-parent` and `--new-session`. All capabilities are dropped, and bubblewrap's `no_new_privs` is always on.
+- **Filesystem view:** only declared paths exist. The read-only paths are the workspace (`/workspace`), `/usr`, and merged-`/usr` symlinks. Only `/workspace/out` is writable, and `.git` and `.env` are covered by empty mode-0000 masks. There is no `--ro-bind / /`. Binding `/`, a home directory, `/etc`, `/proc`, `/sys`, `/dev`, `/run`, temporary directories, or the work root is refused, as are host symlink components. Workspaces are per episode, mode 0700, and seeded by copying files in, never by hardlinking.
+- **seccomp** (`bulkhead.seccomp`): the filter is compiled with the system libseccomp through `ctypes` and installed by bubblewrap just before exec. No Python `preexec_fn` runs.
+  - A reviewed allowlist. Unlisted syscalls return `ENOSYS`, which makes `clone3` fall back to `clone`, whose flags the filter can inspect.
+  - `ptrace`, `process_vm_*`, `pidfd_getfd`, io_uring, `bpf`, `perf_event_open`, keyrings, kernel modules, mounts, `setns`/`unshare`, `clone` with namespace flags, `open_by_handle_at`, reboot/kexec, `userfaultfd`, and privilege, clock, and hostname changes all return `EPERM`.
+  - Sockets are allowed for `AF_UNIX` only.
+  - A foreign-ABI syscall (x32, i386) kills the process, which is recorded as a seccomp violation.
+  - `bulkhead.seccomp.simulate` evaluates the compiled BPF for any syscall without installing it.
+- **Supervisor** (`bulkhead.supervisor`): runs a fixed argv with `Popen`, never `shell=True`.
+  - Program text goes in over stdin, never on a command line, and the environment is a fixed minimal set (nothing inherited, so no tokens or SSH agent). The program inherits only stdin, stdout, and stderr.
+  - Both output streams are drained together with per-stream and combined caps.
+  - The deadline is monotonic. At the deadline the process group is killed. After exit, leftover group and session members are killed, and the sandbox's PID namespace takes the rest. A process that escapes all of these is reported as `leaked`, never `clean`.
+- **Steadyhand wiring:** after `ALLOW`, `BackendRunner` builds an immutable request from the tool's registered program descriptor, timeout, and sandbox spec. It journals `sandbox_execution` between `policy_decision` and `tool_result`.
+  - A nonzero exit is a normal result. A timeout is a `timeout` with unknown effects and is never retried.
+  - Exec output is untrusted, so it taints the episode.
+  - Faults can prevent a call but never replace it, and no store lock is held while a process runs. Replay serves recorded runs.
+- **Exec sandbox spec:** certificate roots were removed from it, since it has no network; they return with egress in part 6.
+
+```bash
+.venv/bin/python -m pytest tests/test_bulkhead_bwrap.py tests/test_bulkhead_seccomp.py \
+  tests/test_bulkhead_supervisor.py tests/test_steadyhand_exec_tools.py
+BULKHEAD_INTEGRATION=1 .venv/bin/python -m pytest tests/test_bulkhead_bwrap.py   # real bubblewrap, where the probe proves it
+```
+
+What has been verified on the WSL2 development host, which has no bubblewrap:
+
+- **seccomp filter:** on the real kernel, Python threads, subprocesses, and `sh` run normally under it.
+- **Blocked primitives:** `ptrace`, `process_vm_readv`, and inet sockets, which this kernel allows unfiltered, are refused with the filter installed.
+- **Attack fixtures:** 8 of the first 20 attacks (`tests/fixtures/bulkhead_attacks/tier2_first20.json`) are syscall-only, and all 8 fail under the filter alone.
+- **Supervisor:** draining, caps, deadline, cleanup, environment, and descriptor behavior.
+- **Steadyhand wiring:** tested end to end with a host-only seccomp backend that is not a sandbox (`tests/exec_support.py`).
+
+Not yet verified anywhere:
+
+- The bubblewrap backend itself.
+- The 12 filesystem, process-inspection, and socket attacks that need its namespaces.
+- The in-sandbox property checks.
+
+Those 23 integration tests are skipped here as unsupported. Acceptance for this phase is pending a run on a Linux host or VM with bubblewrap.
 
 ## Architecture
 

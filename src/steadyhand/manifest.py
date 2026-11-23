@@ -24,7 +24,10 @@ sandbox configuration (its hash is ``security_spec_sha256``).
 version, tier, and probe hash). Like the server shape it is not part of the
 id, but resume compares it, so a sweep can never change tier or backend
 midway; a deliberate change needs a new run label. Replay checks the recorded
-identity and serves the recorded runs instead of calling any backend.
+identity and serves the recorded runs instead of calling any backend, so a
+matching manifest proves the recording is consistent and the control plane
+reproduces, not that the backend still enforces anything (see
+``steadyhand.replay``).
 """
 
 from __future__ import annotations

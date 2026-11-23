@@ -5,8 +5,8 @@ authorized by Bulkhead's pure policy engine before anything runs:
 
     validate_call -> repeated-call guard -> SecurityGate.authorize
       -> DENY / ASK: a typed observation; no fault injector, no handler
-      -> ALLOW: fault injector -> trusted in-process handler (or, from part 4,
-         a sandbox backend)
+      -> ALLOW: fault injector -> trusted in-process handler, or for exec,
+         sandboxed, filesystem, and network tools a sandbox backend
 
 The episode's executor becomes a ``SecuredExecutor``, so the recovery layer's
 retries, verify probes, and switches to an alternative tool each get their own
@@ -32,11 +32,18 @@ validation errors, and other loop-authored observations carry no outside
 content. Taint never decreases, and is never shared between episodes.
 
 Tools that must not run in-process go to an ``ExecutionBackend`` through
-``BackendRunner``, which journals every run as ``sandbox_execution``.
+``BackendRunner``. It resolves an immutable ``ExecutionRequest`` from the
+registered spec (the exec tool's program descriptor, its timeout, its sandbox),
+hands it to the backend only after ``ALLOW`` (and after the fault injector,
+which may prevent the call but cannot change its spec), converts what the
+backend observed into a typed tool result, and journals the run as
+``sandbox_execution`` between the ``policy_decision`` and the ``tool_result``.
+The live backend is ``bulkhead.backends.bwrap`` (part 4, the namespace/seccomp
+phase of tier 2); replay uses the recorded backend.
 
 With ``security=None`` nothing here runs and episodes behave exactly as before.
-No live operating-system sandbox exists yet: sandboxed tools are denied unless
-a backend is supplied, which only tests and replay do until part 4.
+Without a backend, sandboxed tools are denied by the policy gate (no available
+tier) and refused by the executor.
 """
 
 from __future__ import annotations
@@ -59,6 +66,7 @@ from bulkhead.approvals import (
 from bulkhead.errors import GrantError, PolicyConfigError
 from bulkhead.manifest import PathAccess, SecuritySpec, Sink, Trust, check_keys
 from bulkhead.policy import Decision, NarrowingOutcome, PolicyEngine, PolicyRequest, TaskPolicy, ToolRule, Verdict
+from bulkhead.backends.base import ExecResult, ProgramError
 from bulkhead.replay import BackendIdentity, ExecutionBackend, ExecutionRequest, RecordedExecutionMismatch, requires_backend
 from bulkhead.taint import DEFAULT_TAINT_SENSITIVE, EpisodeTaintState, TaintSource, TaintTransition
 from bulkhead.types import SandboxTier, canonical_hash, canonical_json
@@ -72,7 +80,12 @@ from .registry import SteadyhandRegistry
 from .store import Store
 from .tools import HANDLERS
 from .types import ToolCall, ToolResult
-from .validate import permission_denied_observation, permission_required_observation
+from .validate import (
+    permission_denied_observation,
+    permission_required_observation,
+    sandbox_violation_observation,
+    timeout_observation,
+)
 
 if TYPE_CHECKING:
     from .faults import FaultInjector
@@ -422,10 +435,31 @@ class SecurityGate:
         return outcome
 
 
+def process_tool_result(call: ToolCall, digest: str, process: ExecResult, policy: Any) -> ToolResult:
+    """Turn what a live backend observed into the tool result the model sees.
+
+    A sandbox that never started is a ``sandbox_violation`` (the program did
+    not run; ``handler_called`` is false). A run killed at its deadline is a
+    ``timeout`` with unknown effects, never retried automatically. Anything
+    else, including a nonzero exit or a signal, is a valid result whose value
+    is the bounded ``ExecResult`` (exit code, signal, stdout, stderr,
+    truncation flags). Its output is untrusted (the exec specs declare it so).
+    """
+    if not process.started:
+        rule = process.setup_error or "bulkhead.setup.failed"
+        error = sandbox_violation_observation(call.name, rule, "the sandbox could not be set up, so the program did not run")
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=False)
+    if process.timed_out:
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=timeout_observation(call.name, policy), handler_called=True)
+    return ToolResult(call.id, call.name, call.arguments, digest, True, value=process.value(), handler_called=True)
+
+
 class BackendRunner:
     """Runs calls that must not run in-process through the episode's backend and journals each run.
 
-    The backend must run at the task's required tier. A recorded backend's
+    The backend must run at the task's required tier. The request carries the
+    exec tool's program (from its registered descriptor) and the policy
+    timeout; program text never reaches the journal. A recorded backend's
     mismatch (replay asked for a run the recording does not hold) becomes a
     ``ReplayMismatch`` naming the recorded record and field.
     """
@@ -434,8 +468,9 @@ class BackendRunner:
         self.backend = backend
         self.gate = gate
 
-    def __call__(self, call: ToolCall, arguments: dict[str, Any], digest: str, spec: SecuritySpec | None, via: str) -> ToolResult:
-        from .validate import sandbox_violation_observation
+    def __call__(self, call: ToolCall, arguments: dict[str, Any], digest: str, registry: SteadyhandRegistry, via: str) -> ToolResult:
+        spec = registry.security(call.name)
+        policy = registry.policy(call.name)
 
         def violation(rule: str, problem: str) -> ToolResult:
             return ToolResult(call.id, call.name, call.arguments, digest, False, error=sandbox_violation_observation(call.name, rule, problem))
@@ -444,15 +479,27 @@ class BackendRunner:
             return violation("bulkhead.backend.no_sandbox", "the tool has no sandbox specification to run under")
         if self.backend.identity.tier is not self.gate.policy.required_tier:
             return violation("bulkhead.backend.tier", "the backend's tier is not the tier the task requires")
-        request = ExecutionRequest(self.gate.episode_id, call.id, via, call.name, digest, spec)
+        descriptor = registry.program(call.name)
+        program = None
+        if descriptor is not None:
+            try:
+                program = descriptor.program(arguments)
+            except ProgramError as exc:
+                return violation(exc.code, str(exc))
+        request = ExecutionRequest(self.gate.episode_id, call.id, via, call.name, digest, spec, program=program, timeout_s=policy.timeout_s)
         try:
             outcome = self.backend.execute(request, arguments)
         except RecordedExecutionMismatch as exc:
             raise ReplayMismatch(str(exc), seq=exc.seq, field=exc.field) from None
+        if outcome.result is not None:
+            result = tool_result_from(call, digest, outcome.result)
+        else:
+            assert outcome.process is not None
+            result = process_tool_result(call, digest, outcome.process, policy)
         self.gate.journal.sandbox_execution(
-            step=self.gate.step(), tool_call_id=call.id, via=via, tool=call.name, result=outcome.result, **outcome.audit,
+            step=self.gate.step(), tool_call_id=call.id, via=via, tool=call.name, result=typed_result(result), **outcome.audit,
         )
-        return tool_result_from(call, digest, outcome.result)
+        return result
 
 
 class SecuredExecutor:
@@ -659,6 +706,7 @@ __all__ = [
     "ApprovalLineage",
     "Authorization",
     "BackendRunner",
+    "process_tool_result",
     "SecuredExecutor",
     "SecurityConfig",
     "SecurityGate",

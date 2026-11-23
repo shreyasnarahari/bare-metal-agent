@@ -8,9 +8,9 @@ and commit it. The test suite never rewrites these files.
 Every scenario runs through ``run_claimed_episode`` with Bulkhead enabled and a
 fake ``ToolsmithService``, so the files hold no prompts, keys, or GPU output.
 The sandboxed scenario uses ``ScriptedBackend``, a test stand-in labeled
-``scripted-test`` that returns a canned process result; it is NOT a sandbox and
-proves nothing about kernel enforcement. Replay serves its recorded run back
-without spawning anything.
+``scripted-test`` that returns a canned process result in the ``ExecResult``
+shape; it is NOT a sandbox and proves nothing about kernel enforcement. Replay
+serves its recorded run back without spawning anything.
 
 - clean: a trusted read, then a taint-sensitive refund: allowed.
 - tainted: an untrusted customer read, then the refund: asks (taint).
@@ -78,7 +78,7 @@ class ScriptedBackend:
         self.stdout = stdout
 
     def execute(self, request, arguments):
-        value = {"exit_code": 0, "stdout": self.stdout, "stderr": "", "stdout_truncated": False, "stderr_truncated": False}
+        value = {"exit_code": 0, "signal": None, "stdout": self.stdout, "stderr": "", "stdout_truncated": False, "stderr_truncated": False}
         audit = {
             "backend": self.identity.name, "tier": self.identity.tier.value, "config_sha256": request.config_sha256,
             "request_sha256": request.sha256, "started": True, "exit_code": 0, "signal": None, "timed_out": False,

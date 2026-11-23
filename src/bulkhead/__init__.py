@@ -1,9 +1,13 @@
 """Bulkhead: sandboxed tool execution and permissions for the Steadyhand agent loop.
 
 Part 1 provides the threat model (``Bulkhead/THREAT_MODEL.md``) and the
-capability probe (``python -m bulkhead.probe``). Nothing in this package
-executes a tool yet. The probe layer imports neither ``toolsmith`` nor
-``steadyhand``, so it can be tested and run on its own.
+capability probe (``python -m bulkhead.probe``); parts 2 and 3 the policy
+engine, approvals, taint, audit events, and recorded replay; part 4 the
+execution backends (``bulkhead.backends``: the bubblewrap namespace/seccomp
+phase), the seccomp filter compiler (``bulkhead.seccomp``), the process
+supervisor (``bulkhead.supervisor``), and workspaces (``bulkhead.workspace``).
+Nothing in this package imports ``toolsmith`` or ``steadyhand``, so it can be
+tested and run on its own.
 """
 
 from .errors import BulkheadError, CapabilityError, ProbeReportError, UnsupportedTierError
