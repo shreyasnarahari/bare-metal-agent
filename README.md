@@ -92,6 +92,38 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 **Status:** the 60-task suite, the fault injector, the policies, replay, and the report generator are implemented. They are checked on CPU with a scripted model and golden journals. **The live sweep has not been run.** No Steadyhand accuracy, duplicate-effect, or throughput number is claimed. Once a sweep runs, `results/steadyhand/RESULTS.md` is generated from its journals by `steadyhand.eval.report`. This section will cite only the measured cells, with their manifests.
 
+## Bulkhead: sandboxed tool execution
+
+`src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
+
+**Status:** part 1 (threat model and capability probe) is implemented. **No tool runs in a sandbox yet.**
+
+```bash
+.venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
+.venv/bin/python -m bulkhead.probe --require-tier T1    # exit 3 unless T1 is proven; never falls back
+BULKHEAD_INTEGRATION=1 .venv/bin/python -m pytest tests/test_bulkhead_probe.py
+```
+
+The probe proves each capability with a real operation in a temporary directory. It does not infer support from kernel versions or paths, installs nothing, changes no setting, and reads no secret. It then selects a tier:
+
+- **T2, Namespace sandbox:** bubblewrap namespaces, seccomp, `no_new_privs`, rlimits, and a delegated cgroup v2 leaf with `cgroup.kill`.
+- **T1, Landlock sandbox:** Landlock, seccomp with inet sockets denied, `no_new_privs`, rlimits, and process-group cleanup.
+- **T0, NOT a sandbox:** everything else.
+
+On the WSL2 development host the probe selects **T1**: bubblewrap is not on `PATH`, and no cgroup parent is configured by default. Inside a delegated user scope, the leaf, limit, and `cgroup.kill` probes pass:
+
+```bash
+systemd-run --user --scope -p Delegate=yes bash -c '
+  P=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+  mkdir "$P/supervisor" "$P/sandbox"
+  echo $$ > "$P/supervisor/cgroup.procs"   # a cgroup that hands controllers to children holds no processes
+  echo "+cpu +memory +pids" > "$P/cgroup.subtree_control"
+  echo "+cpu +memory +pids" > "$P/sandbox/cgroup.subtree_control"
+  .venv/bin/python -m bulkhead.probe --cgroup-parent "$P/sandbox"'
+```
+
+The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab probe (`bulkhead-probe` in `notebooks/02_steadyhand.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
+
 ## Architecture
 
 | Layer | Implementation | Responsibility |
