@@ -13,6 +13,11 @@ an incomplete journal with a matching manifest exists, it resumes: the recorded
 prefix is replayed and checked, then the live client takes over at the next
 ``seq``. A crash that kills the process outright leaves ``<episode_id>.claim``
 behind; delete it by hand before resuming that episode.
+
+A Bulkhead-secured episode replays with the security configuration stored in
+its manifest (checked against the manifest's hash), so every policy decision
+and approval request is re-derived and compared like any other event. A
+journal recorded without Bulkhead replays without it, exactly as before.
 """
 
 from __future__ import annotations
@@ -51,6 +56,7 @@ from .manifest import (
 )
 from .recovery import RecoveryStrategy, no_sleep, strategy_for
 from .registry import SteadyhandRegistry
+from .security import SecurityConfig
 from .store import Store, load_fixture
 from .tools import build_registry
 from .types import EpisodeResult, ModelClient, ModelTurn, ToolCall, TurnKind
@@ -255,6 +261,7 @@ def replay_episode(
     registry = registry or build_registry()
     store = store if store is not None else load_fixture().clone()
     faults = _recorded_schedule(manifest.fault_schedule, manifest.fault_schedule_sha256)
+    security = _recorded_security(manifest.security_config, manifest.task_policy_sha256)
     current = build_manifest(
         started["settings"],
         registry,
@@ -269,6 +276,8 @@ def replay_episode(
         fault_schedule=faults,
         recovery_policy=strategy.name,
         system_prompt_variant=manifest.system_prompt_variant,
+        security=security,
+        parent_episode_id=manifest.parent_episode_id,
     )
     require_match(manifest, current)
 
@@ -292,6 +301,8 @@ def replay_episode(
         faults=faults,
         recovery=strategy,
         sleep=no_sleep,
+        security=security,
+        parent_episode_id=manifest.parent_episode_id,
     )
     journal.verify_complete()
     return result
@@ -318,10 +329,13 @@ def run_claimed_episode(
     recovery: RecoveryStrategy | None = None,
     system_prompt_variant: str = "plain",
     sleep: Callable[[float], None] = time.sleep,
+    security: SecurityConfig | None = None,
+    parent_episode_id: str | None = None,
 ) -> EpisodeResult | None:
     """Claim, run (or resume), and complete one episode. ``None`` means nothing to do here.
 
     ``store`` must be the unmodified starting store; its hash is part of the id.
+    ``security`` enables Bulkhead; it and ``parent_episode_id`` are part of the id.
     Returns ``None`` when another worker holds the claim or the episode is
     already complete. Raises ``ReplayMismatch`` when an incomplete journal's
     manifest differs from this run, rather than resuming it.
@@ -341,6 +355,8 @@ def run_claimed_episode(
         fault_schedule=faults,
         recovery_policy=recovery.name if recovery is not None else "typed_hint",
         system_prompt_variant=system_prompt_variant,
+        security=security,
+        parent_episode_id=parent_episode_id,
     )
     # The episode id is a hash of the manifest, so the same task, settings, and faults always map
     # to the same journal file.
@@ -387,6 +403,8 @@ def run_claimed_episode(
             faults=faults,
             recovery=recovery,
             sleep=sleep,
+            security=security,
+            parent_episode_id=parent_episode_id,
         )
         mark_completed(manifest_file)
         return result
@@ -435,6 +453,18 @@ def _recorded_schedule(value: Mapping[str, Any] | None, expected_sha256: str | N
             "The recorded fault schedule does not match its manifest hash", field="fault_schedule_sha256"
         )
     return schedule
+
+
+def _recorded_security(value: Mapping[str, Any] | None, expected_sha256: str | None) -> SecurityConfig | None:
+    """Rebuild the recorded Bulkhead configuration and check it against the manifest hash."""
+    if value is None:
+        if expected_sha256 is not None:
+            raise ReplayMismatch("The manifest hashes a security config it does not include", field="security_config")
+        return None
+    config = SecurityConfig.from_dict(value)
+    if config.sha256() != expected_sha256:
+        raise ReplayMismatch("The recorded security config does not match its manifest hash", field="task_policy_sha256")
+    return config
 
 
 # A redacted value would make replayed messages differ from the originals, so refuse up front.

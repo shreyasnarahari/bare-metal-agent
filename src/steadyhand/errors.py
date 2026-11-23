@@ -37,6 +37,10 @@ class ErrorType(str, Enum):
     PERMANENT_UNAVAILABLE = "permanent_unavailable"
     OUTCOME_UNKNOWN = "outcome_unknown"
     SUSPICIOUS_RESULT = "suspicious_result"
+    # Bulkhead security errors. None is retryable, and recovery never acts on one.
+    PERMISSION_DENIED = "permission_denied"  # policy said DENY; the model may choose another action
+    PERMISSION_REQUIRED = "permission_required"  # policy said ASK; the episode escalates for approval
+    SANDBOX_VIOLATION = "sandbox_violation"  # the sandbox refused or stopped the call
 
 
 # A sentinel meaning "no value to show", distinct from None (which is a value worth showing).

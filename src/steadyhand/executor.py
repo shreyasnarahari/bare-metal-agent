@@ -9,6 +9,17 @@ With a ``FaultInjector`` the order is ``injector -> handler``: the injector
 decides whether the real handler runs, on which store, and what the model is
 told. Without one, behavior is unchanged.
 
+With Bulkhead enabled, the episode's executor is a
+``steadyhand.security.SecuredExecutor`` wrapped around this one. It makes a
+policy decision for every call (model calls, recovery retries, verify probes,
+and switches alike) and only hands an allowed call to this executor, so a
+denied call never reaches the injector, never consumes a fault index, and
+never runs a handler. The thread timeout here is not a security boundary.
+
+An ``Effect.EXEC`` tool is never run in-process, whoever calls this executor:
+it is refused as a ``sandbox_violation`` before the injector. Exec tools run
+only through a sandbox backend (Bulkhead part 4).
+
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only
 a deliberately blocking stub reaches the timeout. Such stubs must not touch the
@@ -28,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from toolsmith.evaluation.models import canonical_hash
 
 from .errors import ErrorObservation
-from .policy import ToolPolicy
+from .policy import Effect, ToolPolicy
 from .registry import SteadyhandRegistry
 from .store import NotFoundError, Store
 from .types import ToolCall, ToolResult
@@ -36,6 +47,7 @@ from .validate import (
     decode_arguments,
     handler_error_observation,
     not_found_observation,
+    sandbox_violation_observation,
     timeout_observation,
     unknown_tool_observation,
 )
@@ -85,6 +97,9 @@ class SequentialExecutor:
         digest = canonical_hash(arguments)
         if tool.handler is None:
             return refused(handler_error_observation(call.name, "this tool has no handler"), digest)
+        if policy.effect is Effect.EXEC:
+            problem = "exec tools never run in-process; they need a sandbox backend"
+            return refused(sandbox_violation_observation(call.name, "bulkhead.exec.in_process", problem), digest)
 
         # The key is added server-side only for handlers that take one; the model never supplies it.
         handler_arguments = dict(arguments)

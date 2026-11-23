@@ -24,6 +24,14 @@ always go back to the model and are never retried or escalated here.
 Waits are capped per wait and per episode, and use ``ctx.sleep`` so tests and
 replay never sleep. Jitter comes from a hash of the call id, not ``random``,
 so replay reproduces every wait exactly.
+
+With Bulkhead enabled, ``ctx.executor`` is the episode's ``SecuredExecutor``:
+every retry, verify probe, and switch gets its own policy decision and audit
+record, and a switch to an alternative tool is authorized as that tool. A
+security error (``permission_denied``, ``permission_required``,
+``sandbox_violation``) is never retried, verified, or switched around, whatever
+the strategy; ``permission_required`` escalates. ``Effect.EXEC`` tools are
+never retried or verified automatically.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ from .journal import EpisodeJournal
 from .policy import Effect, ToolPolicy
 from .registry import SteadyhandRegistry
 from .sanity import SANITY_CHECKS
+from .security import SECURITY_ERRORS
 from .store import Store
 from .tools_ledger import ARGUMENT_MAPS, build_alternatives
 from .types import ToolCall, ToolResult
@@ -78,7 +87,11 @@ class RecoveryBudget:
 
 @dataclass
 class RecoveryContext:
-    """Everything a strategy may read, and the means to make policy-layer calls."""
+    """Everything a strategy may read, and the means to make policy-layer calls.
+
+    ``executor`` is the episode's executor: with Bulkhead, a ``SecuredExecutor`` that
+    authorizes each policy-layer attempt afresh before the injector or a handler sees it.
+    """
 
     call: ToolCall
     arguments: dict[str, Any] | None  # validated arguments; None when validation failed
@@ -177,8 +190,8 @@ class TypedHint:
         return RecoveryAction.RETURN_TO_MODEL
 
     def on_success(self, ctx: RecoveryContext, observation: dict[str, Any]) -> RecoveryAction:
-        if observation.get("error_type") == "suspicious_result" and _writes(ctx):
-            return RecoveryAction.ESCALATE  # the row may already be written; never retry it
+        if observation.get("error_type") == "suspicious_result" and _unsafe(ctx):
+            return RecoveryAction.ESCALATE  # the effect may already have happened; never repeat it
         return RecoveryAction.RETURN_TO_MODEL
 
 
@@ -271,8 +284,13 @@ def strategy_for(name: str) -> RecoveryStrategy:
 
 
 def _writes(ctx: RecoveryContext) -> bool:
-    # A non-idempotent write: repeating it would repeat its effect.
+    # A non-idempotent write: repeating it would repeat its effect (and a keyed verify can check it).
     return ctx.policy is not None and ctx.policy.effect is Effect.NON_IDEMPOTENT_WRITE
+
+
+def _unsafe(ctx: RecoveryContext) -> bool:
+    # Any call whose repetition could repeat its effect: non-idempotent writes and exec.
+    return ctx.policy is not None and ctx.policy.effect in (Effect.NON_IDEMPOTENT_WRITE, Effect.EXEC)
 
 
 def _safe_retry(ctx: RecoveryContext, observation: Mapping[str, Any]) -> bool:
@@ -365,6 +383,13 @@ def apply_recovery(strategy: RecoveryStrategy, ctx: RecoveryContext, result: Too
 
         # A failure: ask the strategy what to do, act, and loop on the new result.
         assert result.error is not None
+        # Security errors bypass the strategy: no retry, verify, or switch can route around them.
+        if result.error.error_type.value in SECURITY_ERRORS:
+            reason = None
+            if result.error.error_type.value == "permission_required":
+                rule = next((detail.got for detail in result.error.details if detail.field == "rule_id"), "unknown")
+                reason = f"{result.tool} needs human approval under rule {rule}"
+            return RecoveryOutcome(_render(strategy, result), recovered_by, reason, False, acted or reason is not None)
         action = strategy.on_observation(ctx, result.error.as_dict())
         if action is RecoveryAction.RETURN_TO_MODEL:
             return RecoveryOutcome(_render(strategy, result), recovered_by, None, False, acted)

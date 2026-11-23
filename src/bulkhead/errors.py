@@ -21,6 +21,18 @@ class ProbeReportError(BulkheadError, ValueError):
         self.field = field
 
 
+class SecuritySpecError(BulkheadError, ValueError):
+    """Security metadata (a sandbox, egress, limits, or a tool's spec) is malformed or contradictory."""
+
+
+class PolicyConfigError(BulkheadError, ValueError):
+    """A task policy is malformed or contradicts itself. Refused at load time, never treated as allow."""
+
+
+class GrantError(BulkheadError, ValueError):
+    """An approval grant is malformed, expired, or does not belong to the episode or call it is used for."""
+
+
 class CapabilityError(BulkheadError, RuntimeError):
     """A capability the caller needs has not been proven on this host."""
 
@@ -41,4 +53,12 @@ class UnsupportedTierError(CapabilityError):
         super().__init__(reason)
 
 
-__all__ = ["BulkheadError", "CapabilityError", "ProbeReportError", "UnsupportedTierError"]
+__all__ = [
+    "BulkheadError",
+    "CapabilityError",
+    "GrantError",
+    "PolicyConfigError",
+    "ProbeReportError",
+    "SecuritySpecError",
+    "UnsupportedTierError",
+]

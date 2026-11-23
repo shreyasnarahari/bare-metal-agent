@@ -61,7 +61,7 @@ An episode that holds **private data**, **untrusted content**, and **an outbound
 - **T1, "Landlock sandbox."** Requires Landlock filesystem rules, seccomp (including inet socket denial), `no_new_privs`, rlimits, and proven process-group cleanup. The report lists every missing namespace and cgroup property.
 - **T0, "NOT a sandbox."** Exec and network tools are denied. A timeout, a thread executor, rlimits alone, or a store clone never earns the word "sandboxed".
 
-**Part 1 status:** no backend executes a tool.
+**Status after part 2:** the policy boundary (3) and approval boundary (7) are implemented for every Steadyhand call path, including recovery. No backend executes a tool, so sandboxed tools are always denied.
 
 - **Development host (WSL2):** selects T1. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup leaf, limits, and `cgroup.kill` probes all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

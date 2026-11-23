@@ -6,7 +6,9 @@ schema and policy hashes stay unchanged. ``issue_refund``'s policy has named
 it as its alternative since part 2.
 
 It is an idempotent write: every call carries the same kind of key strategy
-(d) uses, and a repeat with that key returns the original entry.
+(d) uses, and a repeat with that key returns the original entry. With Bulkhead
+enabled, a switch to it gets its own policy decision: a task that does not
+allow ``refund_via_ledger`` cannot reach it through recovery.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from pydantic import Field
 from .policy import Effect, ToolPolicy
 from .registry import SteadyhandRegistry
 from .store import LedgerEntry, Store, public_dict
-from .tools import TOOL_TIMEOUT_S, OrderId, result_schema
+from .tools import STORE_WRITE_SECURITY, TOOL_TIMEOUT_S, OrderId, result_schema
 from .validate import check_issue_refund
 
 LEDGER_POLICY = ToolPolicy(Effect.IDEMPOTENT_WRITE, TOOL_TIMEOUT_S, idempotent=True)
@@ -42,7 +44,9 @@ def refund_via_ledger(
 def build_alternatives() -> SteadyhandRegistry:
     """The frozen registry of alternatives the switch strategy may call."""
     registry = SteadyhandRegistry(reserved_names=())
-    registry.register(refund_via_ledger, LEDGER_POLICY, check_issue_refund, result_schema(LedgerEntry))
+    registry.register(
+        refund_via_ledger, LEDGER_POLICY, check_issue_refund, result_schema(LedgerEntry), security=STORE_WRITE_SECURITY
+    )
     return registry.freeze()
 
 

@@ -280,6 +280,45 @@ def handler_error_observation(tool: str, problem: str) -> ErrorObservation:
     )
 
 
+def permission_denied_observation(tool: str, rule_id: str, reason_code: str) -> ErrorObservation:
+    """The task's security policy denied this call. The handler did not run; another action may be allowed."""
+    return ErrorObservation(
+        error_type=ErrorType.PERMISSION_DENIED,
+        tool=tool,
+        retryable=False,
+        hint=(
+            f"The task's security policy does not permit this call (rule {rule_id}). "
+            "Do not send it again; choose a different permitted action or tell the user."
+        ),
+        details=(FieldProblem("rule_id", reason_code, rule_id),),
+    )
+
+
+def permission_required_observation(tool: str, rule_id: str, reason_code: str, summary: str) -> ErrorObservation:
+    """The call needs human approval. The handler did not run and the episode stops here."""
+    return ErrorObservation(
+        error_type=ErrorType.PERMISSION_REQUIRED,
+        tool=tool,
+        retryable=False,
+        hint=(
+            f"This call needs human approval (rule {rule_id}). The episode stops here; "
+            "an approved retry runs as a new episode."
+        ),
+        details=(FieldProblem("rule_id", reason_code, rule_id), FieldProblem("grant", summary)),
+    )
+
+
+def sandbox_violation_observation(tool: str, rule_id: str, problem: str) -> ErrorObservation:
+    """The sandbox refused or stopped the call. Never retried, verified, or switched around."""
+    return ErrorObservation(
+        error_type=ErrorType.SANDBOX_VIOLATION,
+        tool=tool,
+        retryable=False,
+        hint=f"{tool} was stopped by its sandbox (rule {rule_id}). Do not send it again; tell the user.",
+        details=(FieldProblem("rule_id", problem, rule_id),),
+    )
+
+
 # Semantic checks for the mock store
 
 

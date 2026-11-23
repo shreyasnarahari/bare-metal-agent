@@ -7,9 +7,16 @@ stores the raw function on ``Tool.handler``, and the executor binds the store:
 ``handler(store, **arguments)``. Handlers return plain JSON-compatible dicts and
 raise ``NotFoundError`` for ids the store does not hold.
 
-``build_registry`` attaches each tool's policy and semantic check. Store rules
-that depend on state (ids exist, refund limits) are semantic checks, not
-JSON Schema keywords, so the schemas stay inside the grammar subset.
+``build_registry`` attaches each tool's policy, semantic check, and Bulkhead
+security spec. Store rules that depend on state (ids exist, refund limits) are
+semantic checks, not JSON Schema keywords, so the schemas stay inside the
+grammar subset.
+
+The store tools are trusted in-process handlers: their specs have no sandbox
+and declare no network or filesystem sink. Writes declare ``EXTERNAL_EFFECT``
+(refunds, tickets, notes, and status changes are visible outside the agent).
+Every output stays ``UNTRUSTED`` until part 3 reviews which fields can carry
+customer-written text. With Bulkhead disabled the specs change nothing.
 """
 
 from __future__ import annotations
@@ -18,6 +25,8 @@ from decimal import Decimal
 from typing import Annotated, Any, TypedDict
 
 from pydantic import Field, TypeAdapter
+
+from bulkhead.manifest import SecuritySpec, Sink, Trust
 
 from .policy import Effect, RetrySpec, ToolPolicy
 from .registry import SemanticCheck, SteadyhandRegistry
@@ -253,11 +262,29 @@ TOOL_SPECS: tuple[tuple[Any, ToolPolicy, SemanticCheck | None], ...] = (
 )
 
 
-def build_registry() -> SteadyhandRegistry:
-    """A frozen registry of the ten tools with their policies. Safe to share across workers."""
+# Bulkhead metadata for the in-process store tools (a separate table, so TOOL_SPECS keeps its shape).
+STORE_READ_SECURITY = SecuritySpec(sandbox=None, output_trust=Trust.UNTRUSTED, sinks=())
+STORE_WRITE_SECURITY = SecuritySpec(sandbox=None, output_trust=Trust.UNTRUSTED, sinks=(Sink.EXTERNAL_EFFECT,))
+TOOL_SECURITY: dict[str, SecuritySpec] = {
+    handler.__name__: STORE_READ_SECURITY if handler in READ_HANDLERS else STORE_WRITE_SECURITY for handler in HANDLERS
+}
+
+
+def build_registry(*, exec_tools: bool = False) -> SteadyhandRegistry:
+    """A frozen registry of the ten tools with their policies. Safe to share across workers.
+
+    ``exec_tools=True`` also registers the disabled ``run_python`` and
+    ``run_shell`` exec tools (``steadyhand.tools_exec``). They change the
+    model-facing schemas, so the default registry and its hashes stay as they were.
+    """
     registry = SteadyhandRegistry()
     for handler, policy, semantic in TOOL_SPECS:
-        registry.register(handler, policy, semantic, RESULT_SCHEMAS[handler.__name__])
+        name = handler.__name__
+        registry.register(handler, policy, semantic, RESULT_SCHEMAS[name], security=TOOL_SECURITY[name])
+    if exec_tools:
+        from .tools_exec import register_exec_tools
+
+        register_exec_tools(registry)
     return registry.freeze()
 
 
@@ -270,6 +297,9 @@ __all__ = [
     "READ_POLICY",
     "RESULT_SCHEMAS",
     "SAFE_RETRY",
+    "STORE_READ_SECURITY",
+    "STORE_WRITE_SECURITY",
+    "TOOL_SECURITY",
     "TOOL_SPECS",
     "TOOL_TIMEOUT_S",
     "add_order_note",

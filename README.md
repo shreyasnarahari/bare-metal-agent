@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** part 1 (threat model and capability probe) is implemented. **No tool runs in a sandbox yet.**
+**Status:** parts 1 (threat model and capability probe) and 2 (policy, manifests, and approvals) are implemented. **No tool runs in a sandbox yet.**
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -123,6 +123,18 @@ systemd-run --user --scope -p Delegate=yes bash -c '
 ```
 
 The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab probe (`bulkhead-probe` in `notebooks/02_steadyhand.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
+
+### Policy gate (part 2)
+
+`run_episode(..., security=SecurityConfig(task_policy=...))` turns on Bulkhead for an episode. Each schema-valid call goes through a pure policy engine (`bulkhead.policy`) before the fault injector or a handler sees it. The order is validate, then the repeated-call guard, then authorize, and only then execute. The engine returns `ALLOW`, `DENY`, or `ASK` with a stable rule id.
+
+- **DENY:** the model gets a non-retryable `permission_denied` observation and may choose another action.
+- **ASK:** anything outside the task's privilege set asks: a new tool, path, destination, or a higher bound. The call gets `permission_required` and the episode ends `escalated`.
+- **Recovery and faults:** recovery retries, verify probes, and switches to an alternative tool each get their own decision. A denied call never consumes a fault index.
+
+An approval becomes a one-shot grant for that exact call. `run_approved_episode` runs it as a new linked episode (`run_label="approved-<id>"`, with a parent reference). The denied episode's files never change.
+
+Exec tools (`run_python`, `run_shell`, opt-in via `build_registry(exec_tools=True)`) are registered but always denied until part 4 adds a sandbox backend. The executor never runs them in-process. With `security=None`, behavior, episode ids, and golden manifests are unchanged.
 
 ## Architecture
 

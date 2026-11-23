@@ -1,0 +1,144 @@
+{
+  "description": "Bulkhead part 2 policy matrix. 'cases' are single decisions against the base policy (arguments, taint, and available tiers vary); 'narrowing' patches the base policy and states whether the result is narrower, and if not, exactly which widening kinds it adds. read_file, write_file, and fetch_url are hypothetical tools used only to exercise path and destination rules.",
+  "base_policy": {
+    "tools": ["fetch_url", "get_order", "issue_refund", "list_payments", "read_file", "run_shell", "write_file"],
+    "deny_tools": ["cancel_order"],
+    "ask_tools": ["list_payments"],
+    "rules": [
+      {"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}},
+      {"tool": "read_file", "paths": {"path": "read"}},
+      {"tool": "write_file", "paths": {"path": "write"}},
+      {"tool": "fetch_url", "destinations": ["url"]}
+    ],
+    "fs_read": ["$WORKSPACE", "/usr", "/lib", "/lib64", "/etc/ssl"],
+    "fs_write": ["$WORKSPACE"],
+    "fs_deny": ["$WORKSPACE/.git", "$WORKSPACE/.env"],
+    "egress": {"allow": ["pypi.org:443"], "max_bytes_out": 65536, "max_bytes_in": 1048576},
+    "egress_deny": ["169.254.169.254:80"],
+    "limits": {"cpu_s": 10, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 64, "wall_s": 30},
+    "taint_sensitive": ["filesystem", "network"],
+    "required_tier": "T2"
+  },
+  "specs": {
+    "store_read": {"sandbox": null, "output_trust": "untrusted", "sinks": []},
+    "store_write": {"sandbox": null, "output_trust": "untrusted", "sinks": ["external_effect"]},
+    "file_read": {"sandbox": null, "output_trust": "untrusted", "sinks": []},
+    "file_write": {
+      "sandbox": {
+        "fs_read": ["$WORKSPACE"], "fs_write": ["$WORKSPACE"], "fs_deny": ["$WORKSPACE/.git"],
+        "net": {"allow": []}, "limits": {"cpu_s": 5, "mem_mb": 256, "pids": 16, "disk_mb": 50, "out_kb": 16},
+        "secrets": []
+      },
+      "output_trust": "untrusted", "sinks": ["filesystem"]
+    },
+    "fetch": {
+      "sandbox": {
+        "fs_read": [], "fs_write": [], "fs_deny": [],
+        "net": {"allow": ["pypi.org:443"]}, "limits": {"cpu_s": 5, "mem_mb": 256, "pids": 16, "disk_mb": 50, "out_kb": 64},
+        "secrets": []
+      },
+      "output_trust": "untrusted", "sinks": ["network"]
+    },
+    "exec": {
+      "sandbox": {
+        "fs_read": ["$WORKSPACE", "/usr", "/lib", "/lib64", "/etc/ssl"], "fs_write": ["$WORKSPACE/out"],
+        "fs_deny": ["$WORKSPACE/.git", "$WORKSPACE/.env"], "net": {"allow": []},
+        "limits": {"cpu_s": 10, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 64}, "secrets": []
+      },
+      "output_trust": "untrusted", "sinks": ["filesystem"]
+    },
+    "exec_greedy": {
+      "sandbox": {
+        "fs_read": ["/"], "fs_write": ["$WORKSPACE"], "fs_deny": [], "net": {"allow": ["github.com:443"]},
+        "limits": {"cpu_s": 60, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 64}, "secrets": []
+      },
+      "output_trust": "untrusted", "sinks": ["filesystem", "network"]
+    }
+  },
+  "cases": [
+    {"name": "allowed read", "tool": "get_order", "spec": "store_read", "arguments": {"order_id": "ord_1001"}, "expect": "allow", "rule_id": "task.allow"},
+    {"name": "tool outside the task asks", "tool": "get_ticket", "spec": "store_read", "arguments": {"ticket_id": "tkt_9001"}, "expect": "ask", "rule_id": "task.widen.tool", "widen": {"tools": ["get_ticket"]}},
+    {"name": "explicitly denied tool", "tool": "cancel_order", "spec": "store_write", "arguments": {"order_id": "ord_1001"}, "expect": "deny", "rule_id": "task.deny.tool"},
+    {"name": "refund within bounds", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": 120, "reason": "dented"}, "expect": "allow", "rule_id": "task.allow"},
+    {"name": "refund at the upper bound", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": 500.0, "reason": "dented"}, "expect": "allow", "rule_id": "task.allow"},
+    {"name": "refund above the bound asks for exactly that bound", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": 900, "reason": "dented"}, "expect": "ask", "rule_id": "task.widen.bound", "widen": {"bounds": {"issue_refund": {"amount_inr": {"minimum": 1, "maximum": 900}}}}},
+    {"name": "refund below the lower bound asks", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": 0.5, "reason": "dented"}, "expect": "ask", "rule_id": "task.widen.bound", "widen": {"bounds": {"issue_refund": {"amount_inr": {"minimum": 0.5, "maximum": 500}}}}},
+    {"name": "boolean for a bounded number is malformed", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": true, "reason": "dented"}, "expect": "deny", "rule_id": "bulkhead.request.malformed"},
+    {"name": "task rule that always asks", "tool": "list_payments", "spec": "store_read", "arguments": {"order_id": "ord_1001"}, "expect": "ask", "rule_id": "task.ask.tool", "widen": {}},
+    {"name": "missing spec is denied", "tool": "get_order", "spec": null, "arguments": {"order_id": "ord_1001"}, "expect": "deny", "rule_id": "bulkhead.spec.missing"},
+    {"name": "sandboxed tool without a backend tier is denied", "tool": "run_shell", "spec": "exec", "arguments": {"command": "ls"}, "available_tiers": [], "expect": "deny", "rule_id": "bulkhead.tier.unavailable"},
+    {"name": "sandboxed tool when only the other tier is backed", "tool": "run_shell", "spec": "exec", "arguments": {"command": "ls"}, "available_tiers": ["T1"], "expect": "deny", "rule_id": "bulkhead.tier.unavailable"},
+    {"name": "sandboxed tool with its tier backed and a fitting sandbox", "tool": "run_shell", "spec": "exec", "arguments": {"command": "ls"}, "available_tiers": ["T2"], "expect": "allow", "rule_id": "task.allow"},
+    {"name": "sandbox wider than the task ceiling asks", "tool": "run_shell", "spec": "exec_greedy", "arguments": {"command": "ls"}, "available_tiers": ["T2"], "expect": "ask", "rule_id": "task.widen.sandbox", "widen": {"sandbox": {"fs_read": ["/"], "egress": {"allow": ["github.com:443"]}, "limits": {"cpu_s": 60}}}},
+    {"name": "read inside the workspace", "tool": "read_file", "spec": "file_read", "arguments": {"path": "src/main.py"}, "expect": "allow", "rule_id": "task.allow"},
+    {"name": "read of a system path", "tool": "read_file", "spec": "file_read", "arguments": {"path": "/usr/lib/python3/os.py"}, "expect": "allow", "rule_id": "task.allow"},
+    {"name": "read outside every allowed root asks", "tool": "read_file", "spec": "file_read", "arguments": {"path": "/home/user/notes.txt"}, "expect": "ask", "rule_id": "task.widen.path", "widen": {"fs_read": ["/home/user/notes.txt"]}},
+    {"name": "denied .git wins over a readable parent", "tool": "read_file", "spec": "file_read", "arguments": {"path": "$WORKSPACE/.git/config"}, "expect": "deny", "rule_id": "task.deny.path"},
+    {"name": "denied .env wins over a writable parent", "tool": "write_file", "spec": "file_write", "arguments": {"path": ".env"}, "available_tiers": ["T2"], "expect": "deny", "rule_id": "task.deny.path"},
+    {"name": "write inside the writable workspace", "tool": "write_file", "spec": "file_write", "arguments": {"path": "out/report.txt"}, "available_tiers": ["T2"], "expect": "allow", "rule_id": "task.allow"},
+    {"name": "write outside the workspace is never grantable", "tool": "write_file", "spec": "file_write", "arguments": {"path": "/etc/passwd"}, "available_tiers": ["T2"], "expect": "deny", "rule_id": "task.deny.write_outside_workspace"},
+    {"name": "dot-dot path is malformed, not resolved", "tool": "read_file", "spec": "file_read", "arguments": {"path": "../outside/secret"}, "expect": "deny", "rule_id": "bulkhead.request.malformed"},
+    {"name": "allowed destination", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "https://pypi.org/simple/requests/"}, "available_tiers": ["T2"], "expect": "allow", "rule_id": "task.allow"},
+    {"name": "explicit port and host case normalize", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "HTTPS://PyPI.org:443/x"}, "available_tiers": ["T2"], "expect": "allow", "rule_id": "task.allow"},
+    {"name": "new destination asks for exactly that authority", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "https://evil.example/upload?k=1"}, "available_tiers": ["T2"], "expect": "ask", "rule_id": "task.widen.destination", "widen": {"egress": ["evil.example:443"]}},
+    {"name": "same host on another port is a new destination", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "http://pypi.org/simple/"}, "available_tiers": ["T2"], "expect": "ask", "rule_id": "task.widen.destination", "widen": {"egress": ["pypi.org:80"]}},
+    {"name": "denied metadata endpoint", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "http://169.254.169.254/latest/meta-data"}, "available_tiers": ["T2"], "expect": "deny", "rule_id": "task.deny.destination"},
+    {"name": "URL with credentials is malformed", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "https://user:pw@pypi.org/"}, "available_tiers": ["T2"], "expect": "deny", "rule_id": "bulkhead.request.malformed"},
+    {"name": "non-http scheme is malformed", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "file:///etc/passwd"}, "available_tiers": ["T2"], "expect": "deny", "rule_id": "bulkhead.request.malformed"},
+    {"name": "tainted episode asks before a network sink", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "https://pypi.org/simple/"}, "available_tiers": ["T2"], "taint": "untrusted", "expect": "ask", "rule_id": "bulkhead.taint.sensitive_sink", "widen": {}},
+    {"name": "tainted episode asks before a filesystem sink", "tool": "run_shell", "spec": "exec", "arguments": {"command": "ls"}, "available_tiers": ["T2"], "taint": "untrusted", "expect": "ask", "rule_id": "bulkhead.taint.sensitive_sink", "widen": {}},
+    {"name": "taint does not block a read without a sink", "tool": "get_order", "spec": "store_read", "arguments": {"order_id": "ord_1001"}, "taint": "untrusted", "expect": "allow", "rule_id": "task.allow"},
+    {"name": "taint does not touch store effects the task did not mark sensitive", "tool": "issue_refund", "spec": "store_write", "arguments": {"order_id": "ord_1001", "amount_inr": 120, "reason": "dented"}, "taint": "untrusted", "expect": "allow", "rule_id": "task.allow"},
+    {"name": "taint never turns a denial into an ask", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "http://169.254.169.254/"}, "available_tiers": ["T2"], "taint": "untrusted", "expect": "deny", "rule_id": "task.deny.destination"},
+    {"name": "deny beats ask: a denied path on a sandboxed tool without a tier", "tool": "write_file", "spec": "file_write", "arguments": {"path": "$WORKSPACE/.git/hooks/post-commit"}, "available_tiers": [], "expect": "deny", "rule_id": "bulkhead.tier.unavailable", "findings": ["bulkhead.tier.unavailable", "task.deny.path"]},
+    {"name": "deny beats several asks", "tool": "cancel_order", "spec": "store_write", "arguments": {"order_id": "ord_1001"}, "taint": "untrusted", "expect": "deny", "rule_id": "task.deny.tool", "findings": ["task.deny.tool", "task.widen.tool"]},
+    {"name": "several asks merge into one grant", "tool": "fetch_url", "spec": "fetch", "arguments": {"url": "https://evil.example/"}, "available_tiers": ["T2"], "taint": "untrusted", "expect": "ask", "rule_id": "task.widen.destination", "widen": {"egress": ["evil.example:443"]}, "rules": ["task.widen.destination", "bulkhead.taint.sensitive_sink"]},
+    {"name": "unknown via is malformed", "tool": "get_order", "spec": "store_read", "arguments": {"order_id": "ord_1001"}, "via": "someone", "expect": "deny", "rule_id": "bulkhead.request.malformed"},
+    {"name": "non-object arguments are malformed", "tool": "get_order", "spec": "store_read", "arguments": "ord_1001", "expect": "deny", "rule_id": "bulkhead.request.malformed"}
+  ],
+  "narrowing": [
+    {"name": "identical policy", "patch": {}, "narrower": true},
+    {"name": "drop an allowed tool", "patch": {"tools": ["fetch_url", "get_order", "issue_refund", "list_payments", "read_file", "write_file"], "rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": true},
+    {"name": "add a tool", "patch": {"tools": ["fetch_url", "get_order", "get_ticket", "issue_refund", "list_payments", "read_file", "run_shell", "write_file"]}, "narrower": false, "kinds": ["tools"]},
+    {"name": "add a denied tool", "patch": {"deny_tools": ["cancel_order", "create_ticket"]}, "narrower": true},
+    {"name": "remove a denied tool", "patch": {"deny_tools": []}, "narrower": false, "kinds": ["deny_tools_removed"]},
+    {"name": "add an ask rule", "patch": {"ask_tools": ["get_order", "list_payments"]}, "narrower": true},
+    {"name": "remove an ask rule", "patch": {"ask_tools": []}, "narrower": false, "kinds": ["ask_tools_removed"]},
+    {"name": "tighten both bounds", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 10, "maximum": 200}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": true},
+    {"name": "raise the upper bound", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 5000}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["bounds"]},
+    {"name": "lower the lower bound", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 0, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["bounds"]},
+    {"name": "drop one side of a bound", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": null}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["bounds"]},
+    {"name": "bound a new argument", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}, "items": {"minimum": null, "maximum": 3}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": true},
+    {"name": "drop a whole rule", "patch": {"rules": [{"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["bounds"]},
+    {"name": "drop a path argument check", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["path_arguments"]},
+    {"name": "relax a write check to a read check", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "read"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": false, "kinds": ["path_arguments"]},
+    {"name": "strengthen a read check to a write check", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "write"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["url"]}]}, "narrower": true},
+    {"name": "drop a destination argument check", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}]}, "narrower": false, "kinds": ["destination_arguments"]},
+    {"name": "check a new destination argument", "patch": {"rules": [{"tool": "issue_refund", "bounds": {"amount_inr": {"minimum": 1, "maximum": 500}}}, {"tool": "read_file", "paths": {"path": "read"}}, {"tool": "write_file", "paths": {"path": "write"}}, {"tool": "fetch_url", "destinations": ["mirror", "url"]}]}, "narrower": true},
+    {"name": "read a subpath of an allowed root", "patch": {"fs_read": ["$WORKSPACE/src", "/usr"]}, "narrower": true},
+    {"name": "read a new root", "patch": {"fs_read": ["$WORKSPACE", "/usr", "/lib", "/lib64", "/etc/ssl", "/home"]}, "narrower": false, "kinds": ["fs_read"]},
+    {"name": "read the whole filesystem", "patch": {"fs_read": ["/"]}, "narrower": false, "kinds": ["fs_read"]},
+    {"name": "write only a subdirectory", "patch": {"fs_write": ["$WORKSPACE/out"]}, "narrower": true},
+    {"name": "stop writing entirely", "patch": {"fs_write": []}, "narrower": true},
+    {"name": "add a denied subpath", "patch": {"fs_deny": ["$WORKSPACE/.env", "$WORKSPACE/.git", "$WORKSPACE/secrets"]}, "narrower": true},
+    {"name": "remove a denied subpath", "patch": {"fs_deny": ["$WORKSPACE/.git"]}, "narrower": false, "kinds": ["fs_deny_removed"]},
+    {"name": "replace a deny with a narrower child", "patch": {"fs_deny": ["$WORKSPACE/.env", "$WORKSPACE/.git/hooks"]}, "narrower": false, "kinds": ["fs_deny_removed"]},
+    {"name": "drop every allowed destination", "patch": {"egress": {"allow": []}}, "narrower": true},
+    {"name": "add a destination", "patch": {"egress": {"allow": ["github.com:443", "pypi.org:443"]}}, "narrower": false, "kinds": ["egress"]},
+    {"name": "lower the byte ceilings", "patch": {"egress": {"allow": ["pypi.org:443"], "max_bytes_out": 1024, "max_bytes_in": 4096}}, "narrower": true},
+    {"name": "raise a byte ceiling", "patch": {"egress": {"allow": ["pypi.org:443"], "max_bytes_out": 1048576}}, "narrower": false, "kinds": ["egress"]},
+    {"name": "deny another destination", "patch": {"egress_deny": ["169.254.169.254:80", "metadata.google.internal:80"]}, "narrower": true},
+    {"name": "stop denying the metadata endpoint", "patch": {"egress_deny": []}, "narrower": false, "kinds": ["egress_deny_removed"]},
+    {"name": "lower every limit", "patch": {"limits": {"cpu_s": 5, "mem_mb": 256, "pids": 32, "disk_mb": 100, "out_kb": 32, "wall_s": 10}}, "narrower": true},
+    {"name": "raise cpu", "patch": {"limits": {"cpu_s": 20, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 64, "wall_s": 30}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "raise memory", "patch": {"limits": {"cpu_s": 10, "mem_mb": 1024, "pids": 64, "disk_mb": 200, "out_kb": 64, "wall_s": 30}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "raise pids", "patch": {"limits": {"cpu_s": 10, "mem_mb": 512, "pids": 128, "disk_mb": 200, "out_kb": 64, "wall_s": 30}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "raise disk", "patch": {"limits": {"cpu_s": 10, "mem_mb": 512, "pids": 64, "disk_mb": 400, "out_kb": 64, "wall_s": 30}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "raise output", "patch": {"limits": {"cpu_s": 10, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 128, "wall_s": 30}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "raise wall time", "patch": {"limits": {"cpu_s": 10, "mem_mb": 512, "pids": 64, "disk_mb": 200, "out_kb": 64, "wall_s": 60}}, "narrower": false, "kinds": ["limits"]},
+    {"name": "mark another sink taint-sensitive", "patch": {"taint_sensitive": ["external_effect", "filesystem", "network"]}, "narrower": true},
+    {"name": "drop a taint requirement", "patch": {"taint_sensitive": ["filesystem"]}, "narrower": false, "kinds": ["taint_sensitive_removed"]},
+    {"name": "lower the required tier", "patch": {"required_tier": "T1"}, "narrower": false, "kinds": ["required_tier"]},
+    {"name": "several widenings at once are all listed", "patch": {"tools": ["fetch_url", "get_order", "get_ticket", "issue_refund", "list_payments", "read_file", "run_shell", "write_file"], "deny_tools": [], "egress": {"allow": ["evil.example:443", "pypi.org:443"]}, "required_tier": "T1"}, "narrower": false, "kinds": ["tools", "deny_tools_removed", "egress", "required_tier"]}
+  ]
+}

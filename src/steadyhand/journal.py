@@ -13,6 +13,12 @@ arrived in part 5 this way, the recovery events in part 6). An optional field
 is written only when it differs from its default, which a reader assumes when
 the field is absent (``recovery_policy`` defaults to ``typed_hint``).
 
+Bulkhead adds two events and one optional field the same way. Every policy
+decision is a ``policy_decision`` record (hashes and rule ids only, never raw
+arguments or secrets); an ``ASK`` is followed by ``approval_requested``.
+``episode_started`` carries a ``bulkhead`` summary only when Bulkhead is
+enabled, so journals written without it are unchanged and still read.
+
 A journal built with ``expected=`` records is in verify mode: each appended
 record is compared with the recorded line at the same ``seq`` instead of
 being written. Replay uses it with ``write=False``; resume uses it with
@@ -76,6 +82,16 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "handler_called", "idempotency_key", "waited_s",
     }),
     "sanity_checked": frozenset({"step", "tool_call_id", "tool", "passed", "problem"}),
+    # Bulkhead: one record per policy decision, model and policy-layer calls alike.
+    "policy_decision": frozenset({
+        "step", "tool_call_id", "via", "tool", "arguments_sha256", "verdict", "rule_id",
+        "reason_code", "taint_before", "policy_sha256", "grant_id", "normalized_request_sha256",
+    }),
+    # Bulkhead: what an ASK needs approved. The decision itself lives in the linked episode's manifest.
+    "approval_requested": frozenset({
+        "step", "tool_call_id", "rule_id", "request_sha256", "normalized_grant",
+        "parent_episode_id", "approval_mode",
+    }),
     "recovery": frozenset({"step", "tool_call_id", "tool", "strategy", "recovered_by", "escalated"}),
     # Tool-side faults only. Model-output failures stay on model_turn.
     "injected_fault": frozenset({
@@ -90,7 +106,7 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
 # Fields an event carries in exactly one of its forms.
 ONE_OF_FIELDS: dict[str, frozenset[str]] = {"tool_result": frozenset({"value", "error"})}
 # Fields written only when they differ from the default a reader assumes.
-OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint"}}
+OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint", "bulkhead": None}}
 # Timing differs on every run, so it never takes part in replay equality.
 VOLATILE_FIELDS: dict[str, frozenset[str]] = {
     "model_turn": frozenset({"elapsed_s"}),
@@ -313,8 +329,11 @@ class EpisodeJournal:
         policy_sha256: str,
         messages: Sequence[Mapping[str, Any]],
         recovery_policy: str = "typed_hint",
+        bulkhead: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        optional = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
+        optional: dict[str, Any] = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
+        if bulkhead is not None:
+            optional["bulkhead"] = dict(bulkhead)
         return self.append(
             "episode_started",
             **optional,
@@ -454,6 +473,62 @@ class EpisodeJournal:
             handler_called=handler_called,
             idempotency_key=idempotency_key,
             waited_s=waited_s,
+        )
+
+    def policy_decision(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        via: str,
+        tool: str,
+        arguments_sha256: str,
+        verdict: str,
+        rule_id: str,
+        reason_code: str,
+        taint_before: str,
+        policy_sha256: str,
+        grant_id: str | None,
+        normalized_request_sha256: str,
+    ) -> dict[str, Any]:
+        """One Bulkhead decision. ``tool_result.handler_called`` stays the evidence of execution."""
+        return self.append(
+            "policy_decision",
+            step=step,
+            tool_call_id=tool_call_id,
+            via=via,
+            tool=tool,
+            arguments_sha256=arguments_sha256,
+            verdict=verdict,
+            rule_id=rule_id,
+            reason_code=reason_code,
+            taint_before=taint_before,
+            policy_sha256=policy_sha256,
+            grant_id=grant_id,
+            normalized_request_sha256=normalized_request_sha256,
+        )
+
+    def approval_requested(
+        self,
+        *,
+        step: int,
+        tool_call_id: str,
+        rule_id: str,
+        request_sha256: str,
+        normalized_grant: Mapping[str, Any],
+        parent_episode_id: str | None,
+        approval_mode: str,
+    ) -> dict[str, Any]:
+        """The privileges an ASK needs (no credentials). ``parent_episode_id`` is this episode's own parent."""
+        return self.append(
+            "approval_requested",
+            step=step,
+            tool_call_id=tool_call_id,
+            rule_id=rule_id,
+            request_sha256=request_sha256,
+            normalized_grant=dict(normalized_grant),
+            parent_episode_id=parent_episode_id,
+            approval_mode=approval_mode,
         )
 
     def sanity_checked(
