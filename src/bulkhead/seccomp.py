@@ -21,6 +21,8 @@ The policy (``DEFAULT_POLICY``), reviewed for CPython and a POSIX shell:
   changes.
 - ``socket`` and ``socketpair`` are allowed for ``AF_UNIX`` only; every other
   family gets ``EACCES`` (the network namespace already isolates the rest).
+  ``T1_POLICY`` (no namespaces) also refuses ``socket()`` entirely and
+  ``setsid``/``setpgid``, keeping every process in the group cleanup kills.
 - A syscall from any other architecture or ABI (i386 ``int 0x80``, x32) kills
   the process (``SECCOMP_RET_KILL_PROCESS``); the backend records the SIGSYS as
   a seccomp violation.
@@ -187,8 +189,8 @@ class SyscallPolicy:
         reserved = {"clone", "clone3", "socket", "socketpair"} & (set(self.allow) | set(self.deny))
         if reserved:
             raise ValueError(f"{sorted(reserved)} are handled by dedicated rules")
-        if len(self.socket_families) != 1:
-            raise ValueError("exactly one socket family is allowed (AF_UNIX)")
+        if self.socket_families not in ((AF_UNIX,), ()):
+            raise ValueError("socket() may allow AF_UNIX or nothing")
 
     def sha256(self) -> str:
         text = repr((sorted(self.allow), sorted(self.deny.items()), self.default_errno, self.socket_families,
@@ -197,6 +199,17 @@ class SyscallPolicy:
 
 
 DEFAULT_POLICY = SyscallPolicy()
+
+# Tier 1 has no namespaces, so two more things are refused. socket() entirely: without a
+# network namespace a Unix socket could reach host services (D-Bus, agents, abstract
+# sockets); socketpair(AF_UNIX) stays. And setsid/setpgid: the process group is tier 1's
+# cleanup handle when there is no cgroup, so no process may leave it.
+T1_SESSION_ESCAPES = ("setsid", "setpgid")
+T1_POLICY = SyscallPolicy(
+    allow=tuple(name for name in ALLOWED_SYSCALLS if name not in T1_SESSION_ESCAPES),
+    deny=MappingProxyType({**DEFAULT_POLICY.deny, **{name: errno.EPERM for name in T1_SESSION_ESCAPES}}),
+    socket_families=(),
+)
 
 
 @dataclass(frozen=True)
@@ -355,11 +368,14 @@ def _compile(policy: SyscallPolicy) -> CompiledFilter:
             for flag in CLONE_NAMESPACE_FLAGS.values():
                 _add(lib, ctx, _errno_action(policy.clone_namespace_errno), clone, [(0, SCMP_CMP_MASKED_EQ, flag, flag)])
         # clone3 is deliberately left to the default (ENOSYS): its flags live in memory the filter cannot read.
-        [family] = policy.socket_families
-        for name in ("socket", "socketpair"):
-            if (number := resolve(name)) is not None:
-                _add(lib, ctx, SCMP_ACT_ALLOW, number, [(0, SCMP_CMP_EQ, family, 0)])
-                _add(lib, ctx, _errno_action(policy.socket_errno), number, [(0, SCMP_CMP_NE, family, 0)])
+        for name, families in (("socket", policy.socket_families), ("socketpair", (AF_UNIX,))):
+            if (number := resolve(name)) is None:
+                continue
+            if families:
+                _add(lib, ctx, SCMP_ACT_ALLOW, number, [(0, SCMP_CMP_EQ, AF_UNIX, 0)])
+                _add(lib, ctx, _errno_action(policy.socket_errno), number, [(0, SCMP_CMP_NE, AF_UNIX, 0)])
+            else:
+                _add(lib, ctx, _errno_action(policy.socket_errno), number)
         fd = os.memfd_create("bulkhead-seccomp-export", os.MFD_CLOEXEC)
         try:
             rc = lib.seccomp_export_bpf(ctx, fd)
@@ -510,6 +526,7 @@ __all__ = [
     "BLOCKED_CLASSES",
     "CLONE_NAMESPACE_FLAGS",
     "DEFAULT_POLICY",
+    "T1_POLICY",
     "CompiledFilter",
     "SeccompUnavailable",
     "SyscallPolicy",

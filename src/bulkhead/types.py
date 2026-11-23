@@ -40,7 +40,17 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 class SandboxTier(str, Enum):
-    """How strong an isolation boundary this host can enforce. Higher is stronger."""
+    """How strong an isolation boundary this host can enforce. Higher is stronger.
+
+    A tier is what the probe proved; a *profile* is what a backend actually ran,
+    recorded as ``sandbox_execution.backend`` and described side by side in
+    ``bulkhead.backends.profiles``:
+
+    - ``bwrap-t2``: the complete T2 profile (bubblewrap + seccomp + a cgroup leaf per call);
+    - ``bwrap-namespace-phase``: T2's namespaces and seccomp without cgroups (never called full T2);
+    - ``landlock-t1-cgroup`` / ``landlock-t1``: T1, with or without a cgroup leaf;
+    - T0 runs nothing: no backend exists at T0, and exec and network tools are denied.
+    """
 
     T0 = "T0"
     T1 = "T1"

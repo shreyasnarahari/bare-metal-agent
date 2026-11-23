@@ -341,18 +341,18 @@ def test_the_backend_refuses_to_exist_without_each_required_capability(tmp_path,
     report = fake_report(failing=(missing,))
     assert missing in missing_capabilities(report)
     with pytest.raises(BackendUnavailable) as raised:
-        BwrapBackend(report, tmp_path / "work", runner=fake_runner())
+        BwrapBackend(report, tmp_path / "work", runner=fake_runner(), namespace_phase=True)
     assert missing in raised.value.missing
     assert not (tmp_path / "work").exists()  # nothing was set up
 
 
 def test_a_stale_or_foreign_probe_report_is_refused(tmp_path):
     with pytest.raises(BackendUnavailable, match="architecture"):
-        BwrapBackend(fake_report(architecture="s390x"), tmp_path / "w", runner=fake_runner())
+        BwrapBackend(fake_report(architecture="s390x"), tmp_path / "w", runner=fake_runner(), namespace_phase=True)
     with pytest.raises(BackendUnavailable, match="different bubblewrap"):
-        BwrapBackend(fake_report(bwrap_version="0.8.0"), tmp_path / "w", runner=fake_runner("0.9.0"))
+        BwrapBackend(fake_report(bwrap_version="0.8.0"), tmp_path / "w", runner=fake_runner("0.9.0"), namespace_phase=True)
     with pytest.raises(BackendUnavailable, match="older"):
-        BwrapBackend(fake_report(bwrap_version="0.3.3"), tmp_path / "w", runner=fake_runner("0.3.3"))
+        BwrapBackend(fake_report(bwrap_version="0.3.3"), tmp_path / "w", runner=fake_runner("0.3.3"), namespace_phase=True)
 
 
 needs_libseccomp = pytest.mark.skipif(not LINUX or MACHINE not in ("x86_64", "aarch64"), reason="unsupported: needs Linux x86_64/aarch64")
@@ -361,14 +361,34 @@ needs_libseccomp = pytest.mark.skipif(not LINUX or MACHINE not in ("x86_64", "aa
 @needs_libseccomp
 def test_a_proven_host_gets_a_backend_labeled_as_the_namespace_phase(tmp_path):
     runner = fake_runner()
-    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=runner)
+    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=runner, namespace_phase=True)
 
     assert backend.identity.name == BACKEND_NAME == "bwrap-namespace-phase"
-    assert backend.identity.tier.value == "T2" and backend.identity.version == "4.0+bwrap.0.9.0"
+    assert backend.identity.tier.value == "T2" and backend.identity.version == "5.0+bwrap.0.9.0"
+    assert backend.cgroup_parent is None
     assert backend.identity.probe_sha256 == fake_report().probe_sha256
     assert backend.config.tmpfs_size and backend.config.bwrap == "/usr/bin/bwrap"
     assert runner.calls == [["/usr/bin/bwrap", "--version"], ["/usr/bin/bwrap", "--help"]]  # no sandbox was run
-    assert not BwrapBackend(fake_report(), tmp_path / "w2", runner=fake_runner(help_text="no size")).config.tmpfs_size
+    assert not BwrapBackend(fake_report(), tmp_path / "w2", runner=fake_runner(help_text="no size"), namespace_phase=True).config.tmpfs_size
+
+
+@needs_libseccomp
+def test_full_t2_needs_every_t2_capability_and_a_cgroup_parent(tmp_path):
+    from bulkhead.backends.bwrap import BACKEND_NAME_T2
+    from bulkhead.cgroups import CgroupParent
+
+    from cgroup_fake import PARENT, FakeCgroupFS
+
+    with pytest.raises(BackendUnavailable) as raised:
+        BwrapBackend(fake_report(), tmp_path / "w", runner=fake_runner())
+    assert raised.value.missing == ("cgroup.parent",)
+    parent = CgroupParent(PARENT, fs=FakeCgroupFS())
+    for capability in ("cgroup.delegation", "cgroup.kill", "rlimits"):
+        with pytest.raises(BackendUnavailable) as raised:
+            BwrapBackend(fake_report(failing=(capability,)), tmp_path / "w", runner=fake_runner(), cgroup_parent=parent)
+        assert capability in raised.value.missing
+    backend = BwrapBackend(fake_report(), tmp_path / "w", runner=fake_runner(), cgroup_parent=parent)
+    assert backend.identity.name == BACKEND_NAME_T2 == "bwrap-t2" and backend.cgroup_parent is parent
 
 
 @needs_libseccomp
@@ -378,8 +398,8 @@ def test_requests_it_cannot_serve_are_refused_before_anything_spawns(tmp_path, m
     def no_spawn(*args, **kwargs):
         raise AssertionError("nothing may be spawned for a refused request")
 
-    monkeypatch.setattr(module, "supervise", no_spawn)
-    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=fake_runner())
+    monkeypatch.setattr(module, "run_governed", no_spawn)
+    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=fake_runner(), namespace_phase=True)
     networked = SecuritySpec(
         Sandbox(fs_read=("$WORKSPACE", "/usr"), net=Egress(allow=("pypi.org:443",)), limits=EXEC_SANDBOX.limits), Trust.UNTRUSTED, (Sink.NETWORK,)
     )
@@ -402,8 +422,8 @@ def test_requests_it_cannot_serve_are_refused_before_anything_spawns(tmp_path, m
 def test_a_poisoned_workspace_refuses_every_later_call(tmp_path, monkeypatch):
     import bulkhead.backends.bwrap as module
 
-    monkeypatch.setattr(module, "supervise", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
-    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=fake_runner())
+    monkeypatch.setattr(module, "run_governed", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
+    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=fake_runner(), namespace_phase=True)
     backend.workspace("ep_poisoned").poisoned = True
     outcome = backend.execute(request_for(Program.from_text("python", "print(1)"), episode_id="ep_poisoned"), {})
     assert outcome.process.setup_error == "bulkhead.setup.workspace_unsafe"
@@ -438,9 +458,12 @@ def t2_backend(tmp_path_factory):
         pytest.skip("unsupported: set BULKHEAD_INTEGRATION=1 on Linux to run the real bubblewrap backend")
     from bulkhead.probe import run_probe
 
-    report = run_probe()
+    from bulkhead.cgroups import configured_parent
+
+    report = run_probe(cgroup_parent=os.environ.get("BULKHEAD_CGROUP_PARENT"))
+    parent = configured_parent()
     try:
-        return BwrapBackend(report, tmp_path_factory.mktemp("bulkhead-work"))
+        return BwrapBackend(report, tmp_path_factory.mktemp("bulkhead-work"), cgroup_parent=parent, namespace_phase=parent is None)
     except BackendUnavailable as exc:
         pytest.skip(f"unsupported: {exc}")
 
@@ -454,7 +477,7 @@ def test_integration_benign_programs_run_inside_the_namespace_phase(t2_backend):
     python = t2_backend.execute(request_for(Program.from_text("python", "print(sum(range(10)))"), episode_id="ep_benign"), {})
     shell = t2_backend.execute(request_for(Program.from_text("shell", "echo hi > out/f && cat out/f; exit 3"), episode_id="ep_benign", call_id="c1"), {})
 
-    assert python.audit["backend"] == "bwrap-namespace-phase" and python.audit["started"]
+    assert python.audit["backend"] in ("bwrap-namespace-phase", "bwrap-t2") and python.audit["started"]
     assert (python.process.stdout, python.audit["exit_code"]) == ("45\n", 0)
     assert (shell.process.stdout, shell.audit["exit_code"]) == ("hi\n", 3)
     assert (t2_backend.workspace("ep_benign").path / "out" / "f").read_text() == "hi\n"

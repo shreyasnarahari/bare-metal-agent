@@ -91,8 +91,10 @@ def test_a_contradictory_policy_is_refused():
         SyscallPolicy(allow=("read", "ptrace"))
     with pytest.raises(ValueError, match="dedicated rules"):
         SyscallPolicy(allow=("read", "socket"))
-    with pytest.raises(ValueError, match="exactly one socket family"):
+    with pytest.raises(ValueError, match="AF_UNIX or nothing"):
         SyscallPolicy(socket_families=(1, 2))
+    with pytest.raises(ValueError, match="AF_UNIX or nothing"):
+        SyscallPolicy(socket_families=(2,))
 
 
 def test_an_unsupported_architecture_is_refused_not_guessed(monkeypatch):

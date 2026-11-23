@@ -83,6 +83,7 @@ from .types import ToolCall, ToolResult
 from .validate import (
     permission_denied_observation,
     permission_required_observation,
+    resource_exhausted_observation,
     sandbox_violation_observation,
     timeout_observation,
 )
@@ -439,8 +440,10 @@ def process_tool_result(call: ToolCall, digest: str, process: ExecResult, policy
     """Turn what a live backend observed into the tool result the model sees.
 
     A sandbox that never started is a ``sandbox_violation`` (the program did
-    not run; ``handler_called`` is false). A run killed at its deadline is a
-    ``timeout`` with unknown effects, never retried automatically. Anything
+    not run; ``handler_called`` is false). A run stopped by a memory, PID,
+    disk, or CPU ceiling is ``resource_exhausted`` (never retried: it would
+    exhaust the ceiling again). A run killed at its deadline is a ``timeout``
+    with unknown effects, never retried automatically. Anything
     else, including a nonzero exit or a signal, is a valid result whose value
     is the bounded ``ExecResult`` (exit code, signal, stdout, stderr,
     truncation flags). Its output is untrusted (the exec specs declare it so).
@@ -449,6 +452,9 @@ def process_tool_result(call: ToolCall, digest: str, process: ExecResult, policy
         rule = process.setup_error or "bulkhead.setup.failed"
         error = sandbox_violation_observation(call.name, rule, "the sandbox could not be set up, so the program did not run")
         return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=False)
+    if process.exhausted is not None:
+        error = resource_exhausted_observation(call.name, process.exhausted)
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=True)
     if process.timed_out:
         return ToolResult(call.id, call.name, call.arguments, digest, False, error=timeout_observation(call.name, policy), handler_called=True)
     return ToolResult(call.id, call.name, call.arguments, digest, True, value=process.value(), handler_called=True)

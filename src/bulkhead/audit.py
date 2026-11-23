@@ -43,7 +43,11 @@ _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 CLEANUP_STATUSES = ("clean", "killed", "leaked", "not_started")
 ADDRESS_CLASSES = ("public", "private", "loopback", "link_local", "multicast", "reserved", "ip_literal", "unresolved")
 EGRESS_DECISIONS = ("allow", "deny")
-RESOURCE_KEYS = ("cpu_s", "wall_s", "peak_memory_kb", "pids_peak", "oom_killed")
+# Resource evidence (all volatile). The cgroup figures cover the whole call tree; absent means unmeasured.
+RESOURCE_KEYS = (
+    "cpu_s", "wall_s", "peak_memory_kb", "pids_peak", "oom_killed",
+    "cpu_throttled_s", "oom_kills", "pids_limit_hits", "disk_peak_kb",
+)
 
 
 class AuditError(BulkheadError, ValueError):

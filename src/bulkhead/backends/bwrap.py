@@ -1,33 +1,45 @@
-"""The namespace/seccomp phase of tier 2: bubblewrap, a minimal filesystem view, and a seccomp filter.
+"""Tier 2: bubblewrap namespaces, a minimal filesystem view, seccomp, and a delegated cgroup leaf per call.
 
-Label: ``bwrap-namespace-phase``. This is not yet the brief's complete T2
-profile: cgroup limits and cgroup tree cleanup arrive in part 5, and until
-then cleanup reaches the direct child, its process group and session, and the
-sandbox's PID namespace. Results from this backend carry that name, never
-plain "T2 sandbox".
+Two labels, never confused:
+
+- ``bwrap-t2`` is the complete tier-2 profile (bubblewrap + seccomp + cgroup).
+  Each call runs in a fresh delegated cgroup v2 leaf with memory, PID, and
+  CPU ceilings, entered before anything untrusted runs (the helper waits at a
+  start barrier until the supervisor has moved it into the leaf), and
+  ``cgroup.kill`` ends the whole call tree afterwards. It requires every T2
+  capability in the probe report and a configured cgroup parent.
+- ``bwrap-namespace-phase`` (``namespace_phase=True``) is part 4's
+  namespace/seccomp profile without cgroups: cleanup reaches the process
+  group, session, and PID namespace only, and there are no memory or PID
+  ceilings. It exists for hosts and tests without delegation and is never
+  reported as full T2.
 
 Each allowed call runs as
 
-    bwrap <all namespaces fresh, --die-with-parent, --new-session, --cap-drop ALL>
-          --hostname bulkhead --proc /proc --dev /dev [--size N] --tmpfs /tmp
-          <the minimal view: read-only binds, workspace-only writable binds, masks>
-          --chdir /workspace --seccomp FD
-          -- python -I -S -c <launcher> STATUS_FD KIND <python -I - | sh -c>
+    helper (no_new_privs, rlimits, start barrier)
+      -> bwrap <all namespaces fresh, --die-with-parent, --new-session, --cap-drop ALL>
+               --hostname bulkhead --proc /proc --dev /dev [--size N] --tmpfs /tmp
+               <the minimal view: read-only binds, workspace-only writable binds, masks>
+               --chdir /workspace --seccomp FD
+               -- python -I -S -c <launcher> STATUS_FD KIND <python -I - | sh -c>
 
-with a fixed argv (no shell, no interpolation), program text on stdin, a
-minimal environment (``SANDBOX_ENV``; nothing from the caller's environment,
-so no tokens, keys, cloud credentials, or SSH agent), no inherited
-descriptors beyond stdin/stdout/stderr, the status pipe and the seccomp
-memfd, and bubblewrap's always-on no_new_privs. The seccomp filter is
-compiled by ``bulkhead.seccomp`` and installed by bubblewrap in the child just
-before exec; no Python ``preexec_fn`` runs in this process.
+with fixed argv lists (no shell, no interpolation), program text on stdin, a
+minimal environment (``SANDBOX_ENV``; nothing inherited, so no tokens, keys,
+cloud credentials, or SSH agent), no inherited descriptors beyond
+stdin/stdout/stderr, the status pipe and the seccomp memfd, and bubblewrap's
+always-on no_new_privs. bubblewrap installs the seccomp filter just before
+exec; no Python ``preexec_fn`` runs in the supervisor.
 
-The backend exists only when a part 1 probe report proves every feature it
-uses (``REQUIRED_CAPABILITIES``) on this machine with this bubblewrap. A
-missing feature raises ``BackendUnavailable`` at construction; a sandbox that
-fails to build for one call is a run that never started (a
-``sandbox_violation`` for the model). Neither ever falls back to running on
-the host.
+Disk: ``/tmp`` is a sized tmpfs where bubblewrap supports ``--size`` (a hard
+limit, also charged to the leaf's memory); the writable workspace is covered by
+``RLIMIT_FSIZE`` per file and a monitored soft limit on its total (the
+governor kills the run when it crosses ``disk_mb``).
+
+The backend exists only when a part 1 probe report proves every feature its
+profile uses on this machine with this bubblewrap. A missing feature raises
+``BackendUnavailable`` at construction; a sandbox that fails to build for one
+call is a run that never started (a ``sandbox_violation`` for the model).
+Neither ever falls back to running on the host.
 """
 
 from __future__ import annotations
@@ -39,20 +51,25 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
 from ..capabilities import BWRAP_NAMESPACE_FLAGS, ChildRun, run_bounded
+from ..cgroups import CgroupParent
 from ..errors import BulkheadError
 from ..seccomp import CompiledFilter, SeccompUnavailable, compile_filter
-from ..supervisor import CaptureLimits, ProcessOutcome, launcher_command, supervise
-from ..types import ProbeReport, SandboxTier
+from ..supervisor import ProcessOutcome, launcher_command
+from ..types import TIER_REQUIREMENTS, ProbeReport, SandboxTier
 from ..workspace import WORKSPACE_MOUNT, View, ViewError, WorkRoot, Workspace, ensure_visible, plan_view
 from .base import BackendIdentity, ExecutionOutcome, ExecutionRequest, Program, ProgramKind, build_outcome
+from .common import helper_failure, run_governed
 
 BACKEND_NAME = "bwrap-namespace-phase"
-BACKEND_VERSION = "4.0"
-# What the probe must have proven: bubblewrap namespaces, mounts, and network isolation, plus seccomp.
+BACKEND_NAME_T2 = "bwrap-t2"
+BACKEND_VERSION = "5.0"
+# The namespace phase needs bubblewrap namespaces, mounts, and network isolation, plus seccomp.
+# Full T2 needs every T2 requirement in the probe report, cgroup delegation included.
 REQUIRED_CAPABILITIES = (
     "bwrap.binary",
     "bwrap.namespaces",
@@ -82,10 +99,11 @@ class BackendUnavailable(BulkheadError, RuntimeError):
         self.missing = tuple(missing)
 
 
-def missing_capabilities(report: ProbeReport) -> list[str]:
-    """The required capabilities a probe report does not show as ``ok``."""
+def missing_capabilities(report: ProbeReport, *, namespace_phase: bool = True) -> list[str]:
+    """The capabilities a profile requires that a probe report does not show as ``ok``."""
+    names = REQUIRED_CAPABILITIES if namespace_phase else tuple(dict.fromkeys((*REQUIRED_CAPABILITIES, *TIER_REQUIREMENTS[SandboxTier.T2])))
     missing = []
-    for name in REQUIRED_CAPABILITIES:
+    for name in names:
         try:
             if not report.capability(name).ok:
                 missing.append(name)
@@ -167,7 +185,7 @@ def classify_setup_failure(observed: ProcessOutcome) -> str:
 
 
 class BwrapBackend:
-    """Runs allowed exec calls in the bubblewrap namespace/seccomp phase. See the module docstring."""
+    """Runs allowed exec calls under tier 2 (``bwrap-t2``) or its namespace phase. See the module docstring."""
 
     def __init__(
         self,
@@ -177,11 +195,17 @@ class BwrapBackend:
         bwrap: str | None = None,
         python: str = "/usr/bin/python3",
         shell: str = "/bin/sh",
+        cgroup_parent: CgroupParent | None = None,
+        namespace_phase: bool = False,
+        cpu_fraction: float = 1.0,
         runner: Callable[..., ChildRun] = run_bounded,
     ) -> None:
-        missing = missing_capabilities(report)
+        name = BACKEND_NAME if namespace_phase else BACKEND_NAME_T2
+        missing = missing_capabilities(report, namespace_phase=namespace_phase)
+        if not namespace_phase and cgroup_parent is None:
+            missing.append("cgroup.parent")
         if missing:
-            raise BackendUnavailable(f"the probe did not prove {', '.join(missing)}; refusing to build {BACKEND_NAME}", missing=missing)
+            raise BackendUnavailable(f"the probe did not prove {', '.join(missing)}; refusing to build {name}", missing=missing)
         if report.host.architecture != platform.machine().lower():
             raise BackendUnavailable("the probe report was made on a different architecture", missing=("probe.host",))
         binary = bwrap or (os.path.expanduser(report.tools.bwrap_path) if report.tools.bwrap_path else None)
@@ -198,10 +222,14 @@ class BwrapBackend:
         except SeccompUnavailable as exc:
             raise BackendUnavailable(str(exc), missing=("seccomp.filter",)) from None
         self.config = BwrapConfig(binary, python, shell, tmpfs_size="--size" in (help_text.stdout + help_text.stderr))
-        self.identity = BackendIdentity(BACKEND_NAME, f"{BACKEND_VERSION}+bwrap.{'.'.join(map(str, version))}", SandboxTier.T2, report.probe_sha256)
+        self.identity = BackendIdentity(name, f"{BACKEND_VERSION}+bwrap.{'.'.join(map(str, version))}", SandboxTier.T2, report.probe_sha256)
+        self.cgroup_parent = None if namespace_phase else cgroup_parent
+        self.cpu_fraction = cpu_fraction
         self.root = WorkRoot(work_root)
         self._workspaces: dict[str, Workspace] = {}
         self._lock = threading.Lock()
+        if self.cgroup_parent is not None:
+            self.cgroup_parent.reap_stale()  # survivors of an earlier supervisor crash
 
     @staticmethod
     def _version(binary: str, runner: Callable[..., ChildRun]) -> tuple[int, int, int] | None:
@@ -264,25 +292,29 @@ class BwrapBackend:
             except OSError:
                 return refused("bulkhead.setup.view")
             seccomp_fd = self.filter.memfd()
+            program = request.program
+            writable = [Path(entry.source) for entry in view.entries if entry.op == "rw" and entry.source]
             try:
-                observed = supervise(
+                observed = run_governed(
+                    request,
                     lambda status_fd: build_argv(
-                        self.config, view, request.program,  # type: ignore[arg-type]
+                        self.config, view, program,
                         interpreter=interpreter, shell=shell, seccomp_fd=seccomp_fd, status_fd=status_fd,
                         tmp_bytes=int(sandbox.limits.disk_mb) * 1024 * 1024,
                         mask_dir=str(self.root.mask_dir), mask_file=str(self.root.mask_file),
                     ),
-                    stdin=request.program.source,
                     env=SANDBOX_ENV,
-                    timeout_s=request.effective_timeout_s,
-                    limits=CaptureLimits.from_limits(sandbox.limits),
-                    pass_fds=(seccomp_fd,),
+                    cwd="/",
+                    writable=writable,
+                    cgroup_parent=self.cgroup_parent,
+                    keep_fds=(seccomp_fd,),
+                    cpu_fraction=self.cpu_fraction,
                 )
             finally:
                 os.close(seccomp_fd)
             if observed.cleanup_status == "leaked":
                 workspace.poisoned = True
-            if not observed.started:
+            if not observed.started and helper_failure(observed) is None:
                 observed = replace(observed, setup_error=classify_setup_failure(observed))
         finally:
             workspace.lock.release()
@@ -298,6 +330,7 @@ def _parse(text: str) -> tuple[int, int, int] | None:
 
 __all__ = [
     "BACKEND_NAME",
+    "BACKEND_NAME_T2",
     "BACKEND_VERSION",
     "MIN_BWRAP_VERSION",
     "REQUIRED_CAPABILITIES",

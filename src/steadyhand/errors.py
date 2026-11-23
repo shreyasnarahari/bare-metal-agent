@@ -41,6 +41,7 @@ class ErrorType(str, Enum):
     PERMISSION_DENIED = "permission_denied"  # policy said DENY; the model may choose another action
     PERMISSION_REQUIRED = "permission_required"  # policy said ASK; the episode escalates for approval
     SANDBOX_VIOLATION = "sandbox_violation"  # the sandbox refused or stopped the call
+    RESOURCE_EXHAUSTED = "resource_exhausted"  # a memory, PID, disk, or CPU ceiling stopped a sandboxed run
 
 
 # A sentinel meaning "no value to show", distinct from None (which is a value worth showing).

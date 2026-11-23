@@ -166,11 +166,13 @@ class AttackContext:
     def workspace_files(self, attacks: Mapping[str, Any]) -> dict[str, bytes]:
         return {name: (self.token + "\n" if text == "secret" else text).encode() for name, text in attacks["workspace_files"].items()}
 
-    def program(self, attack: Mapping[str, Any]) -> Program:
+    def program(self, attack: Mapping[str, Any], *, workspace: str = "/workspace") -> Program:
+        """The attack's program text. ``workspace`` is where the sandbox sees its workspace
+        (``/workspace`` under the namespace backend, the real host path under tier 1)."""
         prelude = (ATTACKS / "scripts" / "_prelude.py").read_text()
         script = (ATTACKS / "scripts" / attack["script"]).read_text()
         text = prelude + "\n" + script
-        replacements = {"__CANARY_ROOT__": str(self.canary_root), "__SUPERVISOR_PID__": str(os.getpid())}
+        replacements = {"__CANARY_ROOT__": str(self.canary_root), "__SUPERVISOR_PID__": str(os.getpid()), "__WORKSPACE__": workspace}
         if self.listeners is not None:
             replacements |= {
                 "__ABSTRACT__": self.listeners.abstract,

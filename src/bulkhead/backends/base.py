@@ -43,6 +43,8 @@ AUDIT_FIELDS = (
 )
 # Program text a model may hand to an exec tool. Larger programs are refused before anything runs.
 MAX_PROGRAM_BYTES = 64 * 1024
+# Ceilings whose exhaustion is a resource_exhausted result, distinct from a timeout or a nonzero exit.
+EXHAUSTION_LIMITS = ("memory", "pids", "disk", "cpu")
 # The typed value of a completed exec run, as the model sees it.
 EXEC_RESULT_FIELDS = ("exit_code", "signal", "stdout", "stderr", "stdout_truncated", "stderr_truncated")
 
@@ -202,10 +204,13 @@ class ExecResult:
     stdout_truncated: bool = False
     stderr_truncated: bool = False
     setup_error: str | None = None
+    exhausted: str | None = None  # memory, pids, disk, or cpu: the ceiling that stopped a started run
 
     def __post_init__(self) -> None:
         if not self.started and (self.exit_code is not None or self.signal is not None or self.stdout or self.stderr):
             raise ValueError("a run that never started has no exit status or output")
+        if self.exhausted is not None and (not self.started or self.exhausted not in EXHAUSTION_LIMITS):
+            raise ValueError("only a started run can exhaust a known ceiling")
         if self.started and self.setup_error is not None:
             raise ValueError("a started run has no setup error")
         if not self.started and self.setup_error is None:
@@ -253,6 +258,31 @@ def violation(kind: str, rule_id: str, detail: str) -> dict[str, str]:
     return {"kind": kind, "rule_id": rule_id, "detail": detail}
 
 
+def exhaustion(request: ExecutionRequest, observed: ProcessOutcome) -> str | None:
+    """Which ceiling, if any, stopped a started run, from the evidence the run left.
+
+    In order: a cgroup OOM kill (memory); PID-limit rejections in a run that
+    then failed or timed out (pids); the governor's disk stop, SIGXFSZ, or a
+    failed run whose writable area reached ``disk_mb`` (disk); the governor's
+    CPU stop or SIGXCPU (cpu). A run that succeeded despite a rejected fork is
+    an ordinary result; the audit still counts the rejections.
+    """
+    usage = observed.resource_usage
+    failed = observed.timed_out or observed.signal is not None or observed.exit_code not in (0, None) or observed.stopped is not None
+    if usage.get("oom_kills", 0) > 0 or usage.get("oom_killed") is True:
+        return "memory"
+    if usage.get("pids_limit_hits", 0) > 0 and failed:
+        return "pids"
+    disk_kb = request.spec.sandbox.limits.disk_mb * 1024 if request.spec.sandbox is not None else None
+    if observed.stopped == "disk" or observed.signal == signal.SIGXFSZ:
+        return "disk"
+    if failed and disk_kb is not None and usage.get("disk_peak_kb", 0) >= disk_kb:
+        return "disk"
+    if observed.stopped == "cpu" or observed.signal == signal.SIGXCPU:
+        return "cpu"
+    return None
+
+
 def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed: ProcessOutcome) -> ExecutionOutcome:
     """Turn what the supervisor observed into the audit fields and the ``ExecResult`` for one call.
 
@@ -272,6 +302,9 @@ def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed
     else:
         if observed.signal == signal.SIGSYS:
             violations.append(violation("seccomp", "bulkhead.seccomp.kill", "the program was killed by its seccomp filter (SIGSYS)"))
+        exhausted = exhaustion(request, observed)
+        if exhausted is not None:
+            violations.append(violation("resource", f"bulkhead.limit.{exhausted}", f"the {exhausted} ceiling stopped the program"))
         process = ExecResult(
             started=True,
             exit_code=observed.exit_code,
@@ -281,6 +314,7 @@ def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed
             stderr=observed.stderr.decode("utf-8", "replace"),
             stdout_truncated=observed.stdout_truncated,
             stderr_truncated=observed.stderr_truncated,
+            exhausted=exhausted,
         )
         cleanup = observed.cleanup_status
         counts = {
@@ -312,6 +346,7 @@ def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed
 __all__ = [
     "AUDIT_FIELDS",
     "EXEC_RESULT_FIELDS",
+    "EXHAUSTION_LIMITS",
     "MAX_PROGRAM_BYTES",
     "BackendIdentity",
     "ExecResult",
@@ -323,5 +358,6 @@ __all__ = [
     "ProgramKind",
     "ProgramSpec",
     "build_outcome",
+    "exhaustion",
     "violation",
 ]

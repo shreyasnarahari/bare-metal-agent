@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 (threat model and capability probe), 2 (policy, manifests, and approvals), 3 (taint, audit, and replay), and 4 (the tier-2 namespace/seccomp jailer and exec tools) are implemented. **The bubblewrap backend has not yet run on a host that has bubblewrap**, so its namespace and filesystem isolation is untested; see part 4 below.
+**Status:** parts 1 to 5 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, and resource governance with the tier-1 backend. **The tier-1 backend and cgroup governance are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace and filesystem isolation is untested; see parts 4 and 5 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -198,6 +198,66 @@ Not yet verified anywhere:
 - The in-sandbox property checks.
 
 Those 23 integration tests are skipped here as unsupported. Acceptance for this phase is pending a run on a Linux host or VM with bubblewrap.
+
+### Resource governance and tier 1 (part 5)
+
+Every live call now goes through one path, `bulkhead.backends.common.run_governed`:
+
+- **cgroup leaf:** with a delegated parent configured, a fresh leaf with `memory.max`, `memory.swap.max`, `memory.oom.group`, `pids.max`, and `cpu.max` is created before anything is spawned.
+- **Helper:** a single-threaded helper (`python -I -m bulkhead.helper`) closes stray descriptors and applies, in order:
+  - `no_new_privs`;
+  - Landlock (T1);
+  - rlimits: `RLIMIT_CPU`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_CORE=0`, and `RLIMIT_AS` as a backup only;
+  - seccomp (T1).
+
+  It then waits at a start barrier until the supervisor has moved it into the leaf and checked the move, and only then execs bubblewrap (T2) or the launcher (T1).
+- **While it runs:** the governor polls the workspace's disk total and the leaf's total CPU time.
+- **Afterwards:** `cgroup.kill` ends every survivor and the leaf is removed. A leaf that can't be emptied is reported `leaked`, and the next backend start reaps it.
+
+| Profile | Tier | Files | Network | Cleanup | Memory / PIDs |
+|---|---|---|---|---|---|
+| `bwrap-t2` | T2 | mount namespace: undeclared paths absent | network namespace, no egress | PID namespace and `cgroup.kill` | cgroup |
+| `bwrap-namespace-phase` | T2 (partial) | mount namespace | network namespace | PID namespace and process group | none |
+| `landlock-t1-cgroup` | T1 | Landlock: access denied, names may be visible | none (`socket()` refused, TCP denied) | process group (`setsid` refused) and `cgroup.kill` | cgroup |
+| `landlock-t1` | T1 | Landlock | none | process group only | `RLIMIT_AS` backup only |
+| T0 | T0 | not a sandbox: exec and network tools are denied | | | |
+
+`bulkhead.backends.profiles` holds the full description and builds the per-attack expectation matrix (`blocked`, `killed`, `different_boundary`, `not_applicable`; never `passed`).
+
+- **Construction:** `BwrapBackend` now builds full T2 by default and needs a cgroup parent. The namespace-only profile needs `namespace_phase=True`.
+- **`resource_exhausted`:** a memory, PID, disk, or CPU ceiling gives this non-retryable observation, distinct from `timeout` and from a nonzero exit.
+- **Disk:**
+  - Hard limits: `/tmp` (T2 with `--size`) and any single file (`RLIMIT_FSIZE`).
+  - Soft limit: the workspace total is polled about every 50 ms, so a fast writer can overshoot. In the many-file test it stopped at 12 MiB against an 8 MiB limit.
+
+```bash
+.venv/bin/python -m pytest tests/test_bulkhead_cgroups.py tests/test_bulkhead_landlock.py tests/test_bulkhead_resource_limits.py
+# Destructive resource fixtures run only inside a confirmed delegated parent:
+systemd-run --user --scope -p Delegate=yes bash -c '
+  P=/sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup)
+  mkdir "$P/supervisor" "$P/sandbox"
+  echo $$ > "$P/supervisor/cgroup.procs"
+  echo "+cpu +memory +pids" > "$P/cgroup.subtree_control"
+  echo "+cpu +memory +pids" > "$P/sandbox/cgroup.subtree_control"
+  BULKHEAD_INTEGRATION=1 BULKHEAD_CGROUP_PARENT="$P/sandbox" .venv/bin/python -m pytest tests/test_bulkhead_resource_limits.py'
+```
+
+Verified on the WSL2 development host (Landlock ABI 7, no bubblewrap):
+
+- **Tier-1 attacks:** the real T1 backend stops all 20 part 4 attacks. Seven fail differently than under T2 (access denied rather than invisible, or no sockets at all rather than a separate network namespace), and the fixture records which and why.
+- **Cleanup fixtures:** descriptor exhaustion, core-dump suppression, double fork, and zombies leave nothing behind.
+- **T1 end to end:** episodes run through T1, and their replay spawns nothing.
+- **Inside a delegated user scope** (`landlock-t1-cgroup`):
+  - the fork bomb stopped at `pids.max` (32);
+  - the memory bomb was killed by the cgroup OOM killer at about 96 MiB;
+  - a 25% CPU quota gave 0.53 s of CPU in 2.26 s of wall time;
+  - the CPU-total ceiling stopped a spin at 1.02 s;
+  - the disk fills stopped at 8 MiB (one file) and 12 MiB (many files);
+  - every process was in the leaf before untrusted code ran;
+  - survivors of a killed supervisor were reaped at the next start;
+  - no leaf was left behind.
+
+Not verified: `bwrap-t2` and `bwrap-namespace-phase`, which need bubblewrap.
 
 ## Architecture
 

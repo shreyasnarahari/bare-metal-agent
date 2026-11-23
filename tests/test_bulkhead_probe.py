@@ -742,7 +742,8 @@ def test_probe_sources_name_no_sensitive_paths_and_read_one_environment_variable
 
     assert {name: SENSITIVE.findall(text) for name, text in sources.items() if SENSITIVE.search(text)} == {}
     environ_uses = [(name, line.strip()) for name, text in sources.items() for line in text.splitlines() if "os.environ" in line]
-    assert environ_uses == [("probe.py", "default=os.environ.get(CGROUP_PARENT_ENV) or None,")]
+    # One variable only: the explicitly configured cgroup parent (read by the probe CLI and by the backends).
+    assert sorted(environ_uses) == [("cgroups.py", "value = os.environ.get(CGROUP_PARENT_ENV)"), ("probe.py", "default=os.environ.get(CGROUP_PARENT_ENV) or None,")]
     assert "sudo" not in "".join(sources.values()).replace("never uses sudo", "").replace("``sudo``", "")
 
 

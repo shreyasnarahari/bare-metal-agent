@@ -72,5 +72,22 @@ An episode that holds **private data**, **untrusted content**, and **an outbound
 
 Cleanup reaches the process group, the session, and the PID namespace, not a cgroup tree (part 5). The seccomp filter and the supervisor are tested on a real kernel. The bubblewrap backend has not run on a host with bubblewrap, so filesystem and namespace isolation remain unverified. Contents written to `/workspace/out` are untrusted and may include symlinks that name host paths; host-side consumers must not follow them.
 
-- **Development host (WSL2):** selects T1. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup leaf, limits, and `cgroup.kill` probes all pass.
+**Status after part 5:** resource governance and the T1 backend are implemented.
+
+- **`bwrap-t2`, the complete T2 profile:** the part 4 namespaces and seccomp, plus a fresh delegated cgroup v2 leaf per call. The leaf enforces `memory.max` (an OOM kills the whole call), `pids.max`, and `cpu.max`, and is entered before any untrusted code runs, through the helper's start barrier. `cgroup.kill` ends the tree.
+- **`landlock-t1-cgroup` and `landlock-t1`:** Landlock, the T1 seccomp policy, `no_new_privs`, and rlimits, applied by a single-threaded helper before exec, with or without a cgroup leaf.
+  - The T1 seccomp policy refuses `socket()` entirely, plus `setsid` and `setpgid`, so a process can't leave the group that cleanup kills.
+  - T1 is a different boundary from T2. Access is denied rather than paths being made invisible. A directory holding a denied entry can't be listed. There is no network at all. `/proc` is not granted.
+  - Without a cgroup, T1 has no PID or memory ceiling, so resource-exhaustion fixtures never run against that profile.
+- **Exhaustion results:** a memory, PID, disk, or CPU ceiling produces a non-retryable `resource_exhausted` result.
+- **Disk limits:** `/tmp` (T2 with `--size`) and single files (`RLIMIT_FSIZE`) are hard limits. The workspace total is a monitored soft limit.
+
+Verified on the WSL2 host:
+
+- All T1 attack, cleanup, and resource fixtures pass against real Landlock and seccomp.
+- Inside a delegated user scope, every destructive fixture passes: fork and memory bombs, CPU quota and total, single- and many-file disk fills, pre-exec cgroup membership, and reaping after the supervisor is killed.
+
+Still unverified: `bwrap-t2` and `bwrap-namespace-phase`, since bubblewrap is absent here.
+
+- **Development host (WSL2):** selects T1, and the T1 backend runs here for real. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup probes and the cgroup-governed resource fixtures all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

@@ -1,5 +1,8 @@
 expected_keys = {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR"}
-fds = sorted(int(name) for name in os.listdir("/proc/self/fd"))
+try:
+    fds = sorted(int(name) for name in os.listdir("/proc/self/fd"))
+except OSError as exc:
+    fds = code(exc.errno)  # tier 1 does not grant /proc; the fstat sweep below still runs
 open_fds = []
 for number in range(3, 256):
     try:

@@ -20,7 +20,7 @@ NR = {
     "userfaultfd": (323, 282), "unshare": (272, 97), "setns": (308, 268), "clone": (56, 220), "clone3": (435, 435),
     "mount": (165, 40), "umount2": (166, 39), "pivot_root": (155, 41),
     "open_by_handle_at": (304, 265), "name_to_handle_at": (303, 264),
-    "setuid": (105, 146), "setgid": (106, 144), "capset": (126, 91), "getpid": (39, 172),
+    "setuid": (105, 146), "setgid": (106, 144), "capset": (126, 91), "capget": (125, 90), "getpid": (39, 172),
 }
 libc = ctypes.CDLL(None, use_errno=True)
 libc.syscall.restype = ctypes.c_long

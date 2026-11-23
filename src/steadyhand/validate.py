@@ -319,6 +319,26 @@ def sandbox_violation_observation(tool: str, rule_id: str, problem: str) -> Erro
     )
 
 
+RESOURCE_HINTS = {
+    "memory": "used more memory than its sandbox allows",
+    "pids": "started more processes than its sandbox allows",
+    "disk": "wrote more data than its sandbox allows",
+    "cpu": "used more CPU time than its sandbox allows",
+}
+
+
+def resource_exhausted_observation(tool: str, limit: str) -> ErrorObservation:
+    """A sandbox ceiling stopped the run. Not retryable: the same program would exhaust it again."""
+    reason = RESOURCE_HINTS.get(limit, "exceeded a sandbox limit")
+    return ErrorObservation(
+        error_type=ErrorType.RESOURCE_EXHAUSTED,
+        tool=tool,
+        retryable=False,
+        hint=f"{tool} {reason} and was stopped. Do a smaller amount of work rather than repeating the call.",
+        details=(FieldProblem("limit", f"the {limit} ceiling was reached", limit),),
+    )
+
+
 # Semantic checks for the mock store
 
 
