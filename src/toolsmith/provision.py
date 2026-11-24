@@ -1,7 +1,7 @@
 """Provision a Colab-style runtime: a validated llama.cpp server build and GGUF weights.
 
-Shared by ``notebooks/01_toolsmith.ipynb`` and ``notebooks/02_steadyhand.ipynb``
-so the two notebooks restore, build, and cache the same way. Builds and models
+Shared by ``notebooks/01_toolsmith.ipynb``, ``notebooks/02_steadyhand.ipynb``, and
+``notebooks/03_bulkhead.ipynb`` so the notebooks restore, build, and cache the same way. Builds and models
 are cached on Drive and copied to local disk before use; every executable is
 checked with ``--version`` and every GGUF by magic bytes and exact size.
 

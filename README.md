@@ -6,7 +6,7 @@ Toolsmith is a from-first-principles function-calling and constrained-decoding l
 
 ## Run and verify
 
-On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` (Toolsmith) or `notebooks/02_steadyhand.ipynb` (Steadyhand) from the synced tree.
+On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` (Toolsmith), `notebooks/02_steadyhand.ipynb` (Steadyhand), or `notebooks/03_bulkhead.ipynb` (Bulkhead) from the synced tree.
 
 Local checks:
 
@@ -17,7 +17,7 @@ Local checks:
 git diff --check
 ```
 
-There are two notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track and `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop. Both provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. On a fresh Colab T4 or L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
+There are three notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track, `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop, and `notebooks/03_bulkhead.ipynb` for the Bulkhead sandbox and permission layer. All three provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. Cells that two notebooks share are kept identical by the notebook tests. On a fresh Colab T4 or L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
 
 ### Running on a T4 or L4
 
@@ -94,7 +94,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 ## Bulkhead: sandboxed tool execution
 
-`src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
+`src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`. On Colab, Bulkhead runs from its own notebook, `notebooks/03_bulkhead.ipynb`. It moved out of the Steadyhand notebook after part 8; the part plans still name `02_steadyhand.ipynb`, written before the move.
 
 **Status:** parts 1 to 8 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, the versioned attack suite with overhead and usability benchmarks, and the AgentDojo adapter with paired runs. **The tier-1 backends (with and without a cgroup), cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; the attack suite records every tier-2 cell as untested. **The AgentDojo evaluation's local CPU checks are complete; its live results are pending**, and no AgentDojo score is claimed. See parts 4 to 8 below.
 
@@ -122,7 +122,7 @@ systemd-run --user --scope -p Delegate=yes bash -c '
   .venv/bin/python -m bulkhead.probe --cgroup-parent "$P/sandbox"'
 ```
 
-The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab probe (`bulkhead-probe` in `notebooks/02_steadyhand.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
+The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab probe (`bulkhead-probe` in `notebooks/03_bulkhead.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
 
 ### Policy gate (part 2)
 
@@ -375,7 +375,7 @@ Verified on the WSL2 development host. The records (manifests, raw samples, evid
   - The one injection that still succeeds is the declared negative control, a store write the task doesn't mark sensitive.
   - Duplicate effects, and refused calls that still ran, are zero in every mode.
 
-Not verified: every bubblewrap cell, the egress episode, and the Colab run of the new notebook cell (`bulkhead-attack-suite`).
+Not verified: every bubblewrap cell, the egress episode, and the Colab run of the new notebook cell (`bulkhead-attack-suite`, now in `notebooks/03_bulkhead.ipynb`).
 
 **Also changed:**
 - The part 6 proxy now records a tunnel cut by the end of its call as `time` even if the shutdown's EOFs arrive first. It previously could record `allow`, depending on timing.
@@ -383,7 +383,7 @@ Not verified: every bubblewrap cell, the egress episode, and the Colab run of th
 
 ### AgentDojo evaluation (part 8): status
 
-**Local CPU checks are complete. Live results are pending:** no live model has run the paired sweep, and this README claims no AgentDojo utility, attack-success, ASK, or overhead figure. Once the notebook's `bulkhead-agentdojo-sweep` cell runs, `results/bulkhead/RESULTS.md` is regenerated from its records, and this section will cite only those tables and manifests.
+**Local CPU checks are complete. Live results are pending:** no live model has run the paired sweep, and this README claims no AgentDojo utility, attack-success, ASK, or overhead figure. Once the `bulkhead-agentdojo-sweep` cell in `notebooks/03_bulkhead.ipynb` runs, `results/bulkhead/RESULTS.md` is regenerated from its records, and this section will cite only those tables and manifests.
 
 What exists:
 
