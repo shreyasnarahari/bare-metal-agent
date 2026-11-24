@@ -115,5 +115,18 @@ Still unverified: T2 networking under bubblewrap. The optional proxy-mediated `h
 - **Overhead and usability** are measured from raw samples and deterministic episodes; see `results/bulkhead/RESULTS.md` (generated from the records, not committed).
 - **Known limits, unchanged by part 7:** redaction is literal; per-call bounds do not limit cumulative effects; taint protects only sinks the task marks sensitive; tier 1 hides content, not names.
 
+**Status after part 8:** an AgentDojo adapter (`bulkhead.eval.agentdojo`, pinned to agentdojo 0.1.35, commit `a75aba76`) runs Steadyhand episodes inside AgentDojo's custom-pipeline extension point under three paired configurations: `baseline`, `policy`, and `policy_taint`.
+
+- **Simulated tools:** AgentDojo's tools stay in the benchmark's in-memory environment. Each one is an in-process Steadyhand tool with a declared effect, output trust, and an `external_effect` sink.
+- **What the ablation measures:** the policy and taint layers. The OS sandbox is measured by the attack suite, not by AgentDojo.
+- **Output trust is declared, then checked:** a canary run over every ground-truth call verifies the declarations. Slack channel names, for example, carry an injection vector and are untrusted. A fetch is a sink, because its URL can carry data out.
+- **Traces count only what ran:** AgentDojo's function trace lists only calls whose handler ran, so a refused call is never scored as an effect.
+- **Unsupported schemas are withheld:** a tool whose schema the grammar cannot constrain is withheld, and the cases that need it are listed as ineligible with a JSON Pointer reason.
+- **Verified so far:** the CPU gate, using a scripted model on a local fixture and the real pinned package. Live results are pending.
+- **Known limits:**
+  - Taint is per episode, not per value, so after one untrusted read every sensitive call asks.
+  - A static policy cannot tell an attacker's transfer from a user's.
+  - A partial run covers only its listed ids.
+
 - **Development host (WSL2):** selects T1, and the T1 backend runs here for real. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup probes and the cgroup-governed resource fixtures all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

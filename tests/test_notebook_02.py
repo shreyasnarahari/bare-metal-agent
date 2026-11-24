@@ -53,8 +53,10 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
         "bulkhead-probe-notes", "bulkhead-probe",
         # Part 7's attack corpus, usability benchmark, and report are CPU-only too.
         "bulkhead-attack-suite-intro", "bulkhead-attack-suite",
+        # Part 8's AgentDojo CPU gate needs no model either; its live sweep follows the Steadyhand sweep.
+        "bulkhead-agentdojo-notes", "bulkhead-agentdojo-gate",
         "steadyhand-server", "steadyhand-notes", "steadyhand-bare-loop", "steadyhand-smoke",
-        "steadyhand-sweep", "steadyhand-server-stop", "cleanup",
+        "steadyhand-sweep", "bulkhead-agentdojo-sweep", "steadyhand-server-stop", "cleanup",
     ]
     assert notebook["metadata"]["accelerator"] == "GPU"
     for cell in notebook["cells"]:
@@ -241,6 +243,111 @@ def test_the_attack_suite_cell_records_untested_profiles_reports_and_resumes_fro
     runs.clear()
     second = execute()
     assert runs == [] and second["bulkhead_attack_run"].run_id == first["bulkhead_attack_run"].run_id
+
+
+# Bulkhead on AgentDojo (part 8)
+
+
+def run_agentdojo_gate(tmp_path, monkeypatch, pytest_tail, *, installed=None):
+    import subprocess as subprocess_module
+
+    import bulkhead.eval.agentdojo as adapter
+
+    calls = []
+    pin = {"version": "0.1.35", "commit": adapter.AGENTDOJO_COMMIT}
+
+    def fake_run(command, **options):
+        calls.append(command)
+        return subprocess_module.CompletedProcess(command, 0 if "failed" not in pytest_tail else 1, stdout=f"....\n{pytest_tail}\n", stderr="")
+
+    monkeypatch.setattr(subprocess_module, "run", fake_run)
+    monkeypatch.setattr(adapter, "installed_pin", lambda: installed)
+    monkeypatch.setattr(adapter, "require_pinned", lambda: pin)
+    namespace = {"PROJECT_DIR": str(ROOT), "DRIVE_RECORDS": tmp_path, "time": __import__("time"), "json": json, "Path": Path}
+    exec(compile(notebook_source("bulkhead-agentdojo-gate"), str(NOTEBOOK_PATH), "exec"), namespace)
+    return namespace, calls
+
+
+def test_the_agentdojo_gate_installs_the_pin_runs_the_real_tests_and_records_the_result(tmp_path, monkeypatch):
+    from bulkhead.eval.agentdojo import AGENTDOJO_REQUIREMENT
+
+    namespace, calls = run_agentdojo_gate(tmp_path, monkeypatch, "57 passed in 30.1s")
+    assert calls[0][-1] == AGENTDOJO_REQUIREMENT and calls[0][1:4] == ["-m", "pip", "install"]
+    assert calls[1][1:3] == ["-m", "pytest"] and "tests/test_bulkhead_agentdojo.py" in calls[1]
+    saved = json.loads((tmp_path / "bulkhead" / "agentdojo" / "cpu_gate.json").read_text())
+    assert saved == namespace["BULKHEAD_AGENTDOJO_GATE"] and saved["passed"] and saved["summary"] == "57 passed in 30.1s"
+    # Already pinned: nothing is installed.
+    _, calls = run_agentdojo_gate(tmp_path, monkeypatch, "57 passed in 30.1s", installed={"version": "0.1.35", "commit": None})
+    assert len(calls) == 1 and calls[0][1:3] == ["-m", "pytest"]
+
+
+@pytest.mark.parametrize("tail", ["44 passed, 13 skipped in 18.0s", "1 failed, 56 passed in 30.0s"])
+def test_the_agentdojo_gate_fails_on_skipped_or_failed_tests(tmp_path, monkeypatch, tail):
+    with pytest.raises(RuntimeError, match="CPU gate failed"):
+        run_agentdojo_gate(tmp_path, monkeypatch, tail)
+    assert json.loads((tmp_path / "bulkhead" / "agentdojo" / "cpu_gate.json").read_text())["passed"] is False
+
+
+def test_the_agentdojo_sweep_cell_runs_smoke_then_selection_paired_and_resumable(tmp_path, monkeypatch, capsys):
+    from dataclasses import dataclass
+
+    import steadyhand
+    from agentdojo_support import CLASSIFICATION, stand_in_api
+
+    import bulkhead.eval.agentdojo as adapter
+    import bulkhead.eval.runner as runner
+    from bulkhead.eval.runner import ScriptedModel
+
+    @dataclass
+    class Preset:
+        parallel: int = 2
+        per_slot_context: int = 8192
+
+        def as_dict(self):
+            return {"parallel": self.parallel, "per_slot_context": self.per_slot_context}
+
+    monkeypatch.setattr(adapter, "agentdojo_api", stand_in_api)
+    monkeypatch.setattr(runner, "load_classification", lambda *a, **k: adapter.load_classification(CLASSIFICATION))
+    monkeypatch.setattr(steadyhand, "worker_service", lambda *a: ScriptedModel([{"calls": [["get_balance", {}]]}, {"text": "Your balance is 1810.0."}]))
+    monkeypatch.setenv("BULKHEAD_AGENTDOJO_LOCAL", str(tmp_path / "local"))
+    monkeypatch.setenv("BULKHEAD_AGENTDOJO_SMOKE", "2")
+    monkeypatch.setenv("BULKHEAD_AGENTDOJO_CASES", "all")
+    active = {"client": None, "renderer": None, "profile": None, "preset": Preset(), "gpu": {"name": "NVIDIA L4"}, "kv_cache": "f16", "flash_attn": True, "extra_args": []}
+    synced = []
+    namespace = {
+        "PROJECT_DIR": str(tmp_path / "repo"), "DRIVE_RECORDS": tmp_path / "drive", "STEADYHAND_ACTIVE": active, "STEADYHAND_SMOKE": {"ok": True},
+        "BULKHEAD_AGENTDOJO_GATE": {"passed": True}, "STEADYHAND_RUNTIME": {"llama_cpp_ref": "b8233", "model_repo": "r", "model_file": "q4_k_m.gguf", "model_revision": "v"},
+        "ensure_drive": lambda: None, "sync_drive": lambda *a, **k: synced.append(k), "BACKGROUND": None, "start_steadyhand_runtime": lambda: active,
+        "os": __import__("os"), "time": __import__("time"), "json": json, "Path": Path,
+    }
+    exec(compile(notebook_source("bulkhead-agentdojo-sweep"), str(NOTEBOOK_PATH), "exec"), namespace)
+    smoke, sweep = namespace["bulkhead_runs"]
+    out = capsys.readouterr().out
+    assert "6 eligible cases, 3 ineligible; withheld: mini_bank.tag_transaction (/properties/tags/additionalProperties)" in out
+    for run, cases in ((smoke, 2), (sweep, 6)):
+        manifest = json.loads((run / "manifest.json").read_text())
+        assert manifest["kind"] == "live" and len(manifest["case_ids"]) == cases and manifest["approval_mode"] == "deny_all"
+        assert manifest["server"]["model_file"] == "q4_k_m.gguf" and manifest["server"]["parallel"] == 2
+        mirrored = tmp_path / "drive" / "bulkhead" / "agentdojo" / run.name
+        assert (mirrored / "records.jsonl").read_text() == (run / "records.jsonl").read_text()
+        assert {p.name for p in mirrored.iterdir()} >= {"manifest.json", "records.jsonl", "summary.json", "replay.json", "eligibility.json", "journals"}
+        assert json.loads((run / "replay.json").read_text())["mismatches"] == []
+    report = (tmp_path / "drive" / "bulkhead" / "RESULTS.md").read_text()
+    assert f"### Run `{sweep.name}` (live, label `sweep`)" in report and synced == [{"stage": "bulkhead-agentdojo"}]
+    # A fresh runtime resumes from Drive: nothing runs twice.
+    import shutil
+
+    shutil.rmtree(tmp_path / "local")
+    lines = (tmp_path / "drive" / "bulkhead" / "agentdojo" / sweep.name / "records.jsonl").read_text()
+    exec(compile(notebook_source("bulkhead-agentdojo-sweep"), str(NOTEBOOK_PATH), "exec"), namespace)
+    assert (namespace["bulkhead_runs"][1] / "records.jsonl").read_text() == lines
+
+
+def test_the_agentdojo_sweep_never_auto_approves():
+    sweep = notebook_source("bulkhead-agentdojo-sweep")
+    assert "approval_mode" not in sweep and "scripted" not in sweep  # deny_all, the declared primary mode
+    assert "workers=bulkhead_state['active']['preset'].parallel" in sweep and "seed=0" in sweep
+    assert "start_steadyhand_runtime()" in sweep and "JournalCopier(" in sweep
 
 
 # Live cells (they need a GPU; these checks pin the plan's invariants)

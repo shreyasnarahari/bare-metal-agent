@@ -11,7 +11,9 @@ decisions (``bulkhead.egress``), the per-call CONNECT proxy
 (``bulkhead.proxy``), the in-sandbox bridge (``bulkhead.bridge``), and the
 output gate (``bulkhead.output``); part 7 the evaluation layer
 (``bulkhead.eval``): the versioned attack corpus and its resumable runner,
-overhead and usability benchmarks, and the results report.
+overhead and usability benchmarks, and the results report; part 8 the pinned
+AgentDojo adapter, paired-configuration runner, and metrics
+(``bulkhead.eval.agentdojo``, ``runner``, ``metrics``).
 Nothing outside ``bulkhead.eval`` imports ``toolsmith`` or ``steadyhand``, so
 the sandbox layer can be tested and run on its own. ``bulkhead.eval`` sits
 above both: it drives Steadyhand episodes and reuses Toolsmith's metrics.
