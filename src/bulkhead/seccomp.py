@@ -78,6 +78,12 @@ AUDIT_ARCH_ARM = 0x40000028
 X32_SYSCALL_BIT = 0x40000000
 
 AF_UNIX = 1
+AF_INET = 2
+AF_INET6 = 10
+# Families a network-enabled tier-2 call may create: its network namespace has only loopback,
+# so AF_INET/AF_INET6 reach nothing but the in-sandbox bridge to the outside proxy.
+NET_FAMILIES = (AF_UNIX, AF_INET, AF_INET6)
+MAX_FAMILY = 64
 # Namespace flags refused on clone(). CLONE_NEWTIME (0x80) is absent: on clone() the low
 # byte is the exit signal, and a new time namespace needs clone3 or unshare, both refused.
 CLONE_NAMESPACE_FLAGS: Mapping[str, int] = MappingProxyType({
@@ -189,8 +195,8 @@ class SyscallPolicy:
         reserved = {"clone", "clone3", "socket", "socketpair"} & (set(self.allow) | set(self.deny))
         if reserved:
             raise ValueError(f"{sorted(reserved)} are handled by dedicated rules")
-        if self.socket_families not in ((AF_UNIX,), ()):
-            raise ValueError("socket() may allow AF_UNIX or nothing")
+        if self.socket_families not in ((AF_UNIX,), (), NET_FAMILIES):
+            raise ValueError("socket() may allow AF_UNIX, nothing, or (inside a network namespace) AF_UNIX/AF_INET/AF_INET6")
 
     def sha256(self) -> str:
         text = repr((sorted(self.allow), sorted(self.deny.items()), self.default_errno, self.socket_families,
@@ -204,6 +210,8 @@ DEFAULT_POLICY = SyscallPolicy()
 # network namespace a Unix socket could reach host services (D-Bus, agents, abstract
 # sockets); socketpair(AF_UNIX) stays. And setsid/setpgid: the process group is tier 1's
 # cleanup handle when there is no cgroup, so no process may leave it.
+NET_POLICY = SyscallPolicy(socket_families=NET_FAMILIES)
+
 T1_SESSION_ESCAPES = ("setsid", "setpgid")
 T1_POLICY = SyscallPolicy(
     allow=tuple(name for name in ALLOWED_SYSCALLS if name not in T1_SESSION_ESCAPES),
@@ -371,11 +379,14 @@ def _compile(policy: SyscallPolicy) -> CompiledFilter:
         for name, families in (("socket", policy.socket_families), ("socketpair", (AF_UNIX,))):
             if (number := resolve(name)) is None:
                 continue
-            if families:
-                _add(lib, ctx, SCMP_ACT_ALLOW, number, [(0, SCMP_CMP_EQ, AF_UNIX, 0)])
-                _add(lib, ctx, _errno_action(policy.socket_errno), number, [(0, SCMP_CMP_NE, AF_UNIX, 0)])
-            else:
+            if not families:
                 _add(lib, ctx, _errno_action(policy.socket_errno), number)
+                continue
+            # One rule per family: allowed ones pass, every other known family gets EACCES, and
+            # anything beyond falls to the default (ENOSYS). Still a closed set either way.
+            for family in range(MAX_FAMILY):
+                action = SCMP_ACT_ALLOW if family in families else _errno_action(policy.socket_errno)
+                _add(lib, ctx, action, number, [(0, SCMP_CMP_EQ, family, 0)])
         fd = os.memfd_create("bulkhead-seccomp-export", os.MFD_CLOEXEC)
         try:
             rc = lib.seccomp_export_bpf(ctx, fd)
@@ -526,6 +537,7 @@ __all__ = [
     "BLOCKED_CLASSES",
     "CLONE_NAMESPACE_FLAGS",
     "DEFAULT_POLICY",
+    "NET_POLICY",
     "T1_POLICY",
     "CompiledFilter",
     "SeccompUnavailable",

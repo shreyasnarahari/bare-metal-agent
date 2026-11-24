@@ -399,7 +399,9 @@ def test_requests_it_cannot_serve_are_refused_before_anything_spawns(tmp_path, m
         raise AssertionError("nothing may be spawned for a refused request")
 
     monkeypatch.setattr(module, "run_governed", no_spawn)
-    backend = BwrapBackend(fake_report(), tmp_path / "work", runner=fake_runner(), namespace_phase=True)
+    # This bubblewrap was never shown to pass a bound Unix socket, so it cannot offer egress.
+    backend = BwrapBackend(fake_report(failing=("bwrap.unix_socket",)), tmp_path / "work", runner=fake_runner(), namespace_phase=True)
+    assert not backend.network
     networked = SecuritySpec(
         Sandbox(fs_read=("$WORKSPACE", "/usr"), net=Egress(allow=("pypi.org:443",)), limits=EXEC_SANDBOX.limits), Trust.UNTRUSTED, (Sink.NETWORK,)
     )
@@ -531,3 +533,59 @@ def test_integration_the_first_twenty_attacks_fail(t2_backend, tmp_path, monkeyp
             context.listeners.stop()
         t2_backend.cleanup(episode)
     assert problems == []
+
+
+def test_integration_network_goes_only_through_the_calls_proxy(t2_backend, tmp_path):
+    """Real bubblewrap: the allowed fixture works through the bridge; everything else fails with evidence."""
+    import http.server
+    import threading
+
+    from bulkhead.manifest import Egress
+
+    if not t2_backend.network:
+        pytest.skip("unsupported: the probe did not prove a bound Unix socket works in this bubblewrap")
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "3")
+            self.end_headers()
+            self.wfile.write(b"ok\n")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    egress = Egress(allow=(f"127.0.0.1:{port}",), address_classes=("loopback",))
+    spec = SecuritySpec(
+        Sandbox(fs_read=EXEC_SANDBOX.fs_read, fs_write=EXEC_SANDBOX.fs_write, fs_deny=EXEC_SANDBOX.fs_deny, net=egress, limits=EXEC_SANDBOX.limits),
+        Trust.UNTRUSTED, (Sink.FILESYSTEM, Sink.NETWORK),
+    )
+    program = f"""
+import errno, http.client, json, socket
+out = {{}}
+c = http.client.HTTPConnection("127.0.0.1", 3128, timeout=5); c.set_tunnel("127.0.0.1", {port}); c.request("GET", "/")
+out["allowed"] = c.getresponse().read().decode()
+d = http.client.HTTPConnection("127.0.0.1", 3128, timeout=5); d.set_tunnel("exfil.test", 443)
+try:
+    d.request("GET", "/")
+except OSError as exc:
+    out["denied"] = str(exc)
+def attempt(f):
+    try:
+        f(); return "ok"
+    except OSError as exc:
+        return errno.errorcode.get(exc.errno, str(exc))
+out["direct"] = attempt(lambda: socket.create_connection(("127.0.0.1", {port}), timeout=2).close())
+out["host_proxy_socket"] = attempt(lambda: socket.socket(socket.AF_UNIX).connect("/tmp/does-not-matter.sock"))
+print(json.dumps(out, sort_keys=True))
+"""
+    try:
+        outcome = t2_backend.execute(request_for(Program.from_text("python", program), episode_id="ep_network", spec=spec, timeout_s=30), {})
+    finally:
+        server.shutdown()
+    report = json.loads(outcome.process.stdout)
+    assert report["allowed"] == "ok\n" and "403" in report["denied"] and report["direct"] == "ECONNREFUSED"
+    assert [(r["decision"], r["rule_id"]) for r in outcome.egress] == [("allow", "bulkhead.egress.allow"), ("deny", "bulkhead.egress.not_allowed")]

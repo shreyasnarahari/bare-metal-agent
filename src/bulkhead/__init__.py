@@ -5,7 +5,11 @@ capability probe (``python -m bulkhead.probe``); parts 2 and 3 the policy
 engine, approvals, taint, audit events, and recorded replay; part 4 the
 execution backends (``bulkhead.backends``: the bubblewrap namespace/seccomp
 phase), the seccomp filter compiler (``bulkhead.seccomp``), the process
-supervisor (``bulkhead.supervisor``), and workspaces (``bulkhead.workspace``).
+supervisor (``bulkhead.supervisor``), and workspaces (``bulkhead.workspace``);
+part 5 cgroups, rlimits, Landlock, and the pre-exec helper; part 6 egress
+decisions (``bulkhead.egress``), the per-call CONNECT proxy
+(``bulkhead.proxy``), the in-sandbox bridge (``bulkhead.bridge``), and the
+output gate (``bulkhead.output``).
 Nothing in this package imports ``toolsmith`` or ``steadyhand``, so it can be
 tested and run on its own.
 """

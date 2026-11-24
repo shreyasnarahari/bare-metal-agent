@@ -392,7 +392,7 @@ def test_integration_t1_runs_an_episode_end_to_end_and_replay_spawns_nothing(t1_
     [run] = [record for record in records if record["event"] == "sandbox_execution"]
 
     assert result.status is EpisodeStatus.DONE
-    assert run["backend"] == "landlock-t1" and run["tier"] == "T1" and run["result"]["value"]["stdout"] == "42\n"
+    assert run["backend"] == "landlock-t1" and run["tier"] == "T1" and "\n42\n[END UNTRUSTED OUTPUT" in run["result"]["value"]["stdout"]["content"]
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("replay spawned a process")))
     assert replay_episode(result.journal_path).status is EpisodeStatus.DONE
 

@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import re
 import signal
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..errors import BulkheadError
 from ..manifest import SecuritySpec, check_keys
+from ..output import GatedText, render, sanitize
 from ..types import SandboxTier, canonical_hash
 
 if TYPE_CHECKING:
@@ -45,8 +46,9 @@ AUDIT_FIELDS = (
 MAX_PROGRAM_BYTES = 64 * 1024
 # Ceilings whose exhaustion is a resource_exhausted result, distinct from a timeout or a nonzero exit.
 EXHAUSTION_LIMITS = ("memory", "pids", "disk", "cpu")
-# The typed value of a completed exec run, as the model sees it.
-EXEC_RESULT_FIELDS = ("exit_code", "signal", "stdout", "stderr", "stdout_truncated", "stderr_truncated")
+# The typed value of a completed exec run, as the model sees it. Each stream is an output-gate object
+# (``bulkhead.output.render``): {"trust": "untrusted", "content": <wrapped, sanitized text>, "truncated": ...}.
+EXEC_RESULT_FIELDS = ("exit_code", "signal", "stdout", "stderr")
 
 
 @dataclass(frozen=True)
@@ -205,6 +207,7 @@ class ExecResult:
     stderr_truncated: bool = False
     setup_error: str | None = None
     exhausted: str | None = None  # memory, pids, disk, or cpu: the ceiling that stopped a started run
+    output: Mapping[str, Mapping[str, Any]] | None = None  # the output gate's per-stream statistics
 
     def __post_init__(self) -> None:
         if not self.started and (self.exit_code is not None or self.signal is not None or self.stdout or self.stderr):
@@ -216,16 +219,22 @@ class ExecResult:
         if not self.started and self.setup_error is None:
             raise ValueError("a run that never started needs a setup error code")
 
-    def value(self) -> dict[str, Any]:
-        """The tool value of a completed run (``EXEC_RESULT_FIELDS``)."""
-        return {
-            "exit_code": self.exit_code,
-            "signal": self.signal,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-            "stdout_truncated": self.stdout_truncated,
-            "stderr_truncated": self.stderr_truncated,
-        }
+    def render(self, request_sha256: str, secrets: Sequence[str] = ()) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """The model-facing value of a completed run and the ``output_gate`` stream records.
+
+        ``stdout``/``stderr`` are already sanitized (``build_outcome``); here
+        they are redacted and wrapped in deterministic untrusted-output
+        delimiters derived from ``request_sha256``.
+        """
+        value: dict[str, Any] = {"exit_code": self.exit_code, "signal": self.signal}
+        streams = []
+        for name, text, truncated in (("stdout", self.stdout, self.stdout_truncated), ("stderr", self.stderr, self.stderr_truncated)):
+            stats = dict((self.output or {}).get(name) or GatedText(text, len(text.encode()), len(text.encode()), False, 0, 0, truncated).stats())
+            rendered, redacted = render(GatedText(text, stats["raw_bytes"], stats["kept_bytes"], stats["invalid_utf8"], stats["stripped"], stats["neutralized"], truncated),
+                                        request_sha256=request_sha256, stream=name, secrets=secrets)
+            value[name] = rendered
+            streams.append({"name": name, **stats, "redacted": redacted})
+        return value, streams
 
 
 @dataclass(frozen=True)
@@ -235,6 +244,8 @@ class ExecutionOutcome:
     result: Mapping[str, Any] | None
     audit: Mapping[str, Any]
     process: ExecResult | None = None
+    egress: tuple[Mapping[str, Any], ...] = ()  # the call's egress_decision records, in request order
+    gate: tuple[Mapping[str, Any], ...] | None = None  # recorded output_gate streams that go with a typed result
 
     def __post_init__(self) -> None:
         if set(self.audit) != set(AUDIT_FIELDS):
@@ -283,6 +294,17 @@ def exhaustion(request: ExecutionRequest, observed: ProcessOutcome) -> str | Non
     return None
 
 
+def with_egress(outcome: ExecutionOutcome, records: Sequence[Mapping[str, Any]]) -> ExecutionOutcome:
+    """Attach the call's proxy records, and an ``egress`` violation for each distinct denial rule."""
+    egress = tuple(dict(record) for record in records)
+    denied = sorted({record["rule_id"] for record in egress if record["decision"] == "deny"})
+    violations = list(outcome.audit["violations"])
+    for rule in denied:
+        if len(violations) < 16:
+            violations.append(violation("egress", rule, "the egress proxy refused a CONNECT"))
+    return replace(outcome, audit={**outcome.audit, "violations": violations}, egress=egress)
+
+
 def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed: ProcessOutcome) -> ExecutionOutcome:
     """Turn what the supervisor observed into the audit fields and the ``ExecResult`` for one call.
 
@@ -305,16 +327,19 @@ def build_outcome(request: ExecutionRequest, identity: BackendIdentity, observed
         exhausted = exhaustion(request, observed)
         if exhausted is not None:
             violations.append(violation("resource", f"bulkhead.limit.{exhausted}", f"the {exhausted} ceiling stopped the program"))
+        stdout = sanitize(observed.stdout, raw_bytes=observed.stdout_bytes, truncated=observed.stdout_truncated)
+        stderr = sanitize(observed.stderr, raw_bytes=observed.stderr_bytes, truncated=observed.stderr_truncated)
         process = ExecResult(
             started=True,
             exit_code=observed.exit_code,
             signal=observed.signal,
             timed_out=observed.timed_out,
-            stdout=observed.stdout.decode("utf-8", "replace"),
-            stderr=observed.stderr.decode("utf-8", "replace"),
+            stdout=stdout.text,
+            stderr=stderr.text,
             stdout_truncated=observed.stdout_truncated,
             stderr_truncated=observed.stderr_truncated,
             exhausted=exhausted,
+            output={"stdout": stdout.stats(), "stderr": stderr.stats()},
         )
         cleanup = observed.cleanup_status
         counts = {
@@ -360,4 +385,5 @@ __all__ = [
     "build_outcome",
     "exhaustion",
     "violation",
+    "with_egress",
 ]

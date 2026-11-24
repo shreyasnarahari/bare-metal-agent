@@ -8,9 +8,11 @@ and commit it. The test suite never rewrites these files.
 Every scenario runs through ``run_claimed_episode`` with Bulkhead enabled and a
 fake ``ToolsmithService``, so the files hold no prompts, keys, or GPU output.
 The sandboxed scenario uses ``ScriptedBackend``, a test stand-in labeled
-``scripted-test`` that returns a canned process result in the ``ExecResult``
-shape; it is NOT a sandbox and proves nothing about kernel enforcement. Replay
-serves its recorded run back without spawning anything.
+``scripted-test`` that reports a canned process run, which then passes through
+the real output gate (sanitized, wrapped in untrusted-output delimiters,
+journaled as ``output_gate``). It is NOT a sandbox and proves nothing about
+kernel enforcement. Replay serves its recorded run back without spawning
+anything.
 
 - clean: a trusted read, then a taint-sensitive refund: allowed.
 - tainted: an untrusted customer read, then the refund: asks (taint).
@@ -31,7 +33,9 @@ from pathlib import Path
 from bulkhead.approvals import ScriptedApproval, ScriptedApprover
 from bulkhead.manifest import Bounds
 from bulkhead.policy import TaskPolicy, ToolRule
-from bulkhead.replay import BackendIdentity, ExecutionOutcome
+from bulkhead.backends.base import build_outcome
+from bulkhead.replay import BackendIdentity
+from bulkhead.supervisor import ProcessOutcome
 from bulkhead.types import SandboxTier
 from steadyhand import SteadyhandClient, build_registry, initial_messages, load_fixture
 from steadyhand.replay import run_claimed_episode
@@ -70,7 +74,7 @@ class ScriptedService:
 
 
 class ScriptedBackend:
-    """A test stand-in for a sandbox backend: a canned process result. Not a sandbox."""
+    """A test stand-in for a sandbox backend: a canned process run, put through the real output gate. Not a sandbox."""
 
     identity = BackendIdentity("scripted-test", "1", SandboxTier.T2, None)
 
@@ -78,15 +82,13 @@ class ScriptedBackend:
         self.stdout = stdout
 
     def execute(self, request, arguments):
-        value = {"exit_code": 0, "signal": None, "stdout": self.stdout, "stderr": "", "stdout_truncated": False, "stderr_truncated": False}
-        audit = {
-            "backend": self.identity.name, "tier": self.identity.tier.value, "config_sha256": request.config_sha256,
-            "request_sha256": request.sha256, "started": True, "exit_code": 0, "signal": None, "timed_out": False,
-            "cleanup_status": "clean", "stdout_bytes": len(self.stdout.encode()), "stderr_bytes": 0,
-            "stdout_truncated": False, "stderr_truncated": False, "violations": [],
-            "resource_usage": {"cpu_s": 0.01, "peak_memory_kb": 2048, "pids_peak": 1}, "elapsed_s": 0.02,
-        }
-        return ExecutionOutcome(result={"ok": True, "handler_called": True, "value": value}, audit=audit)
+        data = self.stdout.encode()
+        observed = ProcessOutcome(
+            started=True, exit_code=0, signal=None, timed_out=False, stdout=data, stderr=b"", stdout_bytes=len(data), stderr_bytes=0,
+            stdout_truncated=False, stderr_truncated=False, elapsed_s=0.02, cleanup_status="clean",
+            resource_usage={"cpu_s": 0.01, "peak_memory_kb": 2048, "pids_peak": 1},
+        )
+        return build_outcome(request, self.identity, observed)
 
 
 def completion(content=None, calls=(), prompt_tokens=120, completion_tokens=18):

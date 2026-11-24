@@ -7,9 +7,10 @@ program kind and the argument holding the text. After the policy gate allows a
 call, ``steadyhand.security.BackendRunner`` builds an immutable
 ``ExecutionRequest`` from these and hands it to the episode's backend
 (``bulkhead.backends.bwrap.BwrapBackend``, the namespace/seccomp phase of tier
-2). The result value is an ``ExecResult``: exit code, signal, bounded stdout
-and stderr, and truncation flags. The output is untrusted and taints the
-episode.
+2). The result value is an ``ExecResult``: exit code, signal, and stdout and
+stderr as output-gate objects (sanitized, bounded, wrapped in deterministic
+untrusted-output delimiters, with a truncation flag). The output is untrusted
+and taints the episode.
 
 The handlers below exist only to give the tools their schemas. Nothing runs
 them: ``SequentialExecutor`` never calls an exec handler, and a direct call
@@ -57,15 +58,21 @@ EXEC_PROGRAMS = {
 }
 
 
+class GatedStream(TypedDict):
+    """One output stream after the output gate (``bulkhead.output``): sanitized, bounded, labeled."""
+
+    trust: str  # always "untrusted"
+    content: str  # "[BEGIN UNTRUSTED OUTPUT <id>]\n...\n[END UNTRUSTED OUTPUT <id>]", or "" when empty
+    truncated: bool
+
+
 class ExecResult(TypedDict):
     """The value of a completed exec call. A nonzero exit or a signal is still a result."""
 
     exit_code: int | None
     signal: int | None
-    stdout: str
-    stderr: str
-    stdout_truncated: bool
-    stderr_truncated: bool
+    stdout: GatedStream
+    stderr: GatedStream
 
 
 class DirectExecError(RuntimeError):
@@ -113,6 +120,7 @@ __all__ = [
     "DirectExecError",
     "ExecDisabledError",
     "ExecResult",
+    "GatedStream",
     "register_exec_tools",
     "run_python",
     "run_shell",

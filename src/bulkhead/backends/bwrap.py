@@ -30,6 +30,15 @@ stdin/stdout/stderr, the status pipe and the seccomp memfd, and bubblewrap's
 always-on no_new_privs. bubblewrap installs the seccomp filter just before
 exec; no Python ``preexec_fn`` runs in the supervisor.
 
+Network: a spec with ``net.allow`` gets the call's own outside CONNECT proxy
+(``bulkhead.proxy``), bound into the sandbox as a Unix socket at
+``bridge.SOCKET_PATH``, a loopback bridge at ``127.0.0.1:3128`` with the
+``HTTP(S)_PROXY`` variables pointing at it, certificate roots, and a seccomp
+variant that allows loopback TCP. The network namespace still has only
+loopback: there is no other route out, and the proxy decides every CONNECT.
+Its records become ``egress_decision`` events; a proxy that cannot start is an
+infrastructure failure (``bulkhead.setup.proxy``), not a denial.
+
 Disk: ``/tmp`` is a sized tmpfs where bubblewrap supports ``--size`` (a hard
 limit, also charged to the leaf's memory); the writable workspace is covered by
 ``RLIMIT_FSIZE`` per file and a monitored soft limit on its total (the
@@ -58,11 +67,13 @@ from typing import Any
 from ..capabilities import BWRAP_NAMESPACE_FLAGS, ChildRun, run_bounded
 from ..cgroups import CgroupParent
 from ..errors import BulkheadError
-from ..seccomp import CompiledFilter, SeccompUnavailable, compile_filter
+from ..bridge import BRIDGE_PORT, PROXY_ENV, SOCKET_PATH
+from ..proxy import call_proxy
+from ..seccomp import NET_POLICY, CompiledFilter, SeccompUnavailable, compile_filter
 from ..supervisor import ProcessOutcome, launcher_command
 from ..types import TIER_REQUIREMENTS, ProbeReport, SandboxTier
 from ..workspace import WORKSPACE_MOUNT, View, ViewError, WorkRoot, Workspace, ensure_visible, plan_view
-from .base import BackendIdentity, ExecutionOutcome, ExecutionRequest, Program, ProgramKind, build_outcome
+from .base import BackendIdentity, ExecutionOutcome, ExecutionRequest, Program, ProgramKind, build_outcome, with_egress
 from .common import helper_failure, run_governed
 
 BACKEND_NAME = "bwrap-namespace-phase"
@@ -139,11 +150,15 @@ def build_argv(
     tmp_bytes: int,
     mask_dir: str,
     mask_file: str,
+    proxy_socket: str | None = None,
 ) -> list[str]:
     """The complete bubblewrap argv for one call. Pure: builds a list, runs nothing.
 
     ``interpreter`` and ``shell`` are sandbox paths (checked visible by the
-    caller). The program text is not part of the argv.
+    caller). The program text is not part of the argv. ``proxy_socket`` (the
+    call's own outside proxy socket) is bound at ``bridge.SOCKET_PATH`` and
+    turns on the launcher's loopback bridge; without it the sandbox has no
+    route out at all.
     """
     argv = [config.bwrap, *BWRAP_NAMESPACE_FLAGS, "--hostname", HOSTNAME, "--proc", "/proc", "--dev", "/dev"]
     if config.tmpfs_size:
@@ -160,9 +175,12 @@ def build_argv(
             argv += ["--ro-bind", mask_dir, entry.dest]
         else:
             argv += ["--ro-bind", mask_file, entry.dest]
+    if proxy_socket is not None:
+        argv += ["--bind", proxy_socket, SOCKET_PATH]
     workdir = WORKSPACE_MOUNT if view.visible(WORKSPACE_MOUNT) else "/tmp"
     argv += ["--chdir", workdir, "--seccomp", str(seccomp_fd), "--"]
-    argv += launcher_command(interpreter, status_fd, program, shell=shell)
+    bridge = (BRIDGE_PORT, SOCKET_PATH) if proxy_socket is not None else None
+    argv += launcher_command(interpreter, status_fd, program, shell=shell, bridge=bridge)
     return argv
 
 
@@ -219,8 +237,14 @@ class BwrapBackend:
         help_text = runner([binary, "--help"], timeout_s=10.0)
         try:
             self.filter: CompiledFilter = compile_filter()
+            self.net_filter: CompiledFilter = compile_filter(NET_POLICY)
         except SeccompUnavailable as exc:
             raise BackendUnavailable(str(exc), missing=("seccomp.filter",)) from None
+        # Egress needs a Unix socket bound into the sandbox; the probe tested exactly that.
+        try:
+            self.network = report.capability("bwrap.unix_socket").ok
+        except KeyError:
+            self.network = False
         self.config = BwrapConfig(binary, python, shell, tmpfs_size="--size" in (help_text.stdout + help_text.stderr))
         self.identity = BackendIdentity(name, f"{BACKEND_VERSION}+bwrap.{'.'.join(map(str, version))}", SandboxTier.T2, report.probe_sha256)
         self.cgroup_parent = None if namespace_phase else cgroup_parent
@@ -272,8 +296,8 @@ class BwrapBackend:
             return refused("bulkhead.setup.no_sandbox")
         if request.program is None:
             return refused("bulkhead.setup.no_program")
-        if sandbox.net.enabled:
-            return refused("bulkhead.setup.network_unsupported")  # egress arrives with the part 6 proxy
+        if sandbox.net.enabled and not self.network:
+            return refused("bulkhead.setup.network_unsupported")  # the probe did not prove a bound Unix socket works
         try:
             workspace = self.workspace(request.episode_id)
         except (ViewError, OSError):
@@ -283,42 +307,61 @@ class BwrapBackend:
         try:
             if workspace.poisoned:
                 return refused("bulkhead.setup.workspace_unsafe")
+            networked = sandbox.net.enabled
             try:
-                view = plan_view(sandbox, workspace)
+                # Certificate roots only when the call may reach the network.
+                view_spec = replace(sandbox, fs_read=(*sandbox.fs_read, "/etc/ssl")) if networked and os.path.isdir("/etc/ssl") and "/etc/ssl" not in sandbox.fs_read else sandbox
+                view = plan_view(view_spec, workspace)
                 interpreter = ensure_visible(view, self.config.python)
                 shell = ensure_visible(view, self.config.shell) if request.program.kind is ProgramKind.SHELL else self.config.shell
             except ViewError as exc:
                 return refused(exc.code)
             except OSError:
                 return refused("bulkhead.setup.view")
-            seccomp_fd = self.filter.memfd()
             program = request.program
             writable = [Path(entry.source) for entry in view.entries if entry.op == "rw" and entry.source]
-            try:
-                observed = run_governed(
-                    request,
-                    lambda status_fd: build_argv(
-                        self.config, view, program,
-                        interpreter=interpreter, shell=shell, seccomp_fd=seccomp_fd, status_fd=status_fd,
-                        tmp_bytes=int(sandbox.limits.disk_mb) * 1024 * 1024,
-                        mask_dir=str(self.root.mask_dir), mask_file=str(self.root.mask_file),
-                    ),
-                    env=SANDBOX_ENV,
-                    cwd="/",
-                    writable=writable,
-                    cgroup_parent=self.cgroup_parent,
-                    keep_fds=(seccomp_fd,),
-                    cpu_fraction=self.cpu_fraction,
-                )
-            finally:
-                os.close(seccomp_fd)
+            records: tuple = ()
+
+            def run(proxy_socket: str | None) -> ProcessOutcome:
+                active = self.net_filter if proxy_socket is not None else self.filter
+                seccomp_fd = active.memfd()
+                try:
+                    return run_governed(
+                        request,
+                        lambda status_fd: build_argv(
+                            self.config, view, program,
+                            interpreter=interpreter, shell=shell, seccomp_fd=seccomp_fd, status_fd=status_fd,
+                            tmp_bytes=int(sandbox.limits.disk_mb) * 1024 * 1024,
+                            mask_dir=str(self.root.mask_dir), mask_file=str(self.root.mask_file),
+                            proxy_socket=proxy_socket,
+                        ),
+                        env={**SANDBOX_ENV, **(PROXY_ENV if proxy_socket is not None else {})},
+                        cwd="/",
+                        writable=writable,
+                        cgroup_parent=self.cgroup_parent,
+                        keep_fds=(seccomp_fd,),
+                        cpu_fraction=self.cpu_fraction,
+                    )
+                finally:
+                    os.close(seccomp_fd)
+
+            if networked:
+                try:
+                    with call_proxy(sandbox.net, idle_s=min(10.0, request.effective_timeout_s)) as proxy:
+                        observed = run(str(proxy.socket_path))
+                except OSError:
+                    return refused("bulkhead.setup.proxy")  # infrastructure, not a policy denial
+                records = tuple(record.as_audit() for record in proxy.records)
+            else:
+                observed = run(None)
             if observed.cleanup_status == "leaked":
                 workspace.poisoned = True
             if not observed.started and helper_failure(observed) is None:
                 observed = replace(observed, setup_error=classify_setup_failure(observed))
         finally:
             workspace.lock.release()
-        return build_outcome(request, self.identity, observed)
+        outcome = build_outcome(request, self.identity, observed)
+        return with_egress(outcome, records) if records else outcome
 
 
 def _parse(text: str) -> tuple[int, int, int] | None:

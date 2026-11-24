@@ -37,6 +37,13 @@ VALID = {
         "resource_usage": {"cpu_s": 0.02, "peak_memory_kb": 2048, "pids_peak": 2, "oom_killed": False}, "elapsed_s": 0.05,
         "result": {"ok": True, "handler_called": True, "value": {"exit_code": 0, "stdout": "ok\n"}},
     },
+    "output_gate": {
+        "step": 0, "tool_call_id": "call_0_0", "via": "model", "tool": "run_shell",
+        "streams": [
+            {"name": "stdout", "raw_bytes": 9000, "kept_bytes": 4096, "invalid_utf8": True, "stripped": 3, "neutralized": 1, "redacted": 0, "truncated": True},
+            {"name": "stderr", "raw_bytes": 0, "kept_bytes": 0, "invalid_utf8": False, "stripped": 0, "neutralized": 0, "redacted": 0, "truncated": False},
+        ],
+    },
     "egress_decision": {
         "step": 0, "tool_call_id": "call_0_0", "request_id": "req_1", "authority": "pypi.org:443", "decision": "allow",
         "rule_id": "task.allow", "resolved_address_class": "public", "bytes_in": 512, "bytes_out": 120, "truncated": False,
@@ -111,6 +118,10 @@ BAD_VALUES = [
     ("egress_decision", "decision", "maybe"),
     ("egress_decision", "resolved_address_class", "somewhere"),
     ("egress_decision", "bytes_in", -5),
+    ("output_gate", "streams", []),
+    ("output_gate", "streams", [{"name": "stdin", "raw_bytes": 0, "kept_bytes": 0, "invalid_utf8": False, "stripped": 0, "neutralized": 0, "redacted": 0, "truncated": False}]),
+    ("output_gate", "streams", [{"name": "stdout", "raw_bytes": 1, "kept_bytes": 2, "invalid_utf8": False, "stripped": 0, "neutralized": 0, "redacted": 0, "truncated": False}]),
+    ("output_gate", "streams", [{"name": "stdout", "raw_bytes": 1, "kept_bytes": 1, "invalid_utf8": False, "stripped": 0, "neutralized": 0, "redacted": 0, "truncated": False, "content": "x"}]),
 ]
 
 

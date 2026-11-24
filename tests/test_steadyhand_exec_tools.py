@@ -31,6 +31,7 @@ from steadyhand.registry import PolicyError
 from steadyhand.replay import replay_episode, run_claimed_episode
 from steadyhand.security import STORE_TOOLS, SecurityConfig
 from steadyhand.tools import RESULT_SCHEMAS, TOOL_SECURITY, TOOL_SPECS
+from bulkhead.output import delimiter_id
 from steadyhand.tools_exec import (
     EXEC_LIMITS,
     EXEC_POLICY,
@@ -128,14 +129,21 @@ def test_run_python_runs_through_the_backend_and_journals_in_order(tmp_path):
     )
 
     assert result.status is EpisodeStatus.DONE
-    assert observation(service) == {"ok": True, "value": {"exit_code": 0, "signal": None, "stdout": "45\n", "stderr": "", "stdout_truncated": False, "stderr_truncated": False}}
+    [request] = backend.requests
+    ident = delimiter_id(request.sha256, "stdout")
+    assert observation(service) == {"ok": True, "value": {
+        "exit_code": 0, "signal": None,
+        "stdout": {"trust": "untrusted", "content": f"[BEGIN UNTRUSTED OUTPUT {ident}]\n45\n[END UNTRUSTED OUTPUT {ident}]", "truncated": False},
+        "stderr": {"trust": "untrusted", "content": "", "truncated": False},
+    }}
     events = [record["event"] for record in records(result)]
     start = events.index("policy_decision")
-    assert events[start:start + 4] == ["policy_decision", "sandbox_execution", "tool_result", "taint_transition"]
+    assert events[start:start + 5] == ["policy_decision", "sandbox_execution", "output_gate", "tool_result", "taint_transition"]
     [run] = records(result, "sandbox_execution")
     assert run["backend"] == "host-seccomp-test" and run["started"] and run["exit_code"] == 0 and run["stdout_bytes"] == 3
-    assert run["result"]["value"]["stdout"] == "45\n"
-    [request] = backend.requests
+    assert run["result"]["value"] == observation(service)["value"]  # the journal holds exactly what the model saw
+    [gate] = records(result, "output_gate")
+    assert gate["streams"][0] == {"name": "stdout", "raw_bytes": 3, "kept_bytes": 3, "invalid_utf8": False, "stripped": 0, "neutralized": 0, "redacted": 0, "truncated": False}
     assert request.program.kind is ProgramKind.PYTHON and request.program.source == b"print(sum(range(10)))"
     assert request.sha256 == run["request_sha256"] and request.config_sha256 == run["config_sha256"]
     assert request.timeout_s == EXEC_POLICY.timeout_s and request.effective_timeout_s == EXEC_LIMITS.wall_s
@@ -153,7 +161,8 @@ def test_run_shell_and_nonzero_exits_are_ordinary_results(tmp_path):
     )
 
     value = observation(service)["value"]
-    assert (value["exit_code"], value["stdout"], value["stderr"]) == (3, "out\n", "err\n")
+    assert value["exit_code"] == 3
+    assert "\nout\n[END" in value["stdout"]["content"] and "\nerr\n[END" in value["stderr"]["content"]
     assert records(result, "tool_result")[0]["handler_called"] is True
 
 
@@ -193,7 +202,7 @@ def test_output_is_capped_by_the_sandbox_limits(tmp_path):
     )
 
     value = observation(service)["value"]
-    assert value["stdout_truncated"] and len(value["stdout"]) == 1024
+    assert value["stdout"]["truncated"] and value["stdout"]["content"].count("x") == 1024
     [run] = records(result, "sandbox_execution")
     assert run["stdout_bytes"] == 5001 and run["stdout_truncated"]
 

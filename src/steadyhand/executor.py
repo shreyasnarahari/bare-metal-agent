@@ -24,7 +24,10 @@ refused as a ``sandbox_violation`` before the injector. With one, the runner
 replaces the handler: a live sandbox backend (``bulkhead.backends.bwrap``
 from part 4), or in replay the recorded backend, which serves recorded runs
 and never re-executes them. The runner holds no store lock while the external
-process runs; exec tools never touch the in-memory store.
+process runs; exec tools never touch the in-memory store. The runner, not
+this executor, distinguishes a sandbox or proxy that failed to start
+(``sandbox_violation``), an exhausted ceiling (``resource_exhausted``), a
+deadline (``timeout``), and an ordinary result (any exit code or signal).
 
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only

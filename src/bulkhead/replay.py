@@ -62,7 +62,18 @@ class RecordedExecutionBackend:
 
     def __init__(self, records: Sequence[Mapping[str, Any]], identity: BackendIdentity) -> None:
         self.identity = identity
-        self._recorded = [dict(record) for record in records if record.get("event") == "sandbox_execution"]
+        # Each run with the egress decisions and output-gate record journaled right after it.
+        self._recorded: list[dict[str, Any]] = []
+        for record in records:
+            event = record.get("event")
+            if event == "sandbox_execution":
+                self._recorded.append({**record, "_egress": [], "_gate": None})
+            elif event in ("egress_decision", "output_gate") and self._recorded and record.get("tool_call_id") == self._recorded[-1]["tool_call_id"]:
+                fields = {key: value for key, value in record.items() if key not in ("event", "episode_id", "seq", "recorded_at", "step", "tool_call_id")}
+                if event == "egress_decision":
+                    self._recorded[-1]["_egress"].append(fields)
+                else:
+                    self._recorded[-1]["_gate"] = fields["streams"]
 
     @property
     def remaining(self) -> int:
@@ -89,7 +100,12 @@ class RecordedExecutionBackend:
                     field=field,
                 )
         self._recorded.pop(0)
-        return ExecutionOutcome(result=recorded["result"], audit={field: recorded[field] for field in AUDIT_FIELDS})
+        return ExecutionOutcome(
+            result=recorded["result"],
+            audit={field: recorded[field] for field in AUDIT_FIELDS},
+            egress=tuple(recorded["_egress"]),
+            gate=recorded["_gate"],
+        )
 
 
 __all__ = [

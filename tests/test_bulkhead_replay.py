@@ -141,7 +141,7 @@ def test_the_sandboxed_golden_holds_its_run_and_replays_it_from_the_recording(no
     [run] = [record for record in records if record["event"] == "sandbox_execution"]
 
     assert manifest.backend == {"name": "scripted-test", "version": "1", "tier": "T2", "probe_sha256": None}
-    assert run["result"]["ok"] and "IGNORE PREVIOUS INSTRUCTIONS" in run["result"]["value"]["stdout"]
+    assert run["result"]["ok"] and "IGNORE PREVIOUS INSTRUCTIONS" in run["result"]["value"]["stdout"]["content"]
     assert registry_for(manifest.schema_sha256).names()[-2:] == ("run_python", "run_shell")
     assert manifest.security_specs["run_shell"]["sandbox"]["net"]["allow"] == []
     assert replay_episode(path).status is EpisodeStatus.ESCALATED
@@ -280,23 +280,25 @@ class EchoBackend:
 
     identity = BackendIdentity("live-test", "2", SandboxTier.T2, None)
 
-    def __init__(self, recorded, **changes):
+    def __init__(self, recorded, gate=None, **changes):
         self.recorded = recorded
+        self.gate = gate
         self.changes = changes
 
     def execute(self, request, arguments):
         audit = {field: self.recorded[field] for field in AUDIT_FIELDS}
         audit.update(self.changes)
-        return ExecutionOutcome(self.recorded["result"], audit)
+        return ExecutionOutcome(self.recorded["result"], audit, gate=self.gate)
 
 
 def test_live_replay_writes_only_its_report_and_tolerates_volatile_differences(tmp_path):
     path = fixture("sandboxed_exec")
     run = first(read_journal(path), "sandbox_execution")
+    gate = first(read_journal(path), "output_gate")["streams"]
     before = path.read_bytes(), manifest_path_for(path).read_bytes()
 
-    same = live_replay_report(path, EchoBackend(run, elapsed_s=4.2, resource_usage={"cpu_s": 1.0}), tmp_path / "same.json")
-    changed = live_replay_report(path, EchoBackend(run, exit_code=1), tmp_path / "changed.json")
+    same = live_replay_report(path, EchoBackend(run, gate, elapsed_s=4.2, resource_usage={"cpu_s": 1.0}), tmp_path / "same.json")
+    changed = live_replay_report(path, EchoBackend(run, gate, exit_code=1), tmp_path / "changed.json")
 
     assert same["matched"] and not same["security_failure"] and same["live_backend"]["name"] == "live-test"
     assert json.loads((tmp_path / "same.json").read_text()) == same
@@ -315,7 +317,7 @@ def test_live_replay_flags_a_changed_security_decision_as_a_security_failure(tmp
     decision.update(verdict="allow", rule_id="task.allow", reason_code="within_task_policy")
     rewrite(path, records)
 
-    report = live_replay_report(path, EchoBackend(run), tmp_path / "report.json")
+    report = live_replay_report(path, EchoBackend(run, first(records, "output_gate")["streams"]), tmp_path / "report.json")
 
     assert report["security_failure"] and report["first_mismatch"]["kind"] == "security_decision"
     assert report["first_mismatch"]["seq"] == decision["seq"]
