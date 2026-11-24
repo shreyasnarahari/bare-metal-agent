@@ -145,3 +145,54 @@ def test_with_no_records_everything_is_untested_and_no_figure_is_invented(tmp_pa
         assert text.count(figure) == 1  # named once, in the context note, never with a number
     written = write_report(tmp_path, output=tmp_path / "RESULTS.md")
     assert written.read_text() == text and latest_runs("attacks", tmp_path) == []
+
+
+# Part 8: AgentDojo sections, from a real CPU-gate run on the local fixture
+
+
+def agentdojo_gate_run(root: Path) -> Path:
+    from agentdojo_support import CLASSIFICATION, TURNS, stand_in_api
+
+    from bulkhead.eval.agentdojo import load_classification
+    from bulkhead.eval.runner import ScriptedModel, make_spec, plan_cases, replay_run, run_agentdojo
+    from steadyhand import SteadyhandClient
+
+    plan = plan_cases(stand_in_api(), classification=load_classification(CLASSIFICATION))
+
+    def client(case):
+        return SteadyhandClient(ScriptedModel(TURNS[case.user_task]))
+
+    spec = make_spec(plan, plan.cases, label="cpu-gate", kind="cpu_gate", model=client(plan.cases[0]).settings())
+    directory = run_agentdojo(spec, plan, client, results_dir=root / "agentdojo")
+    replay_run(directory, plan)
+    return directory
+
+
+def test_the_agentdojo_section_reports_recorded_pairs_and_labels_a_cpu_gate(tmp_path):
+    run = agentdojo_gate_run(tmp_path)
+    text = build_report(agentdojo_runs=[run])
+    assert "**CPU correctness gate:**" in text and "they are not AgentDojo benchmark results" in text
+    assert "| baseline | 2/2 = 1.00 [0.34, 1.00] | 3/4 = 0.75 [0.30, 0.95] | 4/4 = 1.00 [0.51, 1.00] | 1 |" in text
+    assert "| policy_taint | 1/2 = 0.50 [0.09, 0.91] | 0/4 = 0.00 [0.00, 0.49] | 0/4 = 0.00 [0.00, 0.49] | 0 |" in text
+    assert "| policy_taint-baseline | -0.50 [-1.00, +0.00] (2 pairs; 0 up, 1 down) |" in text
+    assert "`mini_bank.tag_transaction` withheld from every configuration: unsupported schema at `/properties/tags/additionalProperties`" in text
+    assert "6 case ids" in text and "every eligible case: 6 eligible and 3 ineligible" in text
+    assert "An ASK cost benign utility: `mini_bank/user_task_1` under policy_taint" in text
+    assert '"rule_id": "bulkhead.taint.sensitive_sink"' in text and '"after": "untrusted"' in text
+    assert "DE00ATTACKER666" not in text and "Electricity bill" not in text  # trajectories carry no arguments or outputs
+    assert "18 of 18 episodes replayed exactly on CPU; 0 mismatches; 0 final-environment mismatches" in text
+    assert "| taint_ask | 0 | 0 | 5 |" in text  # the failure taxonomy, per configuration
+    assert "No live AgentDojo run is recorded" in text
+    for figure in ("GrantBox", "Progent", "CaMeL", "SandboxEscapeBench"):
+        assert text.count(figure) == 1
+
+
+def test_without_agentdojo_runs_nothing_is_claimed(tmp_path):
+    text = build_report()
+    assert "No AgentDojo runs were found: the paired configurations are untested and no AgentDojo result is claimed." in text
+    assert "## 10. Handoff" in text and "`policy_decision` (verdict, rule_id" in text
+    assert [line for line in text.splitlines() if line.startswith("## ")] == [
+        "## 1. Threat model and architecture", "## 2. Environment coverage", "## 3. Escape results", "## 4. AgentDojo paired results",
+        "## 5. Usability and overhead", "## 6. Failure taxonomy", "## 7. Replay evidence", "## 8. Limitations and negative results",
+        "## 9. Context references (not Bulkhead measurements)", "## 10. Handoff",
+    ]

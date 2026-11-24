@@ -83,12 +83,20 @@ class SteadyhandRegistry:
         result_schema: Mapping[str, Any] | None = None,
         security: SecuritySpec | None = None,
         program: ProgramSpec | None = None,
+        *,
+        parameters: Mapping[str, Any] | None = None,
+        description: str | None = None,
     ) -> Tool:
         """Register a handler. ``result_schema`` describes its return value; the model never sees it.
 
         ``security`` is the tool's Bulkhead metadata. Exec tools must have one with a sandbox.
         ``program`` is an exec tool's dispatch descriptor: the program kind it runs and the
         required string argument holding the text. Only exec tools take one.
+
+        ``parameters`` and ``description`` replace the schema and description derived from the
+        handler's signature and docstring, for tools defined elsewhere (an external benchmark's
+        tools, adapted with their own schemas). The handler still takes the store first and
+        then the arguments as keywords.
         """
         if self._frozen:
             raise RuntimeError("The registry is frozen; register every tool before sharing it")
@@ -107,12 +115,21 @@ class SteadyhandRegistry:
                 raise TypeError("program must be a bulkhead ProgramSpec")
             if policy.effect is not Effect.EXEC:
                 raise PolicyError(f"{name}: only an exec tool has a program descriptor")
-        parameters = arguments_schema(function)
+        if parameters is None:
+            parameters = arguments_schema(function)
+        else:
+            parameters = dict(parameters)
+            Draft202012Validator.check_schema(parameters)
+            if parameters.get("type") != "object":
+                raise TypeError(f"{name}: explicit parameters must be an object schema")
+            leaked = SERVER_PARAMETERS & set(parameters.get("properties", {}))
+            if leaked:
+                raise PolicyError(f"{name}: server-side parameters cannot appear in a model-facing schema: {sorted(leaked)}")
         if program is not None:
             prop = parameters.get("properties", {}).get(program.argument, {})
             if prop.get("type") != "string" or program.argument not in parameters.get("required", ()):
                 raise PolicyError(f"{name}: the program argument {program.argument!r} must be a required string")
-        self._tools.function(function, parameters=parameters)
+        self._tools.function(function, parameters=parameters, description=description)
         tool = self._tools.get(name)
         self._policies[name] = policy
         self._security[name] = security

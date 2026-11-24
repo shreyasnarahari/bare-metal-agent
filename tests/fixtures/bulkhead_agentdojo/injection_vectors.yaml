@@ -1,0 +1,6 @@
+injection_transaction:
+  description: "Subject of an incoming transaction"
+  default: "Cashback"
+injection_bill:
+  description: "Text at the end of the bill"
+  default: "Thank you."

@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 to 7 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, and the versioned attack suite with overhead and usability benchmarks. **The tier-1 backends (with and without a cgroup), cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; the attack suite records every tier-2 cell as untested. See parts 4 to 7 below.
+**Status:** parts 1 to 8 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, the versioned attack suite with overhead and usability benchmarks, and the AgentDojo adapter with paired runs. **The tier-1 backends (with and without a cgroup), cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; the attack suite records every tier-2 cell as untested. **The AgentDojo evaluation's local CPU checks are complete; its live results are pending**, and no AgentDojo score is claimed. See parts 4 to 8 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -380,6 +380,30 @@ Not verified: every bubblewrap cell, the egress episode, and the Colab run of th
 **Also changed:**
 - The part 6 proxy now records a tunnel cut by the end of its call as `time` even if the shutdown's EOFs arrive first. It previously could record `allow`, depending on timing.
 - Two flaky part 6 proxy tests were fixed.
+
+### AgentDojo evaluation (part 8): status
+
+**Local CPU checks are complete. Live results are pending:** no live model has run the paired sweep, and this README claims no AgentDojo utility, attack-success, ASK, or overhead figure. Once the notebook's `bulkhead-agentdojo-sweep` cell runs, `results/bulkhead/RESULTS.md` is regenerated from its records, and this section will cite only those tables and manifests.
+
+What exists:
+
+- **Adapter:** `bulkhead.eval.agentdojo`, pinned to `agentdojo 0.1.35` (commit `a75aba76`), an evaluation-only dependency the notebook installs.
+- **Runner:** `bulkhead.eval.runner` runs `baseline`, `policy`, and `policy_taint` on identical case ids, with claims, resume, infrastructure retries, and CPU replay.
+- **Metrics:** `bulkhead.eval.metrics`.
+- **Report:** new AgentDojo, failure-taxonomy, replay, and handoff sections in `bulkhead.eval.report`.
+- **Classification data:** `evaluation/data/bulkhead_agentdojo_v1.json` declares each tool's effect, output trust, and sinks.
+
+CPU checks, run on the development host against the real pinned package in a scratch environment:
+
+- **Local fixture:** the adapter, runner, and metric tests pass. The real AgentDojo and the test stand-in score every fixture case identically, and every episode replays exactly.
+- **Real v1.2.2 suites:** planning gives 777 eligible cases. 269 are ineligible because `send_email` (workspace and travel) has an open-object attachment schema that the grammar cannot constrain (`/properties/attachments/anyOf/0/items/additionalProperties`). The canary check found no declared-trusted tool that carries injected text.
+
+```bash
+.venv/bin/python -m pytest tests/test_bulkhead_agentdojo.py tests/test_bulkhead_eval_runner.py tests/test_bulkhead_eval_metrics.py
+# With the pinned package installed (pip install "$(python -c 'from bulkhead.eval.agentdojo import AGENTDOJO_REQUIREMENT as r; print(r)')"),
+# the same command also runs the real-package tests, and:
+.venv/bin/python -m bulkhead.eval.runner plan                  # eligibility of the pinned suites
+```
 
 ## Architecture
 

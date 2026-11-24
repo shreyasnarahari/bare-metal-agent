@@ -1,0 +1,482 @@
+{
+  "dataset": "bulkhead_agentdojo",
+  "version": 1,
+  "description": "How Bulkhead sees AgentDojo's simulated tools: effect class, output trust, and sinks per tool, plus a static per-suite task policy. Output trust is declared from AgentDojo's field layout (where its injection vectors are placed) and checked with canaries by bulkhead.eval.agentdojo.trust_check: a tool is trusted only if its output holds no third-party text (numbers, the user's own account data, the model's own confirmation). Every tool with an external_effect sink is taint-sensitive in the policy_taint configuration.",
+  "agentdojo": {
+    "version": "0.1.35",
+    "commit": "a75aba7631d3ca5fb7ab938965c97ead2f9ff84b",
+    "repository": "https://github.com/ethz-spylab/agentdojo",
+    "benchmark_version": "v1.2.2",
+    "attack": "important_instructions",
+    "system_message": "default"
+  },
+  "suites": {
+    "banking": {
+      "tools": {
+        "get_iban": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "send_money": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "schedule_transaction": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "update_scheduled_transaction": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_balance": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_most_recent_transactions": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_scheduled_transactions": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "read_file": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_user_info": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "update_password": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "update_user_info": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        }
+      },
+      "policy": {
+        "ask_tools": [
+          "update_password"
+        ],
+        "deny_tools": [],
+        "rationale": "A password change is an account-takeover sink: it always needs a person, whatever the episode read."
+      }
+    },
+    "slack": {
+      "tools": {
+        "get_channels": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "add_user_to_channel": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "read_channel_messages": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "read_inbox": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "send_direct_message": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "send_channel_message": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_users_in_channel": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "invite_user_to_slack": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "remove_user_from_slack": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_webpage": {
+          "effect": "non_idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "post_webpage": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        }
+      },
+      "policy": {
+        "ask_tools": [
+          "invite_user_to_slack",
+          "remove_user_from_slack"
+        ],
+        "deny_tools": [],
+        "rationale": "Workspace membership changes always need a person. get_webpage is an outbound request (its URL can carry data out), so it is a sink."
+      }
+    },
+    "travel": {
+      "tools": {
+        "get_user_information": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_all_hotels_in_city": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_hotels_prices": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_rating_reviews_for_hotels": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_hotels_address": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_all_restaurants_in_city": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_cuisine_type_for_restaurants": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_restaurants_address": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_rating_reviews_for_restaurants": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_dietary_restrictions_for_all_restaurants": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_contact_information_for_restaurants": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_price_for_restaurants": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "check_restaurant_opening_hours": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_all_car_rental_companies_in_city": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_car_types_available": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_rating_reviews_for_car_rental": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_car_fuel_options": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_car_rental_address": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "get_car_price_per_day": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "create_calendar_event": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "search_calendar_events": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_day_calendar_events": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "cancel_calendar_event": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "reserve_hotel": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "reserve_car_rental": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "reserve_restaurant": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_flight_information": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "send_email": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        }
+      },
+      "policy": {
+        "ask_tools": [],
+        "deny_tools": [],
+        "rationale": "No static ASK: every travel effect is a booking, email, or calendar change a user task may legitimately ask for."
+      }
+    },
+    "workspace": {
+      "tools": {
+        "send_email": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "delete_email": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_unread_emails": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_sent_emails": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_received_emails": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_draft_emails": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "search_emails": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "search_contacts_by_name": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "search_contacts_by_email": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_current_day": {
+          "effect": "read",
+          "output_trust": "trusted",
+          "sinks": []
+        },
+        "search_calendar_events": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "get_day_calendar_events": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "create_calendar_event": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "cancel_calendar_event": {
+          "effect": "idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "reschedule_calendar_event": {
+          "effect": "idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "add_calendar_event_participants": {
+          "effect": "idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "append_to_file": {
+          "effect": "non_idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "search_files_by_filename": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "create_file": {
+          "effect": "non_idempotent_write",
+          "output_trust": "trusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "delete_file": {
+          "effect": "idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "get_file_by_id": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "list_files": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        },
+        "share_file": {
+          "effect": "idempotent_write",
+          "output_trust": "untrusted",
+          "sinks": [
+            "external_effect"
+          ]
+        },
+        "search_files": {
+          "effect": "read",
+          "output_trust": "untrusted",
+          "sinks": []
+        }
+      },
+      "policy": {
+        "ask_tools": [],
+        "deny_tools": [],
+        "rationale": "No static ASK: sending, sharing, and editing are what workspace user tasks ask for."
+      }
+    }
+  }
+}
