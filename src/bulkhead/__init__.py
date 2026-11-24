@@ -9,9 +9,12 @@ supervisor (``bulkhead.supervisor``), and workspaces (``bulkhead.workspace``);
 part 5 cgroups, rlimits, Landlock, and the pre-exec helper; part 6 egress
 decisions (``bulkhead.egress``), the per-call CONNECT proxy
 (``bulkhead.proxy``), the in-sandbox bridge (``bulkhead.bridge``), and the
-output gate (``bulkhead.output``).
-Nothing in this package imports ``toolsmith`` or ``steadyhand``, so it can be
-tested and run on its own.
+output gate (``bulkhead.output``); part 7 the evaluation layer
+(``bulkhead.eval``): the versioned attack corpus and its resumable runner,
+overhead and usability benchmarks, and the results report.
+Nothing outside ``bulkhead.eval`` imports ``toolsmith`` or ``steadyhand``, so
+the sandbox layer can be tested and run on its own. ``bulkhead.eval`` sits
+above both: it drives Steadyhand episodes and reuses Toolsmith's metrics.
 """
 
 from .errors import BulkheadError, CapabilityError, ProbeReportError, UnsupportedTierError

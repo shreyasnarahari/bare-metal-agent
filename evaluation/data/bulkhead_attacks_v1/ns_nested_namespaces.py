@@ -1,3 +1,4 @@
+# Create nested user, mount, or network namespaces, or join another namespace.
 CLONE_NEWNS, CLONE_NEWUSER, CLONE_NEWNET, SIGCHLD = 0x00020000, 0x10000000, 0x40000000, 17
 def raw_clone(flags):
     rc = libc.syscall(ctypes.c_long(NR["clone"][0 if MACHINE == "x86_64" else 1]), ctypes.c_long(flags), 0, 0, 0, 0)

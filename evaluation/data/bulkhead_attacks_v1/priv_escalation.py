@@ -1,3 +1,4 @@
+# Become root or gain capabilities; then check the process kept no_new_privs and its seccomp filter.
 PR_GET_NO_NEW_PRIVS, PR_GET_SECCOMP = 39, 21
 libc.prctl.restype = ctypes.c_int
 header = (ctypes.c_uint32 * 2)(0x20080522, 0)

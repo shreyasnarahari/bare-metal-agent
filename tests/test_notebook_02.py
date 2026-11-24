@@ -51,6 +51,8 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
         "steadyhand-runtime-notes", "steadyhand-runtime", "steadyhand-sweep-notes", "steadyhand-cpu-gate",
         # Bulkhead's CPU-only probe also runs while the runtime provisions.
         "bulkhead-probe-notes", "bulkhead-probe",
+        # Part 7's attack corpus, usability benchmark, and report are CPU-only too.
+        "bulkhead-attack-suite-intro", "bulkhead-attack-suite",
         "steadyhand-server", "steadyhand-notes", "steadyhand-bare-loop", "steadyhand-smoke",
         "steadyhand-sweep", "steadyhand-server-stop", "cleanup",
     ]
@@ -202,6 +204,43 @@ def test_the_bulkhead_cell_fails_when_the_required_tier_is_not_proven(tmp_path, 
     monkeypatch.setenv("BULKHEAD_REQUIRE_TIER", "T1")
     namespace, calls = run_bulkhead_cell(tmp_path, monkeypatch, "wsl2_dev_host")
     assert calls == [{"cgroup_parent": None}] and namespace["BULKHEAD_PROBE"].selected_tier.value == "T1"
+
+
+def test_the_attack_suite_cell_records_untested_profiles_reports_and_resumes_from_drive(tmp_path, monkeypatch, capsys):
+    import bulkhead.eval.attacks as attacks
+    import bulkhead.eval.usability as usability
+    from bulkhead.eval.attacks import Target
+
+    monkeypatch.delenv("BULKHEAD_CGROUP_PARENT", raising=False)
+    monkeypatch.delenv("BULKHEAD_OVERHEAD_SAMPLES", raising=False)
+    monkeypatch.setattr(attacks, "discover_targets", lambda *a, **k: [Target("T0"), Target("landlock-t1", None, "the probe did not prove landlock.fs")])
+    tasks = [task for task in usability.load_tasks() if task["task_id"] in ("bh_b_order_status", "bh_m_refund_injection")]
+    monkeypatch.setattr(usability, "load_tasks", lambda *a, **k: tasks)
+    runs = []
+    real = attacks.run_end_to_end
+    monkeypatch.setattr(attacks, "run_end_to_end", lambda *a, **k: runs.append(a[1].attack_id) or real(*a, **k))
+
+    def execute():
+        namespace = {"PROJECT_DIR": str(tmp_path / "repo"), "DRIVE_RECORDS": tmp_path / "drive", "BULKHEAD_PROBE": bulkhead_report("wsl2_dev_host"), "HARDWARE": T4}
+        exec(compile(notebook_source("bulkhead-attack-suite"), str(NOTEBOOK_PATH), "exec"), namespace)
+        return namespace
+
+    first = execute()
+    out = capsys.readouterr().out
+    assert "landlock-t1            untested: the probe did not prove landlock.fs" in out
+    assert sorted(runs) == ["deputy.denied_call_no_recovery", "deputy.recovery_switch", "deputy.shared_dir_handoff"]  # T0 runs only policy-level scenarios
+    report = (tmp_path / "drive" / "bulkhead" / "RESULTS.md").read_text()
+    applicable = sum(1 for attack in attacks.load_dataset().attacks if attack.expectation("landlock-t1")["verdict"] != "not_applicable")
+    assert f"**landlock-t1**: {applicable} cell(s) (attacks and controls) untested" in report and "No escape" in report
+    mirrored = tmp_path / "drive" / "bulkhead" / "attacks" / first["bulkhead_attack_run"].run_id / "results.jsonl"
+    assert mirrored.read_text() == (first["bulkhead_attack_run"].directory / "results.jsonl").read_text()
+
+    import shutil
+
+    shutil.rmtree(tmp_path / "repo" / "results" / "bulkhead" / "attacks")  # a fresh runtime: only Drive has the records
+    runs.clear()
+    second = execute()
+    assert runs == [] and second["bulkhead_attack_run"].run_id == first["bulkhead_attack_run"].run_id
 
 
 # Live cells (they need a GPU; these checks pin the plan's invariants)

@@ -35,7 +35,9 @@ from bulkhead.seccomp import (
     syscall_number,
 )
 
-from exec_support import ATTACKS, AttackContext, HostSeccompBackend, check_attack, load_attacks, request_for, snapshot
+from bulkhead.eval.attacks import MARKER, environment_canary, judge, run_script
+
+from exec_support import DATASET, HostSeccompBackend, request_for
 
 LINUX = sys.platform.startswith("linux")
 SUPPORTED = platform.machine().lower() in seccomp.ARCHITECTURES
@@ -180,7 +182,7 @@ def test_the_memfd_holds_exactly_the_program_at_offset_zero(compiled):
 
 
 def test_the_attack_prelude_uses_this_machines_syscall_numbers(compiled):
-    text = (ATTACKS / "scripts" / "_prelude.py").read_text()
+    text = (DATASET.scripts_dir / "_prelude.py").read_text()
     table = text[text.index("NR = {"): text.index("}\n", text.index("NR = {")) + 1]
     numbers = eval(table[len("NR = "):])  # a literal dict in a fixture file we control
     column = 0 if compiled.arch == "x86_64" else 1
@@ -272,20 +274,28 @@ def test_a_foreign_abi_syscall_is_killed_and_recorded_as_a_seccomp_violation(tmp
     assert outcome.audit["violations"] == [{"kind": "seccomp", "rule_id": "bulkhead.seccomp.kill", "detail": "the program was killed by its seccomp filter (SIGSYS)"}]
 
 
-DIRECT = [attack for attack in load_attacks()["attacks"] if attack["seccomp_direct"]]
+DIRECT = [attack for attack in DATASET.attacks if attack.seccomp_direct]
+
+
+def test_the_seccomp_only_attacks_are_the_syscall_classes():
+    assert {attack.attack_id for attack in DIRECT} >= {
+        "proc.ptrace", "proc.process_vm", "syscall.io_uring_setup", "syscall.io_uring_socket", "syscall.bpf", "syscall.kernel_primitives",
+        "syscall.foreign_abi", "ns.mounts", "ns.nested_namespaces", "priv.escalation", "out.env_secret", "out.inherited_descriptors",
+    }
 
 
 @needs_libseccomp
-@pytest.mark.parametrize("attack", DIRECT, ids=[attack["id"] for attack in DIRECT])
+@pytest.mark.parametrize("attack", DIRECT, ids=[attack.attack_id for attack in DIRECT])
 def test_seccomp_class_attacks_fail_under_the_filter_alone(tmp_path, attack):
     """The syscall half of the attack gate, on this kernel, with the filter alone (no namespaces)."""
-    if platform.machine().lower() not in attack.get("architectures", [platform.machine().lower()]):
-        pytest.skip(f"unsupported: {attack['id']} needs {attack['architectures']}")
-    context = AttackContext.create(tmp_path)
-    before = snapshot(context, None)
-    outcome = HostSeccompBackend(tmp_path / "work").execute(request_for(context.program(attack), timeout_s=20), {})
+    if attack.architectures is not None and platform.machine().lower() not in attack.architectures:
+        pytest.skip(f"unsupported: {attack.attack_id} needs {attack.architectures}")
+    token = MARKER + "0" * 32
+    with environment_canary(token):  # the harness's environment holds a secret the program must never see
+        evidence = run_script(DATASET, attack, HostSeccompBackend(tmp_path / "work"), tmp_path, profile="host-seccomp-test", extra_secrets=(token,))
+    verdict = judge(attack, attack.expectation("bwrap-t2"), evidence)
 
-    assert check_attack(attack, outcome, context, before=before, workspace=None) == []
+    assert verdict.verdict == "blocked", verdict.reasons
 
 
 def test_the_direct_harness_refuses_a_malformed_filter(tmp_path):

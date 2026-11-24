@@ -1,9 +1,10 @@
 """Bulkhead part 5: rlimits, resource-exhaustion classification, the helper's start barrier, and resource attacks.
 
-Unit tests run everywhere. Cleanup fixtures that are safe without a cgroup
-(descriptor exhaustion, core dumps, double fork, zombies) run against the real
-tier-1 backend wherever the probe proves tier 1. Destructive fixtures (fork and
-memory bombs, CPU and disk exhaustion) run only inside a confirmed delegated
+Unit tests run everywhere. The resource attacks themselves are part 7's
+dataset (``evaluation/data/bulkhead_attacks_v1.json``): the ones safe without a
+cgroup run on every proven profile through the attack suite
+(``tests/test_bulkhead_attack_suite.py``). Destructive ones (fork and memory
+bombs, CPU and disk exhaustion) run here only inside a confirmed delegated
 cgroup parent, with an outer watchdog and host-safety checks:
 
     BULKHEAD_INTEGRATION=1 BULKHEAD_CGROUP_PARENT=<delegated leaf parent> pytest tests/test_bulkhead_resource_limits.py
@@ -17,7 +18,6 @@ import json
 import os
 import resource
 import secrets
-import shutil
 import signal
 import subprocess
 import sys
@@ -38,12 +38,13 @@ from steadyhand.security import process_tool_result
 from steadyhand.tools_exec import EXEC_LIMITS, EXEC_POLICY, EXEC_SANDBOX
 from steadyhand.types import ToolCall
 
-from exec_support import ATTACKS, request_for
+from bulkhead.eval.attacks import judge, run_script
+
+from exec_support import DATASET, request_for
 
 LINUX = sys.platform.startswith("linux")
 INTEGRATION = os.environ.get("BULKHEAD_INTEGRATION") == "1"
-FIXTURE = json.loads((ATTACKS / "resource_and_tier1.json").read_text())
-PRELUDE = (ATTACKS / "scripts" / "_prelude.py").read_text()
+RESOURCE = [attack for attack in DATASET.attacks if attack.category == "resource"]
 
 
 def spec_with(**limits):
@@ -250,80 +251,13 @@ def test_the_helper_applies_rlimits_before_exec():
     assert json.loads(outcome.stdout) == [[7, 8], [3 << 20, 3 << 20], [48, 48], [0, 0]]
 
 
-# Integration: cleanup fixtures under real tier 1 (safe without a cgroup)
-
-
-def resource_program(entry, marker):
-    return Program.from_text(entry["kind"], PRELUDE + "\n" + (ATTACKS / "scripts" / entry["script"]).read_text().replace("__SLEEPER__", marker))
-
-
-def check_resource(entry, outcome, workspace, marker):
-    problems = []
-    expected = entry["expected"]
-    process = outcome.process
-    if process.exhausted != expected["exhausted"]:
-        problems.append(f"exhausted was {process.exhausted!r}, expected {expected['exhausted']!r}")
-    for key in ("exit_code", "signal"):
-        if key in expected and outcome.audit[key] != expected[key]:
-            problems.append(f"{key} was {outcome.audit[key]!r}, expected {expected[key]!r}")
-    if outcome.audit["cleanup_status"] not in expected["cleanup"]:
-        problems.append(f"cleanup was {outcome.audit['cleanup_status']}, expected one of {expected['cleanup']}")
-    for key in expected.get("usage_positive", []):
-        if not outcome.audit["resource_usage"].get(key, 0) > 0:
-            problems.append(f"usage {key} was {outcome.audit['resource_usage'].get(key)!r}, expected > 0")
-    if alive(marker):
-        problems.append(f"survivors: {alive(marker)}")
-    if expected.get("no_core_files") and list(workspace.rglob("core*")):
-        problems.append("a core file was written")
-    if expected.get("blocked"):
-        reports = [json.loads(line) for line in process.stdout.splitlines() if line.startswith("{")]
-        if not reports or reports[-1].get("achieved") is not False:
-            problems.append(f"the attack achieved its objective: {process.stdout[-300:]!r}")
-    if "reported_cpu_s_below" in expected:
-        reports = [json.loads(line) for line in process.stdout.splitlines() if line.startswith("{")]
-        if not reports or reports[-1]["cpu_s"] >= expected["reported_cpu_s_below"]:
-            problems.append(f"the quota did not hold: {process.stdout!r}")
-    if "disk_bound_mib" in expected:
-        used = sum(path.stat().st_size for path in (workspace / "out").rglob("*") if path.is_file())
-        if used > expected["disk_bound_mib"] << 20:
-            problems.append(f"{used >> 20} MiB were written, bound {expected['disk_bound_mib']} MiB")
-    return problems
-
-
-@pytest.fixture(scope="module")
-def t1_backend(tmp_path_factory):
-    if not LINUX:
-        pytest.skip("unsupported: tier 1 needs Linux")
-    from bulkhead.backends.landlock import LandlockBackend, missing_for_t1
-    from bulkhead.probe import run_probe
-
-    report = run_probe()
-    missing = missing_for_t1(report, cgroup=False)
-    if missing:
-        pytest.skip(f"unsupported: the probe did not prove {', '.join(missing)}")
-    return LandlockBackend(report, tmp_path_factory.mktemp("bulkhead-t1-resources"))
-
-
-SAFE = [entry for entry in FIXTURE["resource"] if not entry["requires_cgroup"]]
-
-
-@pytest.mark.parametrize("entry", SAFE, ids=[entry["id"] for entry in SAFE])
-def test_integration_t1_cleanup_fixtures_leave_nothing_behind(t1_backend, entry):
-    marker = sleeper()
-    episode = "ep_" + entry["id"].replace(".", "_")
-    try:
-        outcome = t1_backend.execute(request_for(resource_program(entry, marker), episode_id=episode, spec=spec_with(**entry["limits"])), {})
-        problems = check_resource(entry, outcome, t1_backend.workspace(episode).path, marker)
-    finally:
-        kill_marked(marker)
-        t1_backend.cleanup(episode)
-    assert problems == []
-
-
 def test_resource_bombs_are_declared_only_for_cgroup_profiles():
-    for entry in FIXTURE["resource"]:
-        if entry["id"] in ("resource.fork_bomb", "resource.memory_bomb", "resource.cpu_total", "resource.cpu_quota", "resource.disk_single", "resource.disk_many"):
-            assert entry["requires_cgroup"], entry["id"]
+    bombs = {"resource.fork_bomb", "resource.memory_bomb", "resource.cpu_spin", "resource.disk_single", "resource.disk_many"}
+    for attack in RESOURCE:
+        if attack.attack_id in bombs:
+            assert attack.destructive and "cgroup" in attack.required_capabilities, attack.attack_id
+            assert attack.expectation("landlock-t1")["verdict"] == attack.expectation("bwrap-namespace-phase")["verdict"] == "not_applicable"
+    assert bombs <= {attack.attack_id for attack in RESOURCE}
 
 
 # Integration: destructive fixtures, only inside a confirmed delegated cgroup parent
@@ -349,13 +283,6 @@ def governed(tmp_path_factory):
     pytest.skip("unsupported: neither bwrap-t2 nor landlock-t1-cgroup is proven here")
 
 
-def mem_available_kb():
-    for line in Path("/proc/meminfo").read_text().splitlines():
-        if line.startswith("MemAvailable:"):
-            return int(line.split()[1])
-    return 0
-
-
 @pytest.fixture
 def watchdog():
     def expired(signum, frame):
@@ -368,27 +295,17 @@ def watchdog():
     signal.signal(signal.SIGALRM, previous)
 
 
-@pytest.mark.parametrize("entry", FIXTURE["resource"], ids=[entry["id"] for entry in FIXTURE["resource"]])
-def test_integration_resource_attacks_are_contained(governed, watchdog, entry):
+@pytest.mark.parametrize("attack", RESOURCE, ids=[attack.attack_id for attack in RESOURCE])
+def test_integration_resource_attacks_are_contained(governed, watchdog, tmp_path, attack):
     backend, parent = governed
     assert backend.identity.name in ("bwrap-t2", "landlock-t1-cgroup")  # host safety: a cgroup governs this run
-    if entry.get("cpu_fraction"):
-        backend.cpu_fraction = entry["cpu_fraction"]
-    marker = sleeper()
-    episode = "ep_" + entry["id"].replace(".", "_")
-    disk_before = shutil.disk_usage(backend.root.path).free
-    memory_before = mem_available_kb()
-    try:
-        outcome = backend.execute(request_for(resource_program(entry, marker), episode_id=episode, spec=spec_with(**entry["limits"])), {})
-        problems = check_resource(entry, outcome, backend.workspace(episode).path, marker)
-        assert parent.stale() == [], "a leaf was left behind"
-        assert disk_before - shutil.disk_usage(backend.root.path).free < 64 << 20, "the host lost disk space"
-        assert mem_available_kb() > memory_before * 0.5, "the host lost most of its free memory"
-    finally:
-        backend.cpu_fraction = 1.0
-        kill_marked(marker)
-        backend.cleanup(episode)
-    assert problems == [], json.dumps(outcome.audit, indent=1)
+    evidence = run_script(DATASET, attack, backend, tmp_path, profile=backend.identity.name)
+    verdict = judge(attack, attack.expectation(backend.identity.name), evidence)
+
+    assert parent.stale() == [], "a leaf was left behind"
+    assert (evidence["host"]["disk_lost_mib"] or 0) < 64, "the host lost disk space"
+    assert evidence["host"]["memory_kept"], "the host lost most of its free memory"
+    assert verdict.verdict in ("blocked", "different_boundary"), json.dumps({"reasons": verdict.reasons, "audit": evidence.get("audit")}, indent=1)
 
 
 def test_integration_every_process_is_in_the_leaf_before_untrusted_code_runs(governed, watchdog):

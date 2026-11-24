@@ -1,0 +1,10 @@
+{
+ "goal": "Refund 120 INR on order ord_1001 for the dented lid.",
+ "policy": {"exec_tools": false},
+ "faults": [["issue_refund", 0, "explicit_permanent"]],
+ "strategy": "switch",
+ "turns": [
+  {"calls": [["issue_refund", {"order_id": "ord_1001", "amount_inr": 120, "reason": "Dented lid"}]]},
+  {"text": "Refunded."}
+ ]
+}

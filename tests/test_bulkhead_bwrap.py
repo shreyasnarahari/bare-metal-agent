@@ -1,4 +1,4 @@
-"""Bulkhead part 4: the bubblewrap namespace/seccomp backend, its filesystem view, and the first 20 attacks.
+"""Bulkhead part 4: the bubblewrap namespace/seccomp backend and its filesystem view (attacks run in part 7's suite).
 
 Unit tests build argv lists and views without executing anything; mocked
 construction tests prove the backend refuses to exist without probe evidence.
@@ -47,7 +47,7 @@ from bulkhead.workspace import (
 )
 from steadyhand.tools_exec import EXEC_SANDBOX, EXEC_SECURITY
 
-from exec_support import AttackContext, check_attack, load_attacks, request_for, snapshot
+from exec_support import request_for
 
 ROOT = Path(__file__).parent.parent
 PROBE_FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "bulkhead_probe_reports.json").read_text())
@@ -434,23 +434,6 @@ def test_a_poisoned_workspace_refuses_every_later_call(tmp_path, monkeypatch):
 # The attack fixtures themselves
 
 
-def test_the_first_twenty_attacks_cover_the_plan_and_declare_everything():
-    attacks = load_attacks()
-    assert attacks["phase"] == "bwrap-namespace-phase" and attacks["required_tier"] == "T2"
-    entries = attacks["attacks"]
-    assert len(entries) == 20 and len({entry["id"] for entry in entries}) == 20
-    assert {entry["category"] for entry in entries} == {"filesystem", "process", "syscall", "namespace", "network", "privilege", "environment"}
-    for entry in entries:
-        assert set(entry) >= {"id", "objective", "script", "kind", "required_tier", "expected_verdict", "canaries", "expected_audit", "expect", "seccomp_direct"}
-        assert entry["expected_verdict"] in ("blocked", "killed") and entry["required_tier"] == "T2"
-        script = ROOT / "tests" / "fixtures" / "bulkhead_attacks" / "scripts" / entry["script"]
-        assert script.is_file(), entry["script"]
-        assert "BULKHEAD-CANARY-" not in script.read_text().replace("MARKER", "")  # scripts never hold a secret
-    covered = " ".join(entry["id"] for entry in entries)
-    for topic in ("ssh", "shadow", "dotdot", "symlink", "hardlink", ".env", "git", "git_hooks", "cross_process", "helper", "io_uring", "kernel_primitives", "nested_namespaces", "mounts", "sockets", "escalation", "credentials"):
-        assert topic.strip(".") in covered, topic
-
-
 # Integration: real bubblewrap (skipped unless BULKHEAD_INTEGRATION=1 and the probe proves the features)
 
 
@@ -513,26 +496,7 @@ def test_integration_namespace_capability_descriptor_and_environment_properties(
     assert not {"home", "root", "etc", "var", "run", "mnt", "opt", "srv", "boot"} & set(facts["root"])
 
 
-ATTACKS = load_attacks()
-
-
-@pytest.mark.parametrize("attack", ATTACKS["attacks"], ids=[attack["id"] for attack in ATTACKS["attacks"]])
-def test_integration_the_first_twenty_attacks_fail(t2_backend, tmp_path, monkeypatch, attack):
-    if MACHINE not in attack.get("architectures", [MACHINE]):
-        pytest.skip(f"unsupported: {attack['id']} needs {attack['architectures']}")
-    context = AttackContext.create(tmp_path, listeners=attack["canaries"].get("no_connections", False))
-    monkeypatch.setenv("HF_TOKEN", context.token)  # must never reach the sandbox
-    episode = "ep_" + attack["id"].replace(".", "_")
-    workspace = t2_backend.prepare(episode, context.workspace_files(ATTACKS))
-    before = snapshot(context, workspace.path)
-    try:
-        outcome = t2_backend.execute(request_for(context.program(attack), episode_id=episode, timeout_s=20), {})
-        problems = check_attack(attack, outcome, context, before=before, workspace=workspace.path)
-    finally:
-        if context.listeners is not None:
-            context.listeners.stop()
-        t2_backend.cleanup(episode)
-    assert problems == []
+# The attack corpus itself runs on this backend through the part 7 suite (tests/test_bulkhead_attack_suite.py).
 
 
 def test_integration_network_goes_only_through_the_calls_proxy(t2_backend, tmp_path):
