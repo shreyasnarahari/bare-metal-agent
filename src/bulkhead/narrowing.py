@@ -92,6 +92,8 @@ def egress_widening(candidate: Egress, current: Egress) -> dict[str, Any]:
     for name in ("max_bytes_out", "max_bytes_in"):
         if getattr(candidate, name) > getattr(current, name):
             widened[name] = getattr(candidate, name)
+    if new := added(candidate.address_classes, current.address_classes):
+        widened["address_classes"] = new
     return widened
 
 

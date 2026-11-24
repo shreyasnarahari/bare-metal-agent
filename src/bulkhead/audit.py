@@ -183,6 +183,33 @@ def violations(value: Any, field: str) -> list[dict[str, Any]]:
     return value
 
 
+GATE_STREAMS = ("stdout", "stderr", "body")
+GATE_STREAM_FIELDS = ("name", "raw_bytes", "kept_bytes", "invalid_utf8", "stripped", "neutralized", "redacted", "truncated")
+
+
+def gate_streams(value: Any, field: str) -> list[dict[str, Any]]:
+    """What the output gate did to each stream: byte counts and flags, never the content."""
+    if not isinstance(value, list) or not 1 <= len(value) <= len(GATE_STREAMS):
+        _fail(field, f"must list one to {len(GATE_STREAMS)} streams")
+    names = []
+    for index, item in enumerate(value):
+        where = f"{field}[{index}]"
+        if not isinstance(item, Mapping) or set(item) != set(GATE_STREAM_FIELDS):
+            _fail(where, f"needs exactly {list(GATE_STREAM_FIELDS)}")
+        if item["name"] not in GATE_STREAMS:
+            _fail(f"{where}.name", f"must be one of {list(GATE_STREAMS)}")
+        names.append(item["name"])
+        for key in ("raw_bytes", "kept_bytes", "stripped", "neutralized", "redacted"):
+            count(item[key], f"{where}.{key}")
+        for key in ("invalid_utf8", "truncated"):
+            boolean(item[key], f"{where}.{key}")
+        if item["kept_bytes"] > item["raw_bytes"]:
+            _fail(f"{where}.kept_bytes", "cannot exceed raw_bytes")
+    if len(set(names)) != len(names):
+        _fail(field, "names a stream twice")
+    return value
+
+
 def resource_usage(value: Any, field: str) -> dict[str, Any]:
     if not isinstance(value, Mapping) or not set(value) <= set(RESOURCE_KEYS):
         _fail(field, f"must be an object with keys from {list(RESOURCE_KEYS)}")
@@ -273,6 +300,13 @@ SECURITY_EVENT_FIELDS: dict[str, dict[str, Validator]] = {
         "elapsed_s": seconds,
         "result": typed_result,
     },
+    "output_gate": {
+        "step": step,
+        "tool_call_id": identifier,
+        "via": choice(VIA),
+        "tool": name,
+        "streams": gate_streams,
+    },
     "egress_decision": {
         "step": step,
         "tool_call_id": identifier,
@@ -344,6 +378,7 @@ def build(event: str, **fields: Any) -> dict[str, Any]:
 __all__ = [
     "ADDRESS_CLASSES",
     "CLEANUP_STATUSES",
+    "GATE_STREAMS",
     "MAX_RECORD_CHARS",
     "RESOURCE_KEYS",
     "SECURITY_EVENT_FIELDS",

@@ -133,19 +133,25 @@ class _Capture:
         return self.total > len(self.kept)
 
 
-def launcher_command(interpreter: str, status_fd: int, program: Program, *, shell: str) -> list[str]:
+def launcher_command(interpreter: str, status_fd: int, program: Program, *, shell: str, bridge: tuple[int, str] | None = None) -> list[str]:
     """The fixed argv that starts the launcher, which then runs ``program`` (text arrives on stdin).
 
     ``interpreter`` runs both the launcher and Python programs; ``shell`` runs
-    shell programs as ``shell -c TEXT`` inside the sandbox. The model supplies
-    none of these.
+    shell programs as ``shell -c TEXT`` inside the sandbox. ``bridge`` (port,
+    proxy socket path) adds the loopback bridge for network-enabled calls. The
+    model supplies none of these.
     """
     source = _launcher_source()
     if program.kind is ProgramKind.PYTHON:
         target = [interpreter, "-I", "-"]
     else:
         target = [shell, "-c"]
-    return [interpreter, "-I", "-S", "-c", source, str(status_fd), program.kind.value, *target]
+    if bridge is None:
+        return [interpreter, "-I", "-S", "-c", source, str(status_fd), program.kind.value, *target]
+    from .bridge import bridge_source
+
+    port, path = bridge
+    return [interpreter, "-I", "-S", "-c", bridge_source() + "\n" + source, str(status_fd), program.kind.value, "--bridge", str(int(port)), path, *target]
 
 
 @lru_cache(maxsize=1)

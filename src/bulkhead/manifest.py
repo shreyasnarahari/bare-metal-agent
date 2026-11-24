@@ -48,6 +48,8 @@ GLOBAL_MAXIMA: dict[str, float] = {
 }
 MAX_EGRESS_BYTES = 64 * 1024 * 1024
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# Where a resolved address may land. "public" is the only default; the rest must be listed.
+ADDRESS_CLASSES = ("public", "private", "loopback", "link_local", "multicast", "reserved")
 
 _LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -178,6 +180,8 @@ def normalize_authority(text: Any, where: str = "authority", *, error=SecuritySp
         raise error(f"{where} must be a bare host:port (no scheme, path, user, or wildcard)")
     if text.startswith("["):
         host, separator, port = text[1:].partition("]:")
+        if "%" in host:
+            raise error(f"{where} has an IPv6 zone id, which is not allowed")
         try:
             host = f"[{ipaddress.IPv6Address(host).compressed}]"
         except ValueError:
@@ -191,6 +195,10 @@ def normalize_authority(text: Any, where: str = "authority", *, error=SecuritySp
             labels = host.split(".")
             if not host or len(host) > 253 or not all(_LABEL.fullmatch(label) for label in labels):
                 raise error(f"{where} has an invalid host name") from None
+            # A numeric last label is never a DNS name: "127.1", "2130706433", and "0x7f000001"
+            # are IPv4 addresses in disguise that a resolver would happily accept.
+            if labels[-1].isdigit() or re.fullmatch(r"0x[0-9a-f]+", labels[-1]):
+                raise error(f"{where} is a non-canonical numeric address; write the dotted IPv4 form") from None
     if not separator or not port.isdigit() or port != str(int(port)) or not 1 <= int(port) <= 65535:
         raise error(f"{where} needs an explicit port from 1 to 65535")
     return f"{host}:{int(port)}"
@@ -264,11 +272,20 @@ DEFAULT_LIMITS = Limits(cpu_s=10, mem_mb=512, pids=64, disk_mb=200, out_kb=64)
 
 @dataclass(frozen=True)
 class Egress:
-    """Exact ``host:port`` destinations and byte ceilings. Empty ``allow`` means no network."""
+    """Exact ``host:port`` destinations, byte ceilings, and the address classes a resolved name may land in.
+
+    Empty ``allow`` means no network. ``address_classes`` defaults to public
+    addresses only: an allowed name that resolves to a loopback, private,
+    link-local (cloud metadata), multicast, or reserved address is refused
+    unless that class is listed, and so is an allowed IP literal. It appears
+    in the canonical form only when it differs from the default, so older
+    specs keep their hashes.
+    """
 
     allow: tuple[str, ...] = ()
     max_bytes_out: int = 64 * 1024
     max_bytes_in: int = 1024 * 1024
+    address_classes: tuple[str, ...] = ("public",)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "allow", normalize_authorities(self.allow, "egress.allow"))
@@ -277,18 +294,29 @@ class Egress:
             if value <= 0 or value > MAX_EGRESS_BYTES:
                 raise SecuritySpecError(f"egress.{name} must be positive and at most {MAX_EGRESS_BYTES}")
             object.__setattr__(self, name, value)
+        classes = _sequence(self.address_classes, "egress.address_classes", limit=len(ADDRESS_CLASSES))
+        unknown = sorted(set(classes) - set(ADDRESS_CLASSES))
+        if unknown or not classes:
+            raise SecuritySpecError(f"egress.address_classes must be a non-empty subset of {list(ADDRESS_CLASSES)}; got {unknown or 'nothing'}")
+        object.__setattr__(self, "address_classes", tuple(sorted(set(classes))))
 
     @property
     def enabled(self) -> bool:
         return bool(self.allow)
 
     def as_dict(self) -> dict[str, Any]:
-        return {"allow": list(self.allow), "max_bytes_out": self.max_bytes_out, "max_bytes_in": self.max_bytes_in}
+        body: dict[str, Any] = {"allow": list(self.allow), "max_bytes_out": self.max_bytes_out, "max_bytes_in": self.max_bytes_in}
+        if self.address_classes != ("public",):
+            body["address_classes"] = list(self.address_classes)
+        return body
 
     @classmethod
     def from_dict(cls, value: Any, where: str = "egress") -> Egress:
-        check_keys(value, ("allow",), where, optional=("max_bytes_out", "max_bytes_in"))
-        return cls(**dict(value))
+        check_keys(value, ("allow",), where, optional=("max_bytes_out", "max_bytes_in", "address_classes"))
+        options = dict(value)
+        if "address_classes" in options:
+            options["address_classes"] = tuple(options["address_classes"])
+        return cls(**options)
 
 
 @dataclass(frozen=True)

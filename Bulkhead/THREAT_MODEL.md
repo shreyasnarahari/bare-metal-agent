@@ -89,5 +89,23 @@ Verified on the WSL2 host:
 
 Still unverified: `bwrap-t2` and `bwrap-namespace-phase`, since bubblewrap is absent here.
 
+**Status after part 6:** the egress boundary and output gate are implemented.
+
+- **Egress:** a network-enabled T2 call's only route out is its own outside CONNECT proxy, reached through a loopback bridge and a bound Unix socket inside a loopback-only network namespace.
+  - The proxy parses strictly and matches exact `host:port` entries.
+  - It resolves outside the sandbox and allows only permitted address classes (public by default), then pins the connection to the validated address.
+  - It caps bytes in both directions, connections, idle time, and call time.
+  - Every request is recorded without URLs, headers, or bodies. HTTPS is not intercepted: a redirect's second hop is a separate CONNECT.
+- **T1:** exec networking stays off.
+- **Output gate:** every backend result is gated before the model or the journal sees it. That covers raw byte caps, safe decoding, removing escape and control and bidi characters, neutralizing delimiter forgeries, redacting configured secrets, and deterministic untrusted labels. The labels inform; taint and policy enforce.
+
+Verified on the WSL2 host:
+
+- the proxy, against local HTTP and HTTPS fixtures;
+- the full egress data path in a real network namespace (a test harness, not bubblewrap), with no direct route;
+- the output gate, end to end.
+
+Still unverified: T2 networking under bubblewrap. The optional proxy-mediated `http_request` tool is not implemented.
+
 - **Development host (WSL2):** selects T1, and the T1 backend runs here for real. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup probes and the cgroup-governed resource fixtures all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

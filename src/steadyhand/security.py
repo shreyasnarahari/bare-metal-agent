@@ -41,6 +41,14 @@ backend observed into a typed tool result, and journals the run as
 The live backend is ``bulkhead.backends.bwrap`` (part 4, the namespace/seccomp
 phase of tier 2); replay uses the recorded backend.
 
+A backend run's events are journaled in this order, between the call's
+``policy_decision`` and its ``tool_result``: ``sandbox_execution`` (the run and
+its typed result), one ``egress_decision`` per proxied request (authority and
+byte counts only), and ``output_gate`` (what sanitizing did to each stream).
+The model and the journal only ever see gated output: sanitized, bounded,
+redacted, and wrapped in deterministic untrusted-output delimiters. The
+wrapper explains; the taint state and policy enforce.
+
 With ``security=None`` nothing here runs and episodes behave exactly as before.
 Without a backend, sandboxed tools are denied by the policy gate (no available
 tier) and refused by the executor.
@@ -436,7 +444,9 @@ class SecurityGate:
         return outcome
 
 
-def process_tool_result(call: ToolCall, digest: str, process: ExecResult, policy: Any) -> ToolResult:
+def process_tool_result(
+    call: ToolCall, digest: str, process: ExecResult, policy: Any, *, request_sha256: str = "0" * 64, secrets: Sequence[str] = ()
+) -> tuple[ToolResult, list[dict[str, Any]] | None]:
     """Turn what a live backend observed into the tool result the model sees.
 
     A sandbox that never started is a ``sandbox_violation`` (the program did
@@ -447,17 +457,23 @@ def process_tool_result(call: ToolCall, digest: str, process: ExecResult, policy
     else, including a nonzero exit or a signal, is a valid result whose value
     is the bounded ``ExecResult`` (exit code, signal, stdout, stderr,
     truncation flags). Its output is untrusted (the exec specs declare it so).
+
+    A completed run's streams pass through the output gate: already sanitized
+    by the backend, they are redacted (``secrets``) and wrapped in
+    deterministic untrusted-output delimiters derived from ``request_sha256``.
+    Returns the result and the gate's stream records (None when no output is shown).
     """
     if not process.started:
         rule = process.setup_error or "bulkhead.setup.failed"
         error = sandbox_violation_observation(call.name, rule, "the sandbox could not be set up, so the program did not run")
-        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=False)
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=False), None
     if process.exhausted is not None:
         error = resource_exhausted_observation(call.name, process.exhausted)
-        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=True)
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=error, handler_called=True), None
     if process.timed_out:
-        return ToolResult(call.id, call.name, call.arguments, digest, False, error=timeout_observation(call.name, policy), handler_called=True)
-    return ToolResult(call.id, call.name, call.arguments, digest, True, value=process.value(), handler_called=True)
+        return ToolResult(call.id, call.name, call.arguments, digest, False, error=timeout_observation(call.name, policy), handler_called=True), None
+    value, streams = process.render(request_sha256, secrets)
+    return ToolResult(call.id, call.name, call.arguments, digest, True, value=value, handler_called=True), streams
 
 
 class BackendRunner:
@@ -499,12 +515,19 @@ class BackendRunner:
             raise ReplayMismatch(str(exc), seq=exc.seq, field=exc.field) from None
         if outcome.result is not None:
             result = tool_result_from(call, digest, outcome.result)
+            streams = list(outcome.gate) if outcome.gate is not None else None
         else:
             assert outcome.process is not None
-            result = process_tool_result(call, digest, outcome.process, policy)
-        self.gate.journal.sandbox_execution(
-            step=self.gate.step(), tool_call_id=call.id, via=via, tool=call.name, result=typed_result(result), **outcome.audit,
-        )
+            result, streams = process_tool_result(
+                call, digest, outcome.process, policy, request_sha256=request.sha256, secrets=getattr(self.gate.journal, "secrets", ()),
+            )
+        step = self.gate.step()
+        journal = self.gate.journal
+        journal.sandbox_execution(step=step, tool_call_id=call.id, via=via, tool=call.name, result=typed_result(result), **outcome.audit)
+        for record in outcome.egress:
+            journal.egress_decision(step=step, tool_call_id=call.id, **record)
+        if streams is not None:
+            journal.output_gate(step=step, tool_call_id=call.id, via=via, tool=call.name, streams=streams)
         return result
 
 

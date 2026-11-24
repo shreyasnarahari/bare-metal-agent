@@ -141,7 +141,8 @@ def test_an_exhausted_run_is_a_typed_non_retryable_resource_error():
     outcome = build_outcome(request, BackendIdentity("x", "1", SandboxTier.T1), observed(signal=9, exit_code=None, resource_usage={"oom_kills": 2, "oom_killed": True}))
     assert outcome.process.exhausted == "memory"
     assert {"kind": "resource", "rule_id": "bulkhead.limit.memory", "detail": "the memory ceiling stopped the program"} in outcome.audit["violations"]
-    result = process_tool_result(ToolCall("c", "run_python", "{}"), "a" * 64, outcome.process, EXEC_POLICY)
+    result, streams = process_tool_result(ToolCall("c", "run_python", "{}"), "a" * 64, outcome.process, EXEC_POLICY)
+    assert streams is None  # nothing from an exhausted run is shown
     assert result.error.error_type.value == "resource_exhausted" and result.error.retryable is False and result.handler_called
     assert EXHAUSTION_LIMITS == ("memory", "pids", "disk", "cpu")
     with pytest.raises(ValueError):

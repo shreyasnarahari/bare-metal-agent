@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 to 5 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, and resource governance with the tier-1 backend. **The tier-1 backend and cgroup governance are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace and filesystem isolation is untested; see parts 4 and 5 below.
+**Status:** parts 1 to 6 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, and the egress proxy with the output gate. **The tier-1 backend, cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; see parts 4 to 6 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -258,6 +258,65 @@ Verified on the WSL2 development host (Landlock ABI 7, no bubblewrap):
   - no leaf was left behind.
 
 Not verified: `bwrap-t2` and `bwrap-namespace-phase`, which need bubblewrap.
+
+### Egress proxy and output gate (part 6)
+
+A tier-2 call whose spec allows egress gets exactly one route out:
+
+```text
+program -> HTTPS_PROXY=http://127.0.0.1:3128 -> loopback bridge (inside the network namespace)
+        -> /run/bulkhead/proxy.sock (this call's Unix socket, bound in) -> outside CONNECT proxy
+        -> DNS and the destination connection, outside the sandbox
+```
+
+- **Bridge** (`bulkhead.bridge`): the loopback bridge only lets ordinary clients use a proxy URL. It decides nothing, and a tool that kills it just loses the network.
+- **Proxy** (`bulkhead.proxy`): one per call, on a fresh mode-0600 socket, bound to the call's policy from the sandbox spec. Nothing the client sends is read as policy.
+- **Parsing:** only `CONNECT host:port` is offered; `GET http://...` gets a 405.
+- **Authorities** are parsed strictly. Userinfo, `@` confusion, missing or non-canonical ports, zone-scoped or malformed IPv6, and disguised IPv4 (`127.1`, `2130706433`, `0x7f000001`, `0177.0.0.1`) are refused before any resolver sees them.
+- **Destinations** must match exact `host:port` entries; there are no wildcards and no suffix matching.
+- **Raw IP literals** are refused unless that exact `ip:port` is listed.
+- **Address classes:** names are resolved outside the sandbox, and every address must be in an allowed class. Only `public` is allowed by default (`Egress.address_classes`), so an allowed name can't be pointed at loopback, private ranges, or cloud metadata. Adding a class is a widening that asks. The connection goes to the validated address, never re-resolved.
+- **Ceilings:** request heads, total bytes in and out across all of a call's connections, connection count, idle time, and call time are all capped. Slow headers are cut off.
+- **HTTPS** stays end to end. The proxy never sees paths or redirects inside TLS, so a redirect to another authority is a new CONNECT, decided on its own.
+- **Records:** every request becomes an `egress_decision` record holding the authority, rule, address class, and byte counts. No URL, query, header, cookie, or body is recorded. A refused CONNECT gets a 403 naming the rule (never the allowlist) and an `egress` violation on the run. A proxy that can't start is an infrastructure failure (`bulkhead.setup.proxy`), not a denial.
+- **No direct route:** the namespace has only loopback, there is no resolver, and seccomp allows `AF_INET` only for network-enabled calls.
+- **Tier 1** keeps exec networking off. The optional proxy-mediated `http_request` tool from the plan is not implemented.
+
+**Output gate** (`bulkhead.output`). Every backend result passes through it before the model or the journal sees it:
+
+- raw bytes are capped while reading;
+- UTF-8 is decoded, with a truncation-cut tail dropped and invalid bytes flagged;
+- ANSI CSI/OSC/DCS escapes, NUL and other C0/C1 controls, a lone CR, and bidi controls are removed;
+- lines forging the wrapper are escaped;
+- configured secret values (`HF_TOKEN`, `LOCAL_KEY`, and others) are redacted as a last defense.
+
+The model then sees:
+
+```json
+{"ok": true, "value": {"exit_code": 0, "signal": null,
+  "stdout": {"trust": "untrusted", "content": "[BEGIN UNTRUSTED OUTPUT <id>]\n...\n[END UNTRUSTED OUTPUT <id>]", "truncated": false},
+  "stderr": {"trust": "untrusted", "content": "", "truncated": false}}}
+```
+
+- **Delimiter id:** derived from the request hash, so replay is byte-identical.
+- **The wrapper is labeling, not enforcement:** the taint state and the policy enforce.
+- **Journal order:** `sandbox_execution`, then each `egress_decision`, then `output_gate` (counts and flags only), then `tool_result`.
+- **Replay** serves all of them from the recording, with no proxy, socket, DNS, or process activity.
+- **Structured output:** `bound_json` shrinks structured outside content into valid JSON within its limit.
+
+Verified on the WSL2 development host:
+
+- **Proxy:** 27 tests against local HTTP and HTTPS fixtures, the HTTPS one with a throwaway `openssl` certificate. They cover allowed tunnels, explicit certificate handling, every refused authority form, forbidden address classes, a DNS change that can't redirect a pinned connection, a redirect's second hop, both byte caps across connections, connection and request ceilings, slowloris, oversized heads, idle tunnels, upstream failures, client policy overrides, and socket privacy.
+- **Egress data path:** run end to end in a real network namespace (`unshare -Urn`, a test-only harness, not bubblewrap). The allowed fixture answered through the bridge and proxy. A disallowed name got a 403. A direct connection was refused (`ECONNREFUSED`) and UDP DNS had no route (`ENETUNREACH`). The records appeared in call order, the next taint-sensitive call asked, and replay touched no socket, resolver, or process.
+- **Output gate:** tested end to end through the loop, including escapes, NUL, bidi, forged closers, floods, and redaction.
+- **Resource fixtures:** they still pass inside the delegated scope.
+
+Not verified: `bwrap-t2` networking (its integration test is skipped here for lack of bubblewrap).
+
+**Breaking changes:**
+- Exec result values now carry `stdout`/`stderr` objects instead of strings.
+- `normalize_authority` (part 2) now refuses non-canonical numeric hosts.
+- The golden sandboxed episode was regenerated through the output gate.
 
 ## Architecture
 

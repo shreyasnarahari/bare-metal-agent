@@ -269,6 +269,8 @@ class EpisodeJournal:
         self.path = Path(path)
         self.episode_id = episode_id
         self._recorder = JsonlRecorder(self.path, secrets=(*secrets, *environment))
+        # The same values, for the output gate's final redaction of model observations.
+        self.secrets = tuple(value for value in (*secrets, *environment) if value)
         self._seq = 0
         self._expected = [dict(record) for record in expected or ()]
         self._write = write
@@ -568,8 +570,12 @@ class EpisodeJournal:
         )
 
     def egress_decision(self, **fields: Any) -> dict[str, Any]:
-        """One proxy decision (part 6): the normalized authority, never a URL, body, or header."""
+        """One proxy decision: the normalized authority and byte counts, never a URL, body, or header."""
         return self._security("egress_decision", **fields)
+
+    def output_gate(self, **fields: Any) -> dict[str, Any]:
+        """What the output gate did to a backend result's streams (counts and flags, never content)."""
+        return self._security("output_gate", **fields)
 
     def _security(self, event: str, **fields: Any) -> dict[str, Any]:
         # Checked before writing, so an invalid security record never reaches the file.

@@ -32,6 +32,20 @@ security error (``permission_denied``, ``permission_required``,
 ``sandbox_violation``) is never retried, verified, or switched around, whatever
 the strategy; ``permission_required`` escalates. ``Effect.EXEC`` tools are
 never retried or verified automatically.
+
+What a sandboxed call can come back as, and what recovery does with it:
+
+- a policy denial or ask (``permission_denied`` / ``permission_required``):
+  never retried; a new request is authorized on its own;
+- a sandbox that could not be built, or a proxy that could not start
+  (``sandbox_violation`` with a ``bulkhead.setup.*`` rule): infrastructure,
+  not a denial and not a tool failure; never retried;
+- a memory, PID, disk, or CPU ceiling (``resource_exhausted``): never retried,
+  since the same program would exhaust it again;
+- a deadline (``timeout``): unknown effects; never blindly retried for exec;
+- an ordinary result, including a nonzero exit or a signal, and including a
+  program whose CONNECT the proxy refused (the program saw the 403; the
+  denial is in ``egress_decision``): returned to the model as is.
 """
 
 from __future__ import annotations

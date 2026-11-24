@@ -15,6 +15,10 @@ built the namespaces and installed the seccomp filter. It is never imported.
    same way (128 plus the signal for a signal), so the exact way the program
    ended survives bubblewrap's exit-status folding.
 
+With ``--bridge PORT SOCKET`` after KIND (only for calls that may use the
+network, with ``bulkhead.bridge``'s source prepended), it binds the loopback
+bridge before forking and serves it from a thread while it waits.
+
 The status channel is a convenience for classification, not a security
 boundary: a program that tampers with it can only misreport its own result.
 """
@@ -27,6 +31,10 @@ def main():
     status = int(sys.argv[1])
     kind = sys.argv[2]
     target = sys.argv[3:]
+    listener = None
+    if target[:1] == ["--bridge"]:
+        port, unix_path, target = int(target[1]), target[2], target[3:]
+        listener = bridge_listen(port)  # noqa: F821 (prepended from bulkhead.bridge)
     if kind not in ("python", "shell") or not target:
         os._exit(2)
     stdin = 0
@@ -53,6 +61,10 @@ def main():
     if stdin:
         os.close(stdin)
     os.close(0)
+    if listener is not None:
+        import threading
+
+        threading.Thread(target=bridge_serve, args=(listener, unix_path), daemon=True).start()  # noqa: F821
     while True:
         try:
             _, wait_status = os.waitpid(pid, 0)

@@ -91,9 +91,9 @@ def test_a_contradictory_policy_is_refused():
         SyscallPolicy(allow=("read", "ptrace"))
     with pytest.raises(ValueError, match="dedicated rules"):
         SyscallPolicy(allow=("read", "socket"))
-    with pytest.raises(ValueError, match="AF_UNIX or nothing"):
+    with pytest.raises(ValueError, match="AF_UNIX, nothing, or"):
         SyscallPolicy(socket_families=(1, 2))
-    with pytest.raises(ValueError, match="AF_UNIX or nothing"):
+    with pytest.raises(ValueError, match="AF_UNIX, nothing, or"):
         SyscallPolicy(socket_families=(2,))
 
 
