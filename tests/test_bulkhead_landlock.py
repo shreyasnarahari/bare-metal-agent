@@ -51,12 +51,10 @@ from steadyhand.security import STORE_TOOLS, SecurityConfig
 from steadyhand.tools_exec import EXEC_LIMITS, EXEC_SANDBOX
 from toolsmith.protocols import QWEN3_PROFILE
 
-from exec_support import ATTACKS, AttackContext, check_attack, load_attacks, request_for, snapshot
+from exec_support import DATASET, request_for
 
 LINUX = sys.platform.startswith("linux")
 MACHINE = platform.machine().lower()
-TIER1 = json.loads((ATTACKS / "resource_and_tier1.json").read_text())
-PART4 = load_attacks()
 
 
 @pytest.fixture
@@ -284,16 +282,17 @@ def test_every_profile_describes_every_property_and_t0_runs_nothing():
 
 
 def test_the_attack_matrix_never_claims_a_pass_and_covers_every_profile():
-    matrix = attack_matrix(PART4, TIER1)
-    assert len(matrix) == 30 and set(TIER1["tier1"]) == {attack["id"] for attack in PART4["attacks"]}
+    matrix = attack_matrix(DATASET)
+    assert len(matrix) == len(DATASET.scored) >= 40
     for attack, row in matrix.items():
         assert set(row) == set(PROFILES), attack
         assert set(row.values()) <= STATUSES, attack
-        assert row["T0"] == "not_applicable"
+        assert row["T0"] == "not_applicable" or attack.startswith("deputy."), attack  # only policy-level scenarios run on T0
     assert matrix["fs.read_env"]["landlock-t1"] == "different_boundary" and matrix["fs.read_env"]["bwrap-t2"] == "blocked"
     assert matrix["resource.fork_bomb"]["landlock-t1"] == "not_applicable"  # no PID ceiling without a cgroup
+    assert matrix["net.disallowed_host"]["landlock-t1"] == "not_applicable"  # tier 1 has no network at all
     for profile in CGROUP_PROFILES:
-        assert matrix["resource.fork_bomb"][profile] == "killed"
+        assert matrix["resource.fork_bomb"][profile] == "blocked"
 
 
 # Integration: the real tier-1 backend, wherever the probe proves tier 1
@@ -339,25 +338,7 @@ def test_integration_t1_refuses_network_and_unenforceable_specs(t1_backend, monk
         assert outcome.process.setup_error == code and not outcome.audit["started"]
 
 
-@pytest.mark.parametrize("attack", PART4["attacks"], ids=[attack["id"] for attack in PART4["attacks"]])
-def test_integration_t1_the_first_twenty_attacks_fail(t1_backend, tmp_path, monkeypatch, attack):
-    if MACHINE not in attack.get("architectures", [MACHINE]):
-        pytest.skip(f"unsupported: {attack['id']} needs {attack['architectures']}")
-    tier1 = TIER1["tier1"][attack["id"]]
-    expected = {**attack, "expect": tier1["expect"], "expected_verdict": tier1["status"]}
-    context = AttackContext.create(tmp_path, listeners=attack["canaries"].get("no_connections", False))
-    monkeypatch.setenv("HF_TOKEN", context.token)
-    episode = "ep_t1_" + attack["id"].replace(".", "_")
-    workspace = t1_backend.prepare(episode, context.workspace_files(PART4))
-    before = snapshot(context, workspace.path)
-    try:
-        outcome = t1_backend.execute(request_for(context.program(attack, workspace=str(workspace.path)), episode_id=episode, timeout_s=20), {})
-        problems = check_attack(expected, outcome, context, before=before, workspace=workspace.path)
-    finally:
-        if context.listeners is not None:
-            context.listeners.stop()
-        t1_backend.cleanup(episode)
-    assert problems == []
+# The attack corpus runs on this backend through the part 7 suite (tests/test_bulkhead_attack_suite.py).
 
 
 class FakeService:

@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`.
 
-**Status:** parts 1 to 6 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, and the egress proxy with the output gate. **The tier-1 backend, cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; see parts 4 to 6 below.
+**Status:** parts 1 to 7 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, and the versioned attack suite with overhead and usability benchmarks. **The tier-1 backends (with and without a cgroup), cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; the attack suite records every tier-2 cell as untested. See parts 4 to 7 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -187,7 +187,7 @@ What has been verified on the WSL2 development host, which has no bubblewrap:
 
 - **seccomp filter:** on the real kernel, Python threads, subprocesses, and `sh` run normally under it.
 - **Blocked primitives:** `ptrace`, `process_vm_readv`, and inet sockets, which this kernel allows unfiltered, are refused with the filter installed.
-- **Attack fixtures:** 8 of the first 20 attacks (`tests/fixtures/bulkhead_attacks/tier2_first20.json`) are syscall-only, and all 8 fail under the filter alone.
+- **Attack fixtures:** 8 of the first 20 attacks are syscall-only, and all 8 fail under the filter alone. (Part 7 moved every attack into `evaluation/data/bulkhead_attacks_v1.json`; 12 of its attacks now run under the filter alone.)
 - **Supervisor:** draining, caps, deadline, cleanup, environment, and descriptor behavior.
 - **Steadyhand wiring:** tested end to end with a host-only seccomp backend that is not a sandbox (`tests/exec_support.py`).
 
@@ -222,7 +222,7 @@ Every live call now goes through one path, `bulkhead.backends.common.run_governe
 | `landlock-t1` | T1 | Landlock | none | process group only | `RLIMIT_AS` backup only |
 | T0 | T0 | not a sandbox: exec and network tools are denied | | | |
 
-`bulkhead.backends.profiles` holds the full description and builds the per-attack expectation matrix (`blocked`, `killed`, `different_boundary`, `not_applicable`; never `passed`).
+`bulkhead.backends.profiles` holds the full description and builds the per-attack expectation matrix from the part 7 dataset (`blocked`, `different_boundary`, `not_applicable`; never `passed`).
 
 - **Construction:** `BwrapBackend` now builds full T2 by default and needs a cgroup parent. The namespace-only profile needs `namespace_phase=True`.
 - **`resource_exhausted`:** a memory, PID, disk, or CPU ceiling gives this non-retryable observation, distinct from `timeout` and from a nonzero exit.
@@ -317,6 +317,69 @@ Not verified: `bwrap-t2` networking (its integration test is skipped here for la
 - Exec result values now carry `stdout`/`stderr` objects instead of strings.
 - `normalize_authority` (part 2) now refuses non-canonical numeric hosts.
 - The golden sandboxed episode was regenerated through the output gate.
+
+### Attack suite, overhead, and usability (part 7)
+
+Every attack from parts 4 to 6, plus the rest of the part 7 matrix, is now one versioned corpus: `evaluation/data/bulkhead_attacks_v1.json`, with 59 attacks and 6 positive controls. The scripts sit beside it in `evaluation/data/bulkhead_attacks_v1/`. The part 4 and 5 fixture files are gone, and the older tests run the same entries.
+
+- **Entries:** each names its objective and the independent evidence that decides it: canaries, host listeners (abstract, path, TCP on IPv4 and IPv6, UDP), survivor markers, bounds, gated output, or store effects. Each also declares how the attack must end on every profile, and why a profile differs (`different_boundary`) or can't host it (`not_applicable`).
+- **Loader** (`bulkhead.eval.attacks.load_dataset`): rejects duplicate ids, unknown categories, tiers, verdicts and capabilities, missing or path-like scripts, unsafe canary paths, objectives with nothing beyond the exit status (including any `passed` or `exit_code` field), unsupported ceilings, and scripts holding a secret. The dataset and every script are hashed into each run.
+- **Verdicts:**
+  - `escaped`: the objective occurred, whatever the exit status.
+  - `blocked`: the objective didn't occur, and every declared piece of evidence was observed.
+  - `different_boundary`: as `blocked`, by a mechanism the dataset declares for that profile.
+  - `setup_failure`: anything that can't be judged, including a failed positive control. Never a pass.
+  - `infrastructure_failure`: a harness fault, kept out of the rates.
+  - `not_applicable`: declared, and nothing runs.
+  - An unbuildable profile or a missing capability is recorded as `untested`, with the reason.
+- **Runner** (`python -m bulkhead.eval.attacks`):
+  - One record per (attack, profile, dataset hash, configuration hash, helper version), under `results/bulkhead/attacks/<run_id>/`.
+  - The run id derives from the manifest identity (probe, code, configuration, host, dataset), so any change starts a new run. Reusing an explicit run id with a different identity stops.
+  - Claims stop parallel workers from repeating a unit, and a stopped run resumes.
+  - Every unit runs under an outer watchdog, and bounded evidence is kept for anything that isn't a clean pass.
+  - Destructive attacks need `--destructive` and a cgroup-governed profile, and run serially.
+- **Overhead** (`python -m bulkhead.eval.overhead`): serial cold start, with 1,000 measured calls per profile and workload, each with a fresh workspace (and cgroup leaf), plus the first call reported separately. It also times proxy start and stop, and scripted whole episodes. The policy-only row exists only for the store episode: the policy never runs an exec tool without a sandbox tier.
+- **Usability** (`python -m bulkhead.eval.usability`): 18 benign and malicious tasks (`evaluation/data/bulkhead_security_tasks_v1.jsonl`) under `allow_no_taint`, `taint_deny_all`, and `taint_scripted`. Scripted runs use hashed one-shot approvals that retry as linked approved episodes.
+- **Report** (`python -m bulkhead.eval.report`): writes `results/bulkhead/RESULTS.md` from the records only. Cells a run didn't cover appear as untested.
+
+```bash
+.venv/bin/python -m bulkhead.eval.attacks --workers 4          # every profile this host can build; the rest are recorded untested
+.venv/bin/python -m bulkhead.eval.overhead --samples 1000      # serial, on a quiet host
+.venv/bin/python -m bulkhead.eval.usability
+.venv/bin/python -m bulkhead.eval.report                       # results/bulkhead/RESULTS.md
+# Destructive resource attacks: inside the delegated scope shown above, add
+#   --profile landlock-t1-cgroup --destructive --cgroup-parent "$P/sandbox"
+```
+
+Verified on the WSL2 development host. The records (manifests, raw samples, evidence) are under the gitignored `results/bulkhead/`, and `RESULTS.md` is generated from them.
+
+- **Attacks:**
+  - Runs `run_a88369d414b8e093` (bare host) and `run_b41184c22e37b1e4` (delegated scope, with `--destructive`). There were no escapes, setup failures, or infrastructure failures.
+  - `landlock-t1`: 31 blocked and 13 different boundary; 15 not applicable (network and cgroup-only).
+  - `landlock-t1-cgroup`: 37 blocked and 13 different boundary; 9 not applicable (network). All 12 resource attacks were contained: 11 blocked, and the session escape stopped by a different mechanism, as declared.
+  - T0: the 3 policy-level scenarios blocked.
+  - Every applicable positive control passed. Both bubblewrap profiles are untested here, with the probe's reasons.
+  - The first scope run scored the five destructive attacks `setup_failure`, because the dataset hadn't declared the resource violations the audit records. The declarations were added and both runs repeated.
+- **Network attacks without bubblewrap:** their tier-2 expectations (proxy bypass, ambiguous addresses, DNS tunnel, disallowed host and port, redirect second hop, byte and connection caps) match through the real bridge and proxy in a test network namespace, which is not a sandbox. Unsandboxed test runs of three attacks are scored `escaped`, so the evidence pipeline does see a real escape.
+- **Overhead** (`ovh_5e86fc817fe0d0b5` and `ovh_56c4a1a0b6b841c4`; median, with p99 in parentheses):
+  - Plain process (T0): `/bin/true` 1.0 ms (1.5), Python 15.5 ms (21.3).
+  - `landlock-t1`: 195.2 ms (234.4) and 210.9 ms (250.5).
+  - `landlock-t1-cgroup`: 216.2 ms (243.5) and 231.8 ms (264.1).
+  - Proxy start and stop: 101.2 ms, almost all of it stopping.
+  - In the exec episode, the supervised time (helper, launcher, program) is 400.4 of 401.9 ms of sandbox wall time. Cold start is dominated by the pre-exec helper's interpreter, which imports Bulkhead from a repository on a 9P-mounted Windows drive.
+  - The store episode takes 9.5 ms trusted and 10.3 ms through the policy gate.
+  - The brief's 50 ms tier-2 example is untested (no tier 2 here).
+- **Usability** (`usa_38d81bb6c251a762`; 12 benign and 6 malicious tasks):
+  - `taint_deny_all`: ASKs on 7 of 18 tasks, benign over-denial 3/12, and injection success 1/6, against 5/6 with `allow_no_taint`.
+  - `taint_scripted`: approvals (2 approved, 5 declined) bring benign utility back to 11/12.
+  - The one injection that still succeeds is the declared negative control, a store write the task doesn't mark sensitive.
+  - Duplicate effects, and refused calls that still ran, are zero in every mode.
+
+Not verified: every bubblewrap cell, the egress episode, and the Colab run of the new notebook cell (`bulkhead-attack-suite`).
+
+**Also changed:**
+- The part 6 proxy now records a tunnel cut by the end of its call as `time` even if the shutdown's EOFs arrive first. It previously could record `allow`, depending on timing.
+- Two flaky part 6 proxy tests were fixed.
 
 ## Architecture
 

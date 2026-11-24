@@ -1,3 +1,4 @@
+# Mount, unmount, pivot the root, or escape the view through file handles.
 handle = ctypes.create_string_buffer(136)
 ctypes.memmove(handle, (128).to_bytes(4, "little"), 4)
 mount_id = ctypes.c_int(0)

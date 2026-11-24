@@ -107,5 +107,13 @@ Verified on the WSL2 host:
 
 Still unverified: T2 networking under bubblewrap. The optional proxy-mediated `http_request` tool is not implemented.
 
+**Status after part 7:** every attack is one versioned corpus (`evaluation/data/bulkhead_attacks_v1.json`: 59 attacks and 6 positive controls), each with an objective decided by independent evidence (canaries, host listeners, survivor markers, bounds, gated output, store effects), never by exit status. The dataset declares how each attack must end on every profile, and why a profile differs (`different_boundary`) or cannot host it (`not_applicable`).
+
+- **Verdicts:** `escaped` whenever the objective occurred; `blocked` only with every declared piece of evidence present; anything unjudgeable is a `setup_failure` and never a pass; harness faults are `infrastructure_failure` and stay out of the rates. A failed positive control prevents any `blocked` on that profile.
+- **No silent skips:** a profile the host cannot build, or an attack needing a capability the profile lacks there, is recorded as `untested` with the reason.
+- **Development host (WSL2):** no escape on `landlock-t1`, `landlock-t1-cgroup` (destructive resource attacks included, inside a delegated scope), or T0 (policy-level scenarios only). The tier-2 profiles are untested here. The network attacks' tier-2 expectations were exercised through the real proxy in a test network namespace, which is not a sandbox.
+- **Overhead and usability** are measured from raw samples and deterministic episodes; see `results/bulkhead/RESULTS.md` (generated from the records, not committed).
+- **Known limits, unchanged by part 7:** redaction is literal; per-call bounds do not limit cumulative effects; taint protects only sinks the task marks sensitive; tier 1 hides content, not names.
+
 - **Development host (WSL2):** selects T1, and the T1 backend runs here for real. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup probes and the cgroup-governed resource fixtures all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

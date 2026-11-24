@@ -1,5 +1,5 @@
-# Shared prelude for the tier-2 attack scripts. The runner prepends it to each script and fills in
-# the __PLACEHOLDERS__. Scripts never contain a canary's secret: they look for the public marker
+# Shared prelude for the attack scripts (bulkhead_attacks_v1). The runner prepends it to each script
+# and fills in the __PLACEHOLDERS__. Scripts never contain a canary's secret: they look for the public marker
 # BULKHEAD-CANARY- and report where they found it, and the host checks the full token separately.
 import ctypes
 import errno
@@ -47,7 +47,34 @@ def attempt(function):
         function()
         return "ok"
     except OSError as exc:
-        return code(exc.errno)
+        return code(exc.errno) if exc.errno is not None else type(exc).__name__
+
+
+def connect(family, address, kind=None, timeout=2):
+    """Connect a fresh socket and close it: "ok" or the errno name."""
+    import socket
+
+    def run():
+        with socket.socket(family, kind or socket.SOCK_STREAM) as client:
+            client.settimeout(timeout)
+            client.connect(address)
+    return attempt(run)
+
+
+def connect_head(authority, port=3128):
+    """Send one CONNECT request to the in-sandbox proxy bridge: the response's status code, or the errno name."""
+    import socket
+
+    def run():
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+            client.sendall(b"CONNECT " + authority.encode() + b" HTTP/1.1\r\nHost: " + authority.encode() + b"\r\n\r\n")
+            return client.recv(256)
+    try:
+        head = run()
+    except OSError as exc:
+        return code(exc.errno) if exc.errno is not None else type(exc).__name__
+    parts = head.split(b"\r\n", 1)[0].split()
+    return parts[1].decode() if len(parts) > 1 else "no_status"
 
 
 def try_read(path):

@@ -3,4 +3,4 @@ import time
 start = time.monotonic()
 while time.monotonic() - start < 30:
     pass
-print(json.dumps({"attack": "resource.cpu_total", "survived": True}))
+print(json.dumps({"attack": "resource.cpu_spin", "survived": True}))

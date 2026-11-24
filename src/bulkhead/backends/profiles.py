@@ -2,18 +2,19 @@
 
 ``PROFILES`` describes every profile a backend can report in
 ``sandbox_execution.backend`` (plus T0, which runs nothing). ``attack_matrix``
-turns the attack fixtures into a table of how each attack is expected to end
-under each profile:
+turns the part 7 attack dataset (``bulkhead.eval.attacks``) into a table of
+how each attack is declared to end under each profile:
 
-- ``blocked`` / ``killed``: the attack's objective fails the way the fixture says;
-- ``different_boundary``: it fails, but by a different mechanism than tier 2
-  (typically access denied where tier 2 makes the path invisible);
-- ``not_applicable``: the profile cannot host the attack safely or meaningfully
-  (a fork bomb without a PID ceiling, any exec on T0).
+- ``blocked``: the attack's objective fails the way the dataset says;
+- ``different_boundary``: it fails, but by a mechanism the dataset declares
+  different from tier 2 (typically access denied where tier 2 makes the path
+  invisible);
+- ``not_applicable``: the profile deliberately cannot host the attack (a fork
+  bomb without a PID ceiling, any exec on T0, any network attack on tier 1).
 
-The matrix is an expectation, not a result. Whether an expectation has been
-verified on a given host is decided only by running the integration tests
-there; a skipped profile is "pending", never "passed".
+The matrix is an expectation, not a result. Whether it holds on a host is
+decided only by running the suite there; a profile the host cannot build is
+"untested", never "passed".
 """
 
 from __future__ import annotations
@@ -80,32 +81,12 @@ PROFILES: Mapping[str, Mapping[str, str]] = MappingProxyType({
     "T0": MappingProxyType({name: ("T0" if name == "tier" else "not a sandbox: exec and network tools are denied") for name in PROPERTIES}),
 })
 CGROUP_PROFILES = frozenset({"bwrap-t2", "landlock-t1-cgroup"})
-STATUSES = frozenset({"blocked", "killed", "different_boundary", "not_applicable"})
+STATUSES = frozenset({"blocked", "different_boundary", "not_applicable"})
 
 
-def attack_matrix(part4: Mapping[str, Any], part5: Mapping[str, Any]) -> dict[str, dict[str, str]]:
-    """Each attack id to its expected status under each profile (see the module docstring)."""
-    rows: dict[str, dict[str, str]] = {}
-    for attack in part4["attacks"]:
-        tier2 = "killed" if attack["expected_verdict"] == "killed" else "blocked"
-        tier1 = part5["tier1"][attack["id"]]
-        tier1_status = "different_boundary" if tier1["boundary"] == "different" else tier1["status"]
-        rows[attack["id"]] = {
-            "bwrap-t2": tier2,
-            "bwrap-namespace-phase": tier2,
-            "landlock-t1-cgroup": tier1_status,
-            "landlock-t1": tier1_status,
-            "T0": "not_applicable",
-        }
-    for attack in part5["resource"]:
-        row = {}
-        for profile in PROFILES:
-            if profile == "T0" or (attack["requires_cgroup"] and profile not in CGROUP_PROFILES):
-                row[profile] = "not_applicable"
-            else:
-                row[profile] = "killed" if attack["expected"].get("exhausted") or attack["expected"].get("signal") else "blocked"
-        rows[attack["id"]] = row
-    return rows
+def attack_matrix(dataset: Any) -> dict[str, dict[str, str]]:
+    """Each attack id (positive controls excluded) to its declared verdict under each profile."""
+    return {attack.attack_id: {profile: attack.expectation(profile)["verdict"] for profile in PROFILES} for attack in dataset.scored}
 
 
 __all__ = ["CGROUP_PROFILES", "PROFILES", "PROPERTIES", "STATUSES", "attack_matrix"]
