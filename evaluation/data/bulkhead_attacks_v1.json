@@ -2231,10 +2231,11 @@
    "expected": {
     "T2": {
      "verdict": "blocked",
+     "why": "tier 2 contains these through the PID namespace: when the program exits, bubblewrap's namespace init exits and the kernel kills and reaps every remaining member before bubblewrap returns, so the supervisor finds nothing left to kill (cleanup 'clean'); tier 1 has no PID namespace and its supervisor kills the call's process group itself ('killed')",
      "resource": {
       "exhausted": "pids",
       "cleanup": [
-       "killed"
+       "clean"
       ],
       "usage_positive": [
        "pids_limit_hits"
@@ -2939,6 +2940,7 @@
    "expected": {
     "T2": {
      "verdict": "blocked",
+     "why": "tier 2 contains these through the PID namespace: when the program exits, bubblewrap's namespace init exits and the kernel kills and reaps every remaining member before bubblewrap returns, so the supervisor finds nothing left to kill (cleanup 'clean'); tier 1 has no PID namespace and its supervisor kills the call's process group itself ('killed')",
      "attempts": {
       "left_behind": [
        "ok"
@@ -2946,7 +2948,7 @@
      },
      "resource": {
       "cleanup": [
-       "killed"
+       "clean"
       ]
      }
     },
@@ -3007,6 +3009,7 @@
    "expected": {
     "T2": {
      "verdict": "blocked",
+     "why": "tier 2 contains these through the PID namespace: when the program exits, bubblewrap's namespace init exits and the kernel kills and reaps every remaining member before bubblewrap returns, so the supervisor finds nothing left to kill (cleanup 'clean'); tier 1 has no PID namespace and its supervisor kills the call's process group itself ('killed')",
      "attempts": {
       "daemonized": [
        "ok"
@@ -3014,7 +3017,7 @@
      },
      "resource": {
       "cleanup": [
-       "killed"
+       "clean"
       ]
      }
     },
@@ -3075,6 +3078,7 @@
    "expected": {
     "T2": {
      "verdict": "blocked",
+     "why": "tier 2 contains these through the PID namespace: when the program exits, bubblewrap's namespace init exits and the kernel kills and reaps every remaining member before bubblewrap returns, so the supervisor finds nothing left to kill (cleanup 'clean'); tier 1 has no PID namespace and its supervisor kills the call's process group itself ('killed')",
      "attempts": {
       "setsid": [
        "ok"
@@ -3085,7 +3089,7 @@
      },
      "resource": {
       "cleanup": [
-       "killed"
+       "clean"
       ]
      }
     },

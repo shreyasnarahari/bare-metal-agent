@@ -70,7 +70,7 @@ An episode that holds **private data**, **untrusted content**, and **an outbound
 - a scrubbed environment, with no descriptors inherited;
 - a supervisor-owned deadline.
 
-Cleanup reaches the process group, the session, and the PID namespace, not a cgroup tree (part 5). The seccomp filter and the supervisor are tested on a real kernel. The bubblewrap backend has not run on a host with bubblewrap, so filesystem and namespace isolation remain unverified. Contents written to `/workspace/out` are untrusted and may include symlinks that name host paths; host-side consumers must not follow them.
+Cleanup reaches the process group, the session, and the PID namespace, not a cgroup tree (part 5). The seccomp filter and the supervisor are tested on a real kernel. The bubblewrap backend has not run on a host with bubblewrap, so filesystem and namespace isolation remain unverified (since verified: see *Tier 2 verified with bubblewrap* below). Contents written to `/workspace/out` are untrusted and may include symlinks that name host paths; host-side consumers must not follow them.
 
 **Status after part 5:** resource governance and the T1 backend are implemented.
 
@@ -87,7 +87,7 @@ Verified on the WSL2 host:
 - All T1 attack, cleanup, and resource fixtures pass against real Landlock and seccomp.
 - Inside a delegated user scope, every destructive fixture passes: fork and memory bombs, CPU quota and total, single- and many-file disk fills, pre-exec cgroup membership, and reaping after the supervisor is killed.
 
-Still unverified: `bwrap-t2` and `bwrap-namespace-phase`, since bubblewrap is absent here.
+Still unverified: `bwrap-t2` and `bwrap-namespace-phase`, since bubblewrap is absent here (since verified: see *Tier 2 verified with bubblewrap* below).
 
 **Status after part 6:** the egress boundary and output gate are implemented.
 
@@ -105,13 +105,13 @@ Verified on the WSL2 host:
 - the full egress data path in a real network namespace (a test harness, not bubblewrap), with no direct route;
 - the output gate, end to end.
 
-Still unverified: T2 networking under bubblewrap. The optional proxy-mediated `http_request` tool is not implemented.
+Still unverified: T2 networking under bubblewrap (since verified: see *Tier 2 verified with bubblewrap* below). The optional proxy-mediated `http_request` tool is not implemented.
 
 **Status after part 7:** every attack is one versioned corpus (`evaluation/data/bulkhead_attacks_v1.json`: 59 attacks and 6 positive controls), each with an objective decided by independent evidence (canaries, host listeners, survivor markers, bounds, gated output, store effects), never by exit status. The dataset declares how each attack must end on every profile, and why a profile differs (`different_boundary`) or cannot host it (`not_applicable`).
 
 - **Verdicts:** `escaped` whenever the objective occurred; `blocked` only with every declared piece of evidence present; anything unjudgeable is a `setup_failure` and never a pass; harness faults are `infrastructure_failure` and stay out of the rates. A failed positive control prevents any `blocked` on that profile.
 - **No silent skips:** a profile the host cannot build, or an attack needing a capability the profile lacks there, is recorded as `untested` with the reason.
-- **Development host (WSL2):** no escape on `landlock-t1`, `landlock-t1-cgroup` (destructive resource attacks included, inside a delegated scope), or T0 (policy-level scenarios only). The tier-2 profiles are untested here. The network attacks' tier-2 expectations were exercised through the real proxy in a test network namespace, which is not a sandbox.
+- **Development host (WSL2):** no escape on `landlock-t1`, `landlock-t1-cgroup` (destructive resource attacks included, inside a delegated scope), or T0 (policy-level scenarios only). The tier-2 profiles are untested here (they have since run: see *Tier 2 verified with bubblewrap* below). The network attacks' tier-2 expectations were exercised through the real proxy in a test network namespace, which is not a sandbox.
 - **Overhead and usability** are measured from raw samples and deterministic episodes; see `results/bulkhead/RESULTS.md` (generated from the records, not committed).
 - **Known limits, unchanged by part 7:** redaction is literal; per-call bounds do not limit cumulative effects; taint protects only sinks the task marks sensitive; tier 1 hides content, not names.
 
@@ -128,5 +128,18 @@ Still unverified: T2 networking under bubblewrap. The optional proxy-mediated `h
   - A static policy cannot tell an attacker's transfer from a user's.
   - A partial run covers only its listed ids.
 
-- **Development host (WSL2):** selects T1, and the T1 backend runs here for real. bubblewrap is not on `PATH`, and no delegated cgroup parent is configured by default. Inside a delegated user scope, the cgroup probes and the cgroup-governed resource fixtures all pass.
+**Tier 2 verified with bubblewrap (after part 8):** with bubblewrap 0.9.0 installed on the WSL2 development host, the probe proves every bubblewrap capability: namespaces, mounts, the isolated network, and the bound Unix socket. Inside a delegated user scope it also proves the cgroup ones, and it selects T2. The whole corpus then ran on both bubblewrap profiles, destructive resource attacks included:
+
+- **`bwrap-t2`:** all 59 attacks blocked, and all 6 positive controls passed.
+- **`bwrap-namespace-phase`:** 53 blocked; the 6 resource bombs are not applicable without a cgroup.
+- **No escape:** none on any profile. The network attacks ran in bubblewrap's own network namespace, through the real bridge and proxy.
+
+The first real run corrected two expectations, both about evidence, never the verdict:
+
+- **Survivor cleanup:** on tier 2, when a program exits its PID namespace ends, and the kernel kills and reaps every leftover process before bubblewrap returns. The supervisor therefore finds nothing to kill (`clean`), not `killed` as on tier 1. Survivor markers still show nothing outlived the call.
+- **Environment:** bubblewrap adds `PWD=/workspace` to the declared environment. The environment attack accepts `PWD` only when it equals the sandbox's own working directory.
+
+Still unverified: tier 2 on Colab, until the notebook's probe and attack cells have run there.
+
+- **Development host (WSL2):** on the bare host it selects T1, because no delegated cgroup parent is configured by default. With bubblewrap 0.9.0 installed and inside a delegated user scope, it proves every T2 requirement and selects T2. The T1 backend runs here too, and the cgroup probes and cgroup-governed resource fixtures all pass.
 - **Colab:** the probe is pending until its JSON is recorded.

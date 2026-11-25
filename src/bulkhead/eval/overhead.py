@@ -483,7 +483,7 @@ def run_overhead(
         if not network:
             summary["untested"].append({"profile": "egress episode", "reason": "no tier-2 backend here can bind the proxy socket (bwrap.unix_socket)"})
         for target in network:
-            summary["episodes"].append(_egress_episode(target, repeats, scratch / "egress"))
+            summary["episodes"].append(_egress_episode(target, repeats, scratch))
         summary["resource"] = {
             "supervisor_peak_rss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
             "children_peak_rss_kb": resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss,
@@ -496,10 +496,14 @@ def run_overhead(
     return directory
 
 
-def _egress_episode(target: Any, repeats: int, directory: Path) -> dict[str, Any]:
-    from .attacks import Listeners, ProxyFixture
+def _egress_episode(target: Any, repeats: int, scratch: Path) -> dict[str, Any]:
+    """One profile's egress episodes, with its own host listeners: each profile binds a fresh Unix socket path."""
+    from . import attacks
+    from .attacks import ProxyFixture
 
-    listeners = Listeners(directory.parent)
+    directory = scratch / "egress" / target.profile
+    directory.mkdir(parents=True, exist_ok=True)
+    listeners = attacks.Listeners(directory)
     fixture = ProxyFixture(listeners.second_port)
     try:
         egress = Egress(allow=(f"127.0.0.1:{fixture.port}",), address_classes=("loopback",))
@@ -532,7 +536,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         load = os.getloadavg()[0]
         if load > (os.cpu_count() or 1) * 0.5:
             print(f"warning: load average {load:.2f} on {os.cpu_count()} CPUs; results from a busy host are not comparable", file=sys.stderr)
-        directory = run_overhead(targets, samples=args.samples, warmup=args.warmup, repeats=args.repeats, proxy_samples=args.proxy_samples, probe=report, log=print)
+        directory = run_overhead(targets, samples=args.samples, warmup=args.warmup, repeats=args.repeats, proxy_samples=args.proxy_samples, probe=report, results_dir=args.results, log=print)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     print(f"overhead run: {directory}")

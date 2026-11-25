@@ -187,3 +187,47 @@ def test_the_process_baseline_runs_both_workloads():
     baseline = ProcessBaseline()
     assert baseline.call("true", 0, "measured").ok and baseline.call("python", 0, "measured").ok
     assert not replace(baseline.call("python", 0, "measured"), ok=False).ok
+
+
+def test_each_tier_2_profile_gets_its_own_egress_listeners(tmp_path, monkeypatch):
+    import bulkhead.eval.attacks as attacks
+    import bulkhead.eval.overhead as overhead
+
+    bound = []
+
+    class FakeListeners:
+        def __init__(self, directory):
+            socket_path = directory / "host-service.sock"
+            assert socket_path not in bound  # a second profile reusing the path would fail with EADDRINUSE
+            bound.append(socket_path)
+            self.second_port = 1
+
+        def stop(self):
+            pass
+
+    class FakeFixture:
+        def __init__(self, port):
+            self.port = 2
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(attacks, "Listeners", FakeListeners)
+    monkeypatch.setattr(attacks, "ProxyFixture", FakeFixture)
+    monkeypatch.setattr(overhead, "measure_episode", lambda *a, **k: {"episode": "egress", "profile": k["target"].profile})
+    episodes = [overhead._egress_episode(Target(profile), 1, tmp_path) for profile in ("bwrap-t2", "bwrap-namespace-phase")]
+    assert [e["profile"] for e in episodes] == ["bwrap-t2", "bwrap-namespace-phase"] and len(set(bound)) == 2
+
+
+def test_the_command_line_writes_where_results_points(tmp_path, monkeypatch):
+    import bulkhead.eval.attacks as attacks
+    import bulkhead.eval.overhead as overhead
+    import bulkhead.probe as probe
+
+    seen = {}
+    monkeypatch.delenv("BULKHEAD_CGROUP_PARENT", raising=False)
+    monkeypatch.setattr(probe, "run_probe", lambda **options: "report")
+    monkeypatch.setattr(attacks, "discover_targets", lambda *a, **k: [Target("T0")])
+    monkeypatch.setattr(overhead, "run_overhead", lambda targets, **options: seen.update(options) or tmp_path / "ovh_x")
+    assert overhead.main(["--results", str(tmp_path / "elsewhere"), "--samples", "5"]) == 0
+    assert seen["results_dir"] == str(tmp_path / "elsewhere") and seen["samples"] == 5

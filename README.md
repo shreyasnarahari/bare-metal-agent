@@ -96,7 +96,7 @@ The boundary is unchanged: **handlers run in Steadyhand, after the shim returns.
 
 `src/bulkhead/` will put Steadyhand's risky tools behind a deterministic policy engine and an OS sandbox. The eight-part plan is in `Bulkhead/`, and the maintained threat model is `Bulkhead/THREAT_MODEL.md`. On Colab, Bulkhead runs from its own notebook, `notebooks/03_bulkhead.ipynb`. It moved out of the Steadyhand notebook after part 8; the part plans still name `02_steadyhand.ipynb`, written before the move.
 
-**Status:** parts 1 to 8 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, the versioned attack suite with overhead and usability benchmarks, and the AgentDojo adapter with paired runs. **The tier-1 backends (with and without a cgroup), cgroup governance, the egress proxy, and the output gate are verified on the development host. The bubblewrap (tier-2) backends have not yet run on a host that has bubblewrap**, so their namespace, filesystem, and network isolation is untested; the attack suite records every tier-2 cell as untested. **The AgentDojo evaluation's local CPU checks are complete; its live results are pending**, and no AgentDojo score is claimed. See parts 4 to 8 below.
+**Status:** parts 1 to 8 are implemented: the threat model and capability probe, policy and approvals, taint, audit and replay, the tier-2 jailer and exec tools, resource governance with the tier-1 backend, the egress proxy with the output gate, the versioned attack suite with overhead and usability benchmarks, and the AgentDojo adapter with paired runs. **Every backend is verified on the development host:** the bubblewrap (tier-2) backends since bubblewrap 0.9.0 was installed, and the tier-1 backends (with and without a cgroup), together with cgroup governance, the egress proxy, and the output gate. The whole attack corpus runs on `bwrap-t2` inside a delegated cgroup scope with no escape. Tier 2 on Colab is still unverified. **The AgentDojo evaluation's local CPU checks are complete; its live results are pending**, and no AgentDojo score is claimed. See parts 4 to 8 below.
 
 ```bash
 .venv/bin/python -m bulkhead.probe --json results/bulkhead/probe.local.json
@@ -110,7 +110,7 @@ The probe proves each capability with a real operation in a temporary directory.
 - **T1, Landlock sandbox:** Landlock, seccomp with inet sockets denied, `no_new_privs`, rlimits, and process-group cleanup.
 - **T0, NOT a sandbox:** everything else.
 
-On the WSL2 development host the probe selects **T1**: bubblewrap is not on `PATH`, and no cgroup parent is configured by default. Inside a delegated user scope, the leaf, limit, and `cgroup.kill` probes pass:
+On the WSL2 development host (bubblewrap 0.9.0 installed), the probe selects **T1** on the bare host, because no cgroup parent is configured by default. Inside a delegated user scope the leaf, limit, and `cgroup.kill` probes also pass, and it selects **T2**:
 
 ```bash
 systemd-run --user --scope -p Delegate=yes bash -c '
@@ -122,7 +122,7 @@ systemd-run --user --scope -p Delegate=yes bash -c '
   .venv/bin/python -m bulkhead.probe --cgroup-parent "$P/sandbox"'
 ```
 
-The bubblewrap (T2) probes have so far run only against fake outcomes. The Colab probe (`bulkhead-probe` in `notebooks/03_bulkhead.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
+The bubblewrap (T2) probes pass against bubblewrap 0.9.0 on the development host. The Colab probe (`bulkhead-probe` in `notebooks/03_bulkhead.ipynb`, written to `records/<gpu>/bulkhead/probe.colab.json`) has not been run.
 
 ### Policy gate (part 2)
 
@@ -183,7 +183,7 @@ run_episode(..., security=SecurityConfig(policy, available_tiers=(SandboxTier.T2
 BULKHEAD_INTEGRATION=1 .venv/bin/python -m pytest tests/test_bulkhead_bwrap.py   # real bubblewrap, where the probe proves it
 ```
 
-What has been verified on the WSL2 development host, which has no bubblewrap:
+What had been verified on the WSL2 development host when part 4 landed, before bubblewrap was installed (since verified: see *Tier 2 verified with bubblewrap* below):
 
 - **seccomp filter:** on the real kernel, Python threads, subprocesses, and `sh` run normally under it.
 - **Blocked primitives:** `ptrace`, `process_vm_readv`, and inet sockets, which this kernel allows unfiltered, are refused with the filter installed.
@@ -242,7 +242,7 @@ systemd-run --user --scope -p Delegate=yes bash -c '
   BULKHEAD_INTEGRATION=1 BULKHEAD_CGROUP_PARENT="$P/sandbox" .venv/bin/python -m pytest tests/test_bulkhead_resource_limits.py'
 ```
 
-Verified on the WSL2 development host (Landlock ABI 7, no bubblewrap):
+Verified on the WSL2 development host when part 5 landed (Landlock ABI 7, no bubblewrap yet (since verified: see *Tier 2 verified with bubblewrap* below)):
 
 - **Tier-1 attacks:** the real T1 backend stops all 20 part 4 attacks. Seven fail differently than under T2 (access denied rather than invisible, or no sockets at all rather than a separate network namespace), and the fixture records which and why.
 - **Cleanup fixtures:** descriptor exhaustion, core-dump suppression, double fork, and zombies leave nothing behind.
@@ -257,7 +257,7 @@ Verified on the WSL2 development host (Landlock ABI 7, no bubblewrap):
   - survivors of a killed supervisor were reaped at the next start;
   - no leaf was left behind.
 
-Not verified: `bwrap-t2` and `bwrap-namespace-phase`, which need bubblewrap.
+Not verified at the time: `bwrap-t2` and `bwrap-namespace-phase`, which need bubblewrap (since verified: see *Tier 2 verified with bubblewrap* below).
 
 ### Egress proxy and output gate (part 6)
 
@@ -311,7 +311,7 @@ Verified on the WSL2 development host:
 - **Output gate:** tested end to end through the loop, including escapes, NUL, bidi, forged closers, floods, and redaction.
 - **Resource fixtures:** they still pass inside the delegated scope.
 
-Not verified: `bwrap-t2` networking (its integration test is skipped here for lack of bubblewrap).
+Not verified at the time: `bwrap-t2` networking (its integration test was skipped for lack of bubblewrap (since verified: see *Tier 2 verified with bubblewrap* below)).
 
 **Breaking changes:**
 - Exec result values now carry `stdout`/`stderr` objects instead of strings.
@@ -358,7 +358,7 @@ Verified on the WSL2 development host. The records (manifests, raw samples, evid
   - `landlock-t1`: 31 blocked and 13 different boundary; 15 not applicable (network and cgroup-only).
   - `landlock-t1-cgroup`: 37 blocked and 13 different boundary; 9 not applicable (network). All 12 resource attacks were contained: 11 blocked, and the session escape stopped by a different mechanism, as declared.
   - T0: the 3 policy-level scenarios blocked.
-  - Every applicable positive control passed. Both bubblewrap profiles are untested here, with the probe's reasons.
+  - Every applicable positive control passed. Both bubblewrap profiles were untested in these runs, with the probe's reasons (since verified: see *Tier 2 verified with bubblewrap* below).
   - The first scope run scored the five destructive attacks `setup_failure`, because the dataset hadn't declared the resource violations the audit records. The declarations were added and both runs repeated.
 - **Network attacks without bubblewrap:** their tier-2 expectations (proxy bypass, ambiguous addresses, DNS tunnel, disallowed host and port, redirect second hop, byte and connection caps) match through the real bridge and proxy in a test network namespace, which is not a sandbox. Unsandboxed test runs of three attacks are scored `escaped`, so the evidence pipeline does see a real escape.
 - **Overhead** (`ovh_5e86fc817fe0d0b5` and `ovh_56c4a1a0b6b841c4`; median, with p99 in parentheses):
@@ -368,14 +368,14 @@ Verified on the WSL2 development host. The records (manifests, raw samples, evid
   - Proxy start and stop: 101.2 ms, almost all of it stopping.
   - In the exec episode, the supervised time (helper, launcher, program) is 400.4 of 401.9 ms of sandbox wall time. Cold start is dominated by the pre-exec helper's interpreter, which imports Bulkhead from a repository on a 9P-mounted Windows drive.
   - The store episode takes 9.5 ms trusted and 10.3 ms through the policy gate.
-  - The brief's 50 ms tier-2 example is untested (no tier 2 here).
+  - The brief's 50 ms tier-2 example was untested in this run (no tier 2 yet (since verified: see *Tier 2 verified with bubblewrap* below)).
 - **Usability** (`usa_38d81bb6c251a762`; 12 benign and 6 malicious tasks):
   - `taint_deny_all`: ASKs on 7 of 18 tasks, benign over-denial 3/12, and injection success 1/6, against 5/6 with `allow_no_taint`.
   - `taint_scripted`: approvals (2 approved, 5 declined) bring benign utility back to 11/12.
   - The one injection that still succeeds is the declared negative control, a store write the task doesn't mark sensitive.
   - Duplicate effects, and refused calls that still ran, are zero in every mode.
 
-Not verified: every bubblewrap cell, the egress episode, and the Colab run of the new notebook cell (`bulkhead-attack-suite`, now in `notebooks/03_bulkhead.ipynb`).
+Not verified at the time: every bubblewrap cell and the egress episode (since verified: see *Tier 2 verified with bubblewrap* below), and the Colab run of the new notebook cell (`bulkhead-attack-suite`, now in `notebooks/03_bulkhead.ipynb`).
 
 **Also changed:**
 - The part 6 proxy now records a tunnel cut by the end of its call as `time` even if the shutdown's EOFs arrive first. It previously could record `allow`, depending on timing.
@@ -404,6 +404,36 @@ CPU checks, run on the development host against the real pinned package in a scr
 # the same command also runs the real-package tests, and:
 .venv/bin/python -m bulkhead.eval.runner plan                  # eligibility of the pinned suites
 ```
+
+### Tier 2 verified with bubblewrap
+
+After part 8, bubblewrap 0.9.0 was installed on the WSL2 development host. The tier-2 backends now run for real; before this they had only been tested against simulated bubblewrap behaviour.
+
+**What else T2 needs:** nothing beyond bubblewrap. libseccomp 2.5.5 was already present. The cgroup limits need a delegated cgroup v2 parent, which the systemd user scope shown under the probe section provides. Without that scope the probe selects T1.
+
+- **Probe:** every bubblewrap capability is proven: namespaces, mounts, the isolated network, and the bound Unix socket. Inside the delegated scope the cgroup capabilities pass too, and T2 is selected.
+- **Attack corpus** (`run_4da28c57fac55211`, every profile, destructive attacks included, inside the delegated scope):
+  - `bwrap-t2`: all 59 attacks blocked, and all 6 positive controls passed.
+  - `bwrap-namespace-phase`: 53 blocked, and the 6 resource bombs are not applicable without a cgroup.
+  - T1 is unchanged. There are no escapes, setup failures, or infrastructure failures on any profile.
+- **Integration tests:** `BULKHEAD_INTEGRATION=1` passes on the bare host, and inside the scope with `BULKHEAD_DESTRUCTIVE=1` and a cgroup parent.
+- **Overhead** (`ovh_743bf1881952e5ba`; 1,000 measured calls per cell; median, with p99 in parentheses):
+  - `bwrap-namespace-phase`: `/bin/true` 196.8 ms (218.0), Python 210.9 ms (240.6).
+  - `bwrap-t2`: 230.8 ms (264.3) and 243.2 ms (312.4).
+  - Plain process (T0): 1.1 ms and 16.2 ms.
+  - The brief's 50 ms tier-2 example is **not met**. As on tier 1, the per-call cost is mostly interpreter start-up for the pre-exec helper and launcher, which import Bulkhead from this repository on a 9P-mounted Windows drive. In the exec episode, the supervised time is 427.4 of 429.9 ms of sandbox wall time.
+  - The egress episode (a sandboxed call through the per-call proxy) is measured for the first time: 359.5 ms per episode on `bwrap-t2`, of which the proxy is 1.7 ms.
+
+**What the first real run changed:**
+
+- **Environment:** bubblewrap adds `PWD=/workspace` to the declared environment. The integration test expects it, and the environment attack accepts `PWD` only when it equals the sandbox's own working directory.
+- **Survivor cleanup:** on tier 2, a program's PID namespace ends when it exits, and the kernel kills and reaps every leftover process before bubblewrap returns. The supervisor therefore finds nothing to kill (`clean`), not `killed` as on tier 1. The tier-2 expectations for zombies, double fork, session escape, and the fork bomb now say so, with the reason. Three repeated runs were stable, and survivor markers still decide the verdict.
+- **Fixes that had never run:**
+  - a test helper's writable sandbox without a filesystem sink;
+  - the overhead egress episode reusing one socket path across tier-2 profiles;
+  - `python -m bulkhead.eval.overhead` ignoring `--results`.
+
+Not verified: tier 2 on Colab, where bubblewrap would need installing; the notebook installs nothing.
 
 ## Architecture
 

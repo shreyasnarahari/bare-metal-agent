@@ -92,6 +92,7 @@ REQUIRED_CAPABILITIES = (
 MIN_BWRAP_VERSION = (0, 4, 0)
 HOSTNAME = "bulkhead"
 # The sandbox's whole environment. Part 6 adds explicit proxy variables; nothing is inherited.
+# bubblewrap itself adds PWD (the --chdir directory, /workspace), so a program sees this table plus PWD.
 SANDBOX_ENV: Mapping[str, str] = MappingProxyType({
     "PATH": "/usr/local/bin:/usr/bin:/bin",
     "HOME": WORKSPACE_MOUNT,

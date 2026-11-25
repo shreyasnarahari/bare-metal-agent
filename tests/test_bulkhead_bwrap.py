@@ -455,7 +455,7 @@ def t2_backend(tmp_path_factory):
 
 def small_spec(**limits):
     values = {"cpu_s": 10, "mem_mb": 256, "pids": 32, "disk_mb": 50, "out_kb": 4, "wall_s": 5} | limits
-    return SecuritySpec(Sandbox(fs_read=EXEC_SANDBOX.fs_read, fs_write=EXEC_SANDBOX.fs_write, fs_deny=EXEC_SANDBOX.fs_deny, limits=Limits(**values)), Trust.UNTRUSTED)
+    return SecuritySpec(Sandbox(fs_read=EXEC_SANDBOX.fs_read, fs_write=EXEC_SANDBOX.fs_write, fs_deny=EXEC_SANDBOX.fs_deny, limits=Limits(**values)), Trust.UNTRUSTED, (Sink.FILESYSTEM,))
 
 
 def test_integration_benign_programs_run_inside_the_namespace_phase(t2_backend):
@@ -492,7 +492,8 @@ def test_integration_namespace_capability_descriptor_and_environment_properties(
 
     assert facts["hostname"] == "bulkhead" and facts["pid"] < 10
     assert int(facts["cap"], 16) == 0 and facts["nnp"] == "1" and facts["seccomp"] == "2"
-    assert facts["env"] == dict(SANDBOX_ENV) and facts["fds"] == [] and facts["cwd"] == "/workspace"
+    # Exactly the declared environment, plus the PWD bubblewrap sets for its --chdir directory.
+    assert facts["env"] == {**SANDBOX_ENV, "PWD": "/workspace"} and facts["fds"] == [] and facts["cwd"] == "/workspace"
     assert not {"home", "root", "etc", "var", "run", "mnt", "opt", "srv", "boot"} & set(facts["root"])
 
 
