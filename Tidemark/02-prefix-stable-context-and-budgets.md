@@ -223,7 +223,7 @@ Naive baseline drops and future compaction resets use the same explicit evidence
 7. Add journal/manifest support and replay for transitions, lint, budgets, and allowed tool subsets.
 8. Add `tidemark-prefix-gate` and `tidemark-prefix-smoke` notebook cells. The live smoke deliberately plants a timestamp and unsorted JSON, observes the divergence/cache effect, fixes them, and only then runs the warm same-slot target measurement.
 9. Implement content-keyed render/token/grammar caches and shared-pool prefetch, then autotune batch/cache-reuse settings independently on T4 and L4 without changing a scored run's configuration.
-10. Run the phase-delivery protocol: commit the tested implementation, write the canonical Handoff for part 3, commit it, automatically push both commits, and verify remote `main`.
+10. Before the GPU run, commit the CPU-tested implementation and pre-GPU Handoff, automatically push both and verify remote `main`. Part 3 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -246,18 +246,18 @@ Run:
 .venv/bin/python -m pytest
 ```
 
-Live acceptance additionally runs the planted cache-breaker smoke and repeated same-slot prompts on the pinned llama-server on both T4 and L4. The same smoke also records render/tokenizer/grammar-cache overhead and model-ready slot occupancy on each GPU; the target is measured independently per runtime.
+The user separately runs the planted cache-breaker smoke and repeated same-slot prompts on the pinned llama-server on both T4 and L4, following the pre-GPU Handoff. The smoke also records render/tokenizer/grammar-cache overhead and model-ready slot occupancy on each GPU; the target is measured independently per runtime.
 
 ## Phase delivery and handoff
 
-After every CPU test and the planted PrefixLint/cache/utilization acceptance on both T4 and L4 passes, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all CPU tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
-1. Stage only part 2's new files and its deliberate shared changes to Toolsmith, Steadyhand, notebook, README, and tests; never include unrelated dirty paths or generated prompts/artifacts.
-2. Create the implementation commit `Tidemark: complete part 2 prefix-stable context`, then rewrite `Tidemark/Handoff.md` with the implementation SHA and create `Tidemark: hand off part 2`.
-3. Handoff fields specific to this phase include renderer/tokenizer/template/schema/grammar hashes, segment/budget configuration, planted divergence evidence, PrefixLint replay status, capacity/scheduler settings, and per-GPU run/artifact paths.
-4. Set the next action to part 3 with exact first tests/notebook cell. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before any part 3 work.
+1. Stage only part 2's new files and deliberate shared Toolsmith/Steadyhand/notebook/README/test changes; exclude unrelated dirty paths and generated prompts/artifacts.
+2. Create `Tidemark: implement part 2 prefix-stable context`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, the implementation SHA, renderer/tokenizer/template/schema/grammar hashes, segment/budget and capacity settings, exact planted-divergence/cache/utilization cells for T4 and L4, and the run ids/manifests/journals/resource samples the user must return. Include the part 3 gate as blocked pending evidence.
+4. Create `Tidemark: hand off part 2 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-A red test, missing T4/L4 evidence, unexpected phase-file change, or failed/non-fast-forward push blocks delivery and the next phase. No force push, automatic rebase, broad staging, or secret/result inclusion is permitted.
+Once the pre-GPU Handoff is remote-verified, part 3 may start. The user reviews PrefixLint/cache/utilization results and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. A red CPU test, unexpected phase-file change, or failed/non-fast-forward push blocks publication; no force/rebase/broad staging or secret/result inclusion is permitted.
 
 ## Acceptance
 
@@ -266,7 +266,7 @@ A red test, missing T4/L4 evidence, unexpected phase-file change, or failed/non-
 - Frozen tool schemas can coexist with request-local grammar/validation restriction.
 - The warm no-compaction cache target is measured separately from cold/compaction steps; a miss caused by slot eviction is not mislabeled a rendering bug.
 - CPU and live replay reproduce the exact message lists and lint evidence.
-- The tested implementation and canonical part 2 Handoff are committed and automatically pushed, remote `main` is verified, and a fresh session can start part 3 solely from the Handoff plus repository artifacts.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 3 bootstrap included. Part 3 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

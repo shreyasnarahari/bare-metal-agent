@@ -219,7 +219,7 @@ Include the critical line in the middle of a multi-thousand-line log, repeated e
 6. Create and validate the 30–50-output corpus with explicit must-keep labels and availability.
 7. Add `tidemark-observation-gate` and `tidemark-observation-benchmark` notebook cells. Report token reduction and restorability separately.
 8. Implement bounded parallel shaping, content-keyed reducer reuse, and asynchronous local/Drive blob pipelines. Autotune their worker/queue limits on both T4 and L4 and record reducer/queue/I/O utilization.
-9. Run the phase-delivery protocol: commit the tested implementation/corpus, write the canonical Handoff for part 4, commit it, automatically push both commits, and verify remote `main`.
+9. Before the GPU run, commit the CPU-tested implementation/corpus and pre-GPU Handoff, automatically push both and verify remote `main`. Part 4 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -245,14 +245,14 @@ Run:
 
 ## Phase delivery and handoff
 
-After every CPU test, corpus gate, and required T4/L4 observation-pipeline acceptance passes, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all CPU/corpus tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
 1. Stage only part 3's reducers/blob/tool/executor changes, observation corpus, tests, notebook, README, and deliberate shared changes; exclude generated blobs, raw private outputs, and unrelated dirty paths.
-2. Create the implementation commit `Tidemark: complete part 3 restorable observations`, update `Tidemark/Handoff.md`, then create `Tidemark: hand off part 3`.
-3. Record the implementation SHA, reducer/schema versions, observation-corpus hash, must-keep/token-reduction results, blob/catalog format, namespace/access invariants, per-GPU run ids, durable blob/catalog/checkpoint paths, and restore commands in the Handoff.
-4. Point the next session to part 4 and its first compaction replay fixture. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before compaction work starts.
+2. Create `Tidemark: implement part 3 restorable observations`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, implementation SHA, reducer/schema versions, observation-corpus hash, blob/catalog and namespace invariants, exact T4/L4 observation cells, and required must-keep/token-reduction/run evidence. Include durable blob/catalog/checkpoint instructions and part 4 as blocked.
+4. Create `Tidemark: hand off part 3 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-Missing must-keep evidence, corrupted/inaccessible required blobs, red tests, or failed publication blocks completion. Never commit raw generated observations or hide unrelated user changes in the phase commits.
+Once the pre-GPU Handoff is remote-verified, part 4 may start. The user reviews must-keep evidence, blobs, and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. Missing must-keep evidence, corrupted/inaccessible blobs, red tests, or failed publication blocks publication of the current implementation. Never commit raw generated observations or unrelated user changes.
 
 ## Acceptance
 
@@ -262,7 +262,7 @@ Missing must-keep evidence, corrupted/inaccessible required blobs, red tests, or
 - Blob reads are bounded, content-verified, namespace-scoped, and governed by Bulkhead; replay performs no new persistent writes.
 - Resume detects missing or corrupted referenced objects before issuing another model call.
 - The observation benchmark runs with the fitted T4 and L4 worker/queue profiles and shows that large outputs overlap with other GPU work without unbounded RAM, Drive stalls, or event-order divergence.
-- The tested implementation and canonical part 3 Handoff are committed and automatically pushed, remote `main` is verified, and part 4 can start in a fresh session with exact corpus/blob/checkpoint context.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 4 bootstrap plus corpus/blob/checkpoint context included. Part 4 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

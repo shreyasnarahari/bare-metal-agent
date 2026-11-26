@@ -227,7 +227,7 @@ Human labels identify supported entries and the exact supporting refs. Report un
 6. Build the labeled replay corpus and before/after support metrics.
 7. Add `tidemark-compaction-gate` and `tidemark-compaction-smoke` notebook cells. The live smoke inspects rejected entries and the next step's actual prefill before any sweep.
 8. Implement bounded compactor/judge scheduling and parallel source checks. Run the shared/dedicated-slot autotune on both T4 and L4, then freeze the selected policy and verify full-slot execution with independent episodes.
-9. Run the phase-delivery protocol: commit the tested compactor/checker/replay implementation, write the canonical Handoff for part 5, commit it, automatically push both commits, and verify remote `main`.
+9. Before the GPU run, commit the CPU-tested compactor/checker/replay implementation and pre-GPU Handoff, automatically push both and verify remote `main`. Part 5 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -254,14 +254,14 @@ Live acceptance requires real constrained summary and judge calls plus inspectio
 
 ## Phase delivery and handoff
 
-After all CPU replay/source-check tests and real constrained compactor/judge acceptance on both T4 and L4 pass, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all CPU replay/source-check tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
-1. Stage only part 4's schema/compactor/checker/epoch/replay code, labeled corpus, tests, notebook, README, and deliberate shared changes. Exclude generated candidates containing sensitive source text and all unrelated dirty paths.
-2. Create the implementation commit `Tidemark: complete part 4 cited compaction`, update `Tidemark/Handoff.md`, then create `Tidemark: hand off part 4`.
-3. Record the implementation SHA, summary/schema/prompt versions, citation and epoch invariants, compaction-corpus hash, before/after support results, compactor-slot policy, replay/resume status, per-GPU run ids, and durable candidate/summary/journal artifact paths.
-4. Point the next session to part 5 and the initial memory-store fixture/setup command. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before memory implementation.
+1. Stage only part 4's schema/compactor/checker/epoch/replay code, labeled corpus, tests, notebook, README, and deliberate shared changes. Exclude sensitive generated candidates and unrelated dirty paths.
+2. Create `Tidemark: implement part 4 cited compaction`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, implementation SHA, summary/schema/prompt versions, citation/epoch invariants, corpus hash, compactor-slot policy, exact T4/L4 constrained-compactor/judge cells, and required before/after support/replay/run evidence. Include candidate/summary/journal artifact instructions and part 5 as blocked.
+4. Create `Tidemark: hand off part 4 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-Unsupported entries incorrectly accepted, a replay mismatch, missing two-GPU evidence, or publication failure blocks completion. Do not commit private candidate/source payloads or silently convert an unrun judge into a passed gate.
+Once the pre-GPU Handoff is remote-verified, part 5 may start. The user reviews accepted/rejected entries, replay results, and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. Unsupported entries accepted, replay mismatch, or publication failure blocks publication of the current implementation. Never commit private candidate/source payloads or call an unrun judge passed.
 
 ## Acceptance
 
@@ -271,7 +271,7 @@ Unsupported entries incorrectly accepted, a replay mismatch, missing two-GPU evi
 - Failure before the hard limit never silently switches to naive truncation, and failure after it cannot send an over-limit prompt.
 - The compaction cache break and later prefill savings are visible as separate measurements.
 - T4 and L4 compaction smokes fill available slots with independent compactor/judge calls and overlap source checks with other GPU work, while accepted summaries and event order remain identical to serial execution.
-- The tested implementation and canonical part 4 Handoff are committed and automatically pushed, remote `main` is verified, and part 5 can start in a fresh session with exact epoch/schema/replay/artifact context.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 5 bootstrap plus epoch/schema/replay/artifact context included. Part 5 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

@@ -212,7 +212,7 @@ None of these delays the core seven-mode matrix.
 7. Add notebook CPU evaluation gates and live `tidemark-ablations`, `tidemark-longmemeval`, and `tidemark-context-rot` cells with deterministic subsets and per-GPU mirrors.
 8. Implement the utilization-aware but frozen-for-scoring scheduler, artifact reuse, balanced mode ordering, and resource telemetry. Autotune on T4 and L4 before the full same-id suite and include phase tasks/minute and ready-queue occupancy in the report.
 9. Keep optional C++/vLLM/Acon/SIMD work outside core acceptance and outside the primary result table.
-10. Run the phase-delivery protocol: commit the tested evaluation implementation/datasets, write the canonical Handoff for part 8, commit it, automatically push both commits, and verify remote `main`.
+10. Before the GPU run, commit the CPU-tested evaluation implementation/datasets and pre-GPU Handoff, automatically push both and verify remote `main`. Part 8 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -237,14 +237,14 @@ Run:
 
 ## Phase delivery and handoff
 
-After all CPU evaluation tests and the complete core same-id suite on both T4 and L4 pass with their resource/utilization evidence, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all CPU evaluation tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
-1. Stage only part 7's datasets/adapters/runner/metrics/report changes, sanitized fixtures, tests, notebook, README, and deliberate shared changes. Exclude generated result trees, public benchmark copies, model/data caches, and unrelated dirty paths.
-2. Create the implementation commit `Tidemark: complete part 7 paired evaluation`, update `Tidemark/Handoff.md`, then create `Tidemark: hand off part 7`.
-3. Record the implementation SHA, dataset/subset/eligible-id hashes, seven configuration identities, initial cache/session controls, frozen capacity plans, test counts, per-GPU run/manifest/result paths, paired denominators, infrastructure/untested/did-not-fit cells, and resource/utilization evidence.
-4. Point the next session to part 8 and the exact remaining live/report cells. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before final live/write-up work.
+1. Stage only part 7's datasets/adapters/runner/metrics/report changes, sanitized fixtures, tests, notebook, README, and deliberate shared changes. Exclude generated results, public benchmark copies, caches, and unrelated dirty paths.
+2. Create `Tidemark: implement part 7 paired evaluation`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, implementation SHA, dataset/subset/eligible-id hashes, seven configuration identities, frozen capacity plans, initial cache/session controls, exact T4/L4 ablation cells, and required paired/resource/run evidence. Include part 8 as blocked and all untested/did-not-fit cells.
+4. Create `Tidemark: hand off part 7 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-Incomplete or non-paired runs, red metrics/replay/security tests, missing two-GPU core evidence, or publication failure blocks completion. Never improve a delivered metric by deleting ids or committing raw private benchmark payloads.
+Once the pre-GPU Handoff is remote-verified, part 8 may start. The user reviews pairing, metrics, resource evidence, and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. Incomplete/non-paired CPU fixtures, red tests, or publication failure blocks publication of the current implementation. Never delete ids to improve a delivered metric or commit raw private benchmark payloads.
 
 ## Acceptance
 
@@ -254,7 +254,7 @@ Incomplete or non-paired runs, red metrics/replay/security tests, missing two-GP
 - LongMemEval and context-rot adapters pass local fixtures and state exact upstream/subset/judge comparability before live execution.
 - No score improves by deleting difficult cases, weakening gold, hiding infrastructure, or silently changing cache/model/server controls.
 - The full core suite completes on both T4 and L4 with the same task ids and correctness checks. Each GPU uses its measured resource plan and shows model/CPU ready-queue utilization, bounded memory, and no unexplained scheduler stalls.
-- The tested implementation and canonical part 7 Handoff are committed and automatically pushed, remote `main` is verified, and part 8 can start in a fresh session with exact run/result/resume context.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 8 bootstrap plus run/result/resume context included. Part 8 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

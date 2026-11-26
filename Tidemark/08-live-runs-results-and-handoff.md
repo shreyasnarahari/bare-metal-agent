@@ -231,17 +231,18 @@ Stretch results never fill missing core cells or delay fixing a core evidence/se
 4. Run the paired own-suite, public subsets, session tests, and declared optional experiments without changing controls mid-run. Measure tasks/minute and ready-queue utilization while overlapping safe CPU/GPU work.
 5. Generate the combined report and review first failures/residual limitations, including any idle/oversubscription window. Update README with measured cells only.
 6. Preserve regression evidence, drain mirrors, stop the server, flush Drive, and leave no claimed result without a retrievable manifest.
-7. Run the final delivery protocol: commit the tested live/report implementation, write the canonical track-complete Handoff, commit it, automatically push both commits, and verify remote `main` before declaring completion.
+7. Before the GPU run, commit the CPU-tested live/report implementation and pre-GPU Handoff, automatically push both and verify remote `main`. The implementation is then delivered; the user reviews live results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Final phase delivery and canonical Handoff
 
-After all CPU checks, generated-report tests, real notebook smoke/sweeps, and the core same-id acceptance on both T4 and L4 complete, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all CPU/generated-report checks pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
-1. Stage only part 8's live orchestration/report code, final tests, notebook, README, reviewed plan updates, and sanitized regression fixtures. Keep generated `results/`, model/data caches, DBs, blobs, slot snapshots, raw private prompts/memory, and unrelated dirty paths out of Git.
-2. Create the implementation commit `Tidemark: complete part 8 live evaluation and results`, then rewrite `Tidemark/Handoff.md` with the implementation SHA and create `Tidemark: hand off part 8`.
-3. The final Handoff marks the eight-part track complete **only when its containing commit is pushed and remote-verified**. Include final test counts, T4/L4 run and manifest paths, model/capacity/scheduler hashes, measured report location, known negative/unrun results, durable restore commands, and every remaining limitation.
-4. Replace “next numbered phase” with explicit maintenance or Day 5 planning entry points, linking the recitation/evaluation/observability contracts above. Do not invent a part 9. A later session starts by reading this Handoff, checking Git ancestry/status, and selecting the explicitly named follow-up.
-5. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit. Only then report the eight phases as delivered. If any final acceptance or publication fails, leave the track not complete and retain the exact blocker.
+1. Stage only part 8's live orchestration/report code, final tests, notebook, README, reviewed plan updates, and sanitized regression fixtures. Keep generated results, model/data caches, DBs, blobs, slots, raw private prompts/memory, and unrelated dirty paths out of Git.
+2. Create `Tidemark: implement part 8 live evaluation and results`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, the implementation SHA, exact T4/L4 smoke/sweep/report cells, model/capacity/scheduler settings, required evidence, and remaining limitations. The track remains incomplete and no part 9 is invented.
+4. Create `Tidemark: hand off part 8 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
+
+Once the pre-GPU Handoff is remote-verified, the implementation is delivered and maintenance/Day 5 work may proceed. The user reviews notebook/report records and both-GPU acceptance separately; no further Handoff or agent bug-fix cycle is part of delivery. Live metrics remain unclaimed until the user's separate review, and no part 9 is invented.
 
 This phase-level Handoff is separate from the conceptual Day 5/6/9 handoff contracts: it is the concrete operational file a new coding session reads before changing the repository.
 
@@ -257,7 +258,7 @@ CPU and documentation checks:
 git diff --check
 ```
 
-Live acceptance additionally requires the notebook's real tokenizer/server/cache/grammar/model calls, a seven-mode smoke, capacity/utilization probes, and generated raw records **on both a Colab T4 and a Colab L4**. Imports, fake pipelines, valid notebook JSON, or success on only one GPU family are insufficient for the cross-GPU completion claim.
+Live acceptance additionally requires the user's separate notebook run to produce real tokenizer/server/cache/grammar/model calls, a seven-mode smoke, capacity/utilization probes, and generated raw records **on both a Colab T4 and a Colab L4**, following the pre-GPU Handoff. Imports, fake pipelines, valid notebook JSON, or success on only one GPU family are insufficient for the cross-GPU completion claim.
 
 - Every published metric links to raw records and a complete manifest; unrun/unsupported/did-not-fit cells remain visible.
 - Paired results share controls and exact eligible ids, and negative quality/latency tradeoffs are reported rather than hidden.
@@ -267,7 +268,7 @@ Live acceptance additionally requires the notebook's real tokenizer/server/cache
 - The README distinguishes local checks from live results and contains no invented cache, accuracy, latency, recall, security, utilization, or Colab-cost figure.
 - Both GPUs complete the core same-model/same-id suite with legal context shapes and no silent task reduction. Each selected configuration is the best measured safe candidate from its bounded autotune grid and remains frozen during scoring.
 - Resource records show slot occupancy and CPU utilization during their respective ready windows, bounded RAM/VRAM/queues, and improved or explained whole-phase wall time. Any unmet 95%/85% tuning target has a retained bottleneck explanation rather than a fabricated utilization claim.
-- The tested final implementation and canonical track-complete Handoff are committed and automatically pushed, remote `main` is verified, and a fresh maintenance/Day 5 session needs no prior chat or live kernel state.
+- The CPU-tested final implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified. Maintenance/Day 5 work may proceed while the user independently reviews live results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

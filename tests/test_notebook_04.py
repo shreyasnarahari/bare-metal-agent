@@ -78,8 +78,11 @@ def test_the_live_plan_requires_both_gpus_and_measured_useful_utilization():
 def test_the_plan_requires_tested_phase_commits_and_a_canonical_handoff():
     plan = notebook_source("tidemark-plan")
     assert "Tidemark/Handoff.md" in plan and "implementation commit" in plan
-    assert "pushes both to `origin/main`" in plan and "remote-SHA verification" in plan
-    assert "fresh session" in plan and "Unrelated dirty files" in plan
+    assert "before the user's separate GPU run" in plan
+    assert "user reviews GPU results and fixes independently" in plan
+    assert "post-GPU" not in plan and "complete_when_pushed" not in plan
+    assert "pushes both commits to `origin/main`" in plan and "remote-SHA verification" in plan
+    assert "fresh Colab session" in plan and "Unrelated dirty files" in plan
 
 
 def test_no_secrets_or_destructive_commands_in_the_source():

@@ -222,7 +222,7 @@ Records use `/content/tidemark/` locally and `MyDrive/toolsmith/records/<gpu>/ti
 6. Add explicit slot ids/cache flags and probe the pinned llama.cpp API. Implement optional slot snapshots only behind that probe.
 7. Add notebook security/session gates and real smoke cells with local/Drive checkpoint sets and bounded infrastructure handling.
 8. Implement pinned/work-conserving slot leases and bounded security/I/O/checkpoint pipelines. Autotune them separately on T4 and L4, then freeze the selected policy and record migration, utilization, and durability evidence.
-9. Run the phase-delivery protocol: commit the tested security/resume implementation, write the canonical Handoff for part 7, commit it, automatically push both commits, and verify remote `main`.
+9. Before the GPU run, commit the CPU-tested security/resume implementation and pre-GPU Handoff, automatically push both and verify remote `main`. Part 7 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -249,14 +249,14 @@ Run:
 
 ## Phase delivery and handoff
 
-After all security/replay/session tests and required T4/L4 security/session smokes pass, follow part 1's mandatory two-commit/one-push protocol automatically. Optional slot restoration remains explicitly optional and cannot be labeled supported without its own probe evidence.
+After all security/replay/session CPU tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol. Optional slot restoration remains optional and cannot be labeled supported without probe evidence.
 
-1. Stage only part 6's memory-tool/security/replay/session/slot changes, sanitized fixtures, tests, notebook, README, and deliberate shared changes. Exclude DBs, blobs, slot files, checkpoint payloads, credentials, and unrelated dirty paths.
-2. Create the implementation commit `Tidemark: complete part 6 secure memory and resume`, update `Tidemark/Handoff.md`, then create `Tidemark: hand off part 6`.
-3. Record the implementation SHA, tool schemas/policy/spec hashes, taint/approval and no-effect replay invariants, session/checkpoint format, memory/blob revisions, cold-resume evidence, affinity/compactor policy, optional slot capability status, per-GPU run ids, and exact artifact restore/next-session commands.
-4. Point the next session to part 7 and its first dataset/ablation runner gate. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before evaluation.
+1. Stage only part 6's memory-tool/security/replay/session/slot changes, sanitized fixtures, tests, notebook, README, and deliberate shared changes. Exclude DBs, blobs, slots, checkpoint payloads, credentials, and unrelated dirty paths.
+2. Create `Tidemark: implement part 6 secure memory and resume`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, implementation SHA, tool/policy/spec hashes, taint/replay/checkpoint invariants, memory/blob revisions, affinity/compactor policy, exact T4/L4 security/session cells, and required cold-resume/run evidence. Include optional slot status, artifact restore instructions, and part 7 as blocked.
+4. Create `Tidemark: hand off part 6 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-Any security/taint/replay/resume mismatch, unsupported optional feature presented as working, missing required two-GPU evidence, or failed publication blocks completion. A fresh session must never be told to rely on a surviving Colab kernel or slot process.
+Once the pre-GPU Handoff is remote-verified, part 7 may start. The user reviews security/taint/replay/resume results and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. Any security/replay/resume mismatch, unsupported optional feature presented as working, or publication failure blocks publication of the current implementation. Never rely on a surviving Colab kernel or slot process.
 
 ## Acceptance
 
@@ -266,7 +266,7 @@ Any security/taint/replay/resume mismatch, unsupported optional feature presente
 - Retrieval updates occur only at explicit boundaries and preserve deterministic pinned context; untrusted retrieval taints before sensitive actions.
 - Durable checkpoints include consistent related artifacts and never contain credentials or claim Drive durability before copies drain.
 - Security/session smokes run on both T4 and L4 without model-slot overcommit or CPU/IO pool oversubscription; throughput and pinned-cache claims use their correct, explicitly separate scheduler policies.
-- The tested implementation and canonical part 6 Handoff are committed and automatically pushed, remote `main` is verified, and part 7 can start in a fresh session with exact security/checkpoint/artifact context.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 7 bootstrap plus security/checkpoint/artifact context included. Part 7 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 

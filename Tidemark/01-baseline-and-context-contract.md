@@ -263,7 +263,7 @@ Validate unique ids, distances, known tools, valid source references, satisfiabl
 7. Implement the baseline runner, per-step CSV, and simple SVG chart with claims, resume, infrastructure categories, and no hardcoded results.
 8. Implement `HardwareEnvelope`, `CapacityPlan`, the shared scheduler/slot semaphore, resource sampler, and T4/L4 fake-hardware capacity tests. Add `tidemark-capacity-probe` and `tidemark-utilization-smoke` before any long baseline.
 9. Add the seed dataset and validator. Add `tidemark-baseline` and `tidemark-baseline-report` cells to `notebooks/04_tidemark.ipynb`; retain its existing CPU starting gate.
-10. After every required CPU/T4/L4 gate is green, automatically create the implementation commit, update `Tidemark/Handoff.md` for part 2, create the Handoff commit, push both to `origin/main`, and verify the remote SHA using the phase-delivery protocol below.
+10. After all CPU checks pass, automatically create the implementation commit and a `pushed_acceptance_pending` Handoff containing the exact T4/L4 review instructions and part 2 bootstrap, push both to `origin/main`, and verify the remote SHA. The user reviews GPU results and any failures separately; part 2 does not wait for another Handoff or an agent bug-fix cycle.
 
 ## Tests
 
@@ -290,48 +290,56 @@ Run:
 .venv/bin/python -m compileall -q src tests
 ```
 
-The live acceptance run additionally executes the real tokenizer probe and a small model baseline from `notebooks/04_tidemark.ipynb`. Imports and fake timings do not satisfy that gate.
+The user performs the live tokenizer probe and small model baseline separately from `notebooks/04_tidemark.ipynb`, following the pre-GPU Handoff. Imports, fake timings, or an agent's unverified claim of a GPU run do not satisfy that gate.
 
-## Phase delivery, GitHub publication, and handoff
+## Phase delivery and pre-GPU Handoff
 
-Every part uses this mandatory delivery protocol. It applies to all eight phases, including the real T4/L4 acceptance required by that part. The user has authorized automatic commits and pushes to `main` **only after the phase's code, tests, and required acceptance gates are complete**. Do not commit or push a partial phase merely to make the next session easier.
+Every part has **one implementation Handoff**, written and published after code/CPU verification and **before the user's separate GPU run**. GPU review and any findings are owned by the user as a separate activity; they do not create another Handoff, an agent bug-fix cycle, or a gate on the next numbered implementation phase.
 
-### 1. Preflight and final verification
+### 1. Preflight and CPU verification before the GPU run
 
-1. Start the phase from `main`, read the current `Tidemark/Handoff.md`, and use `git pull --ff-only origin main` only when the worktree is clean. Never overwrite or discard existing work.
-2. Before delivery, inspect `git status --short --untracked-files=all`. Separate phase-owned files from unrelated/user changes. Never use `git add -A`, `git add .`, `git reset --hard`, `git clean`, or a force push.
-3. Run the phase-specific tests, the full `.venv/bin/python -m pytest`, `compileall`, `git diff --check`, and every required notebook/live gate on the exact final tree. Record actual counts and skips from this run, not an earlier phase.
-4. Remove only generated files created by the checks that are not deliverables. Keep `results/`, models, blobs, databases, slot files, notebook outputs, secrets, and raw private prompts out of the commits. Update any comments/docs that describe old behavior.
-5. If a required check is red, a GPU acceptance is missing, or unexpected edits appear in phase-owned files, stop. Write a local `blocked` Handoff if useful, but do not make a phase-complete commit or start the next part.
+1. Start from `main`, read the current Handoff, and use `git pull --ff-only origin main` only with a clean worktree. Never overwrite or discard existing work.
+2. Inspect `git status --short --untracked-files=all` and separate phase-owned files from unrelated/user changes. Never use `git add -A`, `git add .`, `git reset --hard`, `git clean`, or a force push.
+3. On the exact candidate tree, run the phase-specific CPU tests, full `.venv/bin/python -m pytest`, `compileall`, `git diff --check`, and all notebook CPU gates. Record current counts/skips. Remove only test-generated files that are not deliverables and update stale comments/docs.
+4. If a required CPU check is red or unexpected edits appear in phase-owned files, stop. Do not publish the phase as ready for GPU review. Keep generated results, models, blobs, DBs, slots, notebook outputs, secrets, and raw private prompts out of Git.
 
-### 2. Implementation commit
+### 2. Implementation commit after CPU tests
 
-Stage only the explicit phase-owned source, test, dataset, notebook, README, and plan paths. Review `git diff --cached` and `git diff --cached --check`, including any shared files deliberately changed by this phase. Exclude unrelated dirty paths even when the repository normally has only one developer.
+Stage only explicit phase-owned source, test, dataset, notebook, README, and plan paths. Review `git diff --cached` and `git diff --cached --check`, including deliberate shared changes, and exclude unrelated dirty paths.
 
 ```bash
 git add -- <exact-phase-paths>
 git diff --cached --check
-git commit -m "Tidemark: complete part N <short outcome>"
-git rev-parse HEAD  # implementation_commit recorded in Handoff.md
+git commit -m "Tidemark: implement part N <short outcome>"
+git rev-parse HEAD  # implementation_commit for the pre-GPU Handoff
 ```
 
-The commit must contain the code and tests that actually passed. If anything changes after the test run, rerun the affected and full checks before committing.
+The commit contains the code and tests that actually passed CPU verification. Any later implementation change before the GPU run requires another CPU test run and an updated implementation/pre-GPU Handoff.
 
-### 3. Canonical Handoff commit
+### 3. Write and commit the pre-GPU Handoff
 
-After the implementation commit, atomically rewrite **`Tidemark/Handoff.md`** as the one current handoff. Do not create eight divergent handoff files; prior versions remain addressable through Git history. Commit it separately so it can record the implementation SHA without a self-reference:
+Atomically rewrite **`Tidemark/Handoff.md`** **before the GPU run**. Its status is `pushed_acceptance_pending`, which means live review is pending—not that implementation of the next part is blocked. Include:
+
+- exact notebook path and ordered cell ids to run on fresh T4 and L4 runtimes;
+- model/build revisions and recommended fitted/capacity settings, with any choices the user must make explicit;
+- setup, authentication-by-name, resume, Drive-mirroring, and cleanup instructions;
+- the T4/L4 review checklist and artifacts worth retaining: run ids, manifests, journals, resource samples, metrics, report paths, and known untested cells;
+- current implementation limitations and optional features not requested;
+- the next numbered phase's bootstrap, which becomes available as soon as this Handoff is remote-verified.
+
+Commit it separately so it can name the implementation SHA without a self-reference:
 
 ```bash
 git add -- Tidemark/Handoff.md
 git diff --cached --check
-git commit -m "Tidemark: hand off part N"
+git commit -m "Tidemark: hand off part N for GPU acceptance"
 ```
 
-The file is operational state, not a ninth plan part. It must give a fresh session enough context without relying on the previous conversation or live notebook kernel.
+The file is operational state, not a ninth plan part. A fresh Colab session must be able to pull `main`, read it, and run without the preceding chat or an old notebook kernel.
 
-### 4. Push and verify GitHub
+### 4. Push the pre-GPU Handoff to GitHub
 
-Push both local commits in one authenticated `git push origin main`, then verify that remote `main` equals the local Handoff commit:
+Push the implementation and pre-GPU Handoff commits in one authenticated push, then verify remote `main` equals the local Handoff commit:
 
 ```bash
 git push origin main
@@ -339,24 +347,28 @@ test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$(git rev-parse HEAD
 git status --short --branch
 ```
 
-Use the repository's existing authentication; never place a token in a command, file, log, or Handoff. If the push is rejected as non-fast-forward, authentication fails, or remote verification differs, stop before the next phase. Keep the local commits, mark publication unresolved, and ask for integration/auth resolution; do not automatically rebase, merge, force, or retry forever. A phase is published only when remote verification succeeds.
+Use existing authentication and never put a token in a command/file/log. If the push is rejected as non-fast-forward, authentication fails, or remote verification differs, keep the local commits and stop; do not automatically rebase, merge, force, or retry indefinitely. The user should not start from an unverified remote Handoff.
 
-### Required Handoff content
+### 5. Independent user GPU review
 
-`Tidemark/Handoff.md` always contains:
+The user follows the pre-GPU Handoff on T4 and L4 and reviews results and failures separately. The agent does not schedule another Handoff, verify returned evidence, or perform a follow-up bug-fix cycle as part of phase delivery. If the user later asks for a specific GPU issue to be addressed, that is a separate task with its own tests and commits.
 
-1. **Status:** current completed part, `complete_when_pushed`, base commit, implementation commit, previous Handoff commit, branch/remote, and UTC completion time. The Handoff commit is the commit containing the file; verify it with `git log -1` rather than trying to embed its own SHA.
-2. **Delivered scope:** concrete behavior, public interfaces, invariants, changed paths, schema/journal/manifest versions, and deliberate compatibility constraints.
-3. **Verification evidence:** exact commands, current test counts/skips, compile/diff checks, notebook cell ids, and acceptance statements actually exercised. Distinguish CPU, fake-backed, T4, and L4 evidence.
-4. **Live/runtime state:** model/GGUF/tokenizer/llama.cpp revisions, capacity/scheduler config hashes, run ids and manifest/result paths, resource/utilization summary, and every unrun/unsupported/did-not-fit cell.
-5. **Durable artifacts:** per-GPU Drive paths and local paths, checkpoint revision, blob catalog and memory revisions, and exact restore/resume commands. Never assume a Colab process, mount, slot, or background job survives into a new session.
-6. **Known issues and boundaries:** residual failures, skipped tests, security/performance claims that are and are not supported, unrelated dirty paths, and optional work deliberately excluded.
-7. **Next session bootstrap:** `git pull --ff-only origin main`, verify the implementation commit is an ancestor of `HEAD`, read the next plan file, install/setup command, exact first test/notebook cell, expected starting state, and the next acceptance gate.
-8. **Safety:** names of required secrets such as `HF_TOKEN`/`LOCAL_KEY` only, never values; no API keys, authorization headers, environment dumps, hidden reasoning, raw private prompts, or unredacted memory payloads.
+Once the pre-GPU Handoff is remote-verified, the next implementation phase may start immediately. Live results remain unclaimed until they exist, and the Handoff continues to say GPU review is pending; it is not converted into a separate completion workflow.
+
+### Required pre-GPU Handoff content
+
+1. **Status:** `pushed_acceptance_pending`, base/implementation/previous Handoff commits, branch/remote, and UTC update time. Identify the commit containing the Handoff with `git log -1`, not by embedding its own SHA.
+2. **Delivered scope:** behavior, interfaces, invariants, changed paths, schema/journal/manifest versions, and compatibility constraints.
+3. **CPU verification:** exact commands, current counts/skips, compile/diff checks, notebook CPU cells, and fake-backed coverage. State explicitly that T4/L4 evidence is pending user review.
+4. **Run guide:** exact cell order, setup/cleanup, model/GGUF/tokenizer/llama.cpp revisions and capacity/scheduler settings, review checklist, and suggested artifacts to retain.
+5. **Durable paths:** local/per-GPU Drive locations, checkpoint/memory/catalog revisions when available, and exact restore/resume commands. Never assume a process, mount, slot, or background job survives.
+6. **Known issues and boundaries:** residual CPU failures/skips, unsupported claims, unrelated dirty paths, and excluded optional work.
+7. **Next implementation action:** the next plan's setup and first test/cell after remote verification. The user's independent GPU review does not block it.
+8. **Safety:** secret names only, never values; no authorization headers, environment dumps, hidden reasoning, raw private prompts, or unredacted memory payloads.
 
 ### New-session read protocol
 
-Before changing files, the next agent reads `Tidemark/Handoff.md` and the next numbered plan, checks branch/log/status, verifies the recorded implementation commit with `git merge-base --is-ancestor <sha> HEAD`, and reruns the small starting gate. It does not redo completed phases unless the Handoff identifies a failed verification or the user asks. If the Handoff and repository disagree, stop and surface the mismatch instead of guessing.
+Before changing files, read `Tidemark/Handoff.md` and the relevant numbered plan, check branch/log/status, and verify the implementation commit with `git merge-base --is-ancestor <sha> HEAD`. `pushed_acceptance_pending` means the user still has a separate GPU review to perform; it does not require the next agent to perform that review or wait for it. Start the next implementation gate shown in the Handoff. If repository and Handoff disagree, stop and surface the mismatch instead of guessing.
 
 ## Acceptance
 
@@ -367,7 +379,7 @@ Before changing files, the next agent reads `Tidemark/Handoff.md` and the next n
 - No real-model baseline is claimed until the notebook run and its manifest exist.
 - The baseline and utilization smoke run on both a real Colab T4 and L4 with the same primary model and eligible task ids. Each has a legal fitted shape, resource samples, and a throughput rationale for its selected scheduler.
 - Model-ready slots and CPU-ready workers are kept occupied without exceeding their budgets; any sustained idle/oversubscription window is explained in the report rather than hidden by an aggregate utilization average.
-- The exact tested tree is committed, the canonical `Handoff.md` points to part 2 and contains all runtime/artifact/resume context, both commits are pushed automatically, and remote `main` is verified. No red or unrun required gate is described as complete.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 2 bootstrap included. The user owns GPU review and any fixes separately; no additional Handoff or agent bug-fix cycle is required before part 2.
 
 ## Pitfalls
 

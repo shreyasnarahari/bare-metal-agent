@@ -220,7 +220,7 @@ Part 7 maps these to LongMemEval evidence labels. Fake-embedding tests verify ar
 6. Add metric functions and a small labeled cross-session fixture covering update, contradiction, deletion, and time-aware retrieval.
 7. Add `tidemark-memory-gate` and `tidemark-memory-smoke` notebook cells. The real smoke pins/downloads the embedding model on CPU, checks its dimension, and stores/retrieves a fact across two fresh DB connections.
 8. Implement the shared batched embedding/indexing service and resource-budgeted reader/writer queues. Autotune CPU threads/batches on T4 and L4; probe optional GPU embeddings only under spare-VRAM and end-to-end-throughput gates.
-9. Run the phase-delivery protocol: commit the tested memory implementation, write the canonical Handoff for part 6, commit it, automatically push both commits, and verify remote `main`.
+9. Before the GPU run, commit the CPU-tested memory implementation and pre-GPU Handoff, automatically push both and verify remote `main`. Part 6 may then start; the user reviews GPU results and fixes separately without another Handoff or agent bug-fix cycle.
 
 ## Tests
 
@@ -244,14 +244,14 @@ Run:
 
 ## Phase delivery and handoff
 
-After all storage/retrieval/backup tests, real embedding smoke, and the same memory workload on T4 and L4 pass, follow part 1's mandatory two-commit/one-push protocol automatically:
+After all storage/retrieval/backup CPU tests pass and **before the user's separate GPU run**, follow part 1's pre-GPU publication protocol:
 
-1. Stage only part 5's memory/store/retrieval/embedding code, sanitized fixtures, tests, notebook, README, and deliberate shared changes; never stage SQLite databases, vectors, embeddings, Drive snapshots, memory contents, or unrelated dirty paths.
-2. Create the implementation commit `Tidemark: complete part 5 long-term memory`, update `Tidemark/Handoff.md`, then create `Tidemark: hand off part 5`.
-3. Record the implementation SHA, SQLite/FTS/schema versions, embedding/preprocessing/ranking config and revision, recall/supersession/deletion evidence, resource settings, run ids, namespace/revision identifiers, and local/per-GPU Drive snapshot/restore commands.
-4. Point the next session to part 6 and its first security/replay fixture. Push both commits to `origin/main` and verify remote `main` equals the Handoff commit before exposing memory tools.
+1. Stage only part 5's memory/store/retrieval/embedding code, sanitized fixtures, tests, notebook, README, and deliberate shared changes; never stage DBs, vectors, embeddings, Drive snapshots, memory contents, or unrelated dirty paths.
+2. Create `Tidemark: implement part 5 long-term memory`.
+3. Rewrite `Tidemark/Handoff.md` with status `pushed_acceptance_pending`, implementation SHA, SQLite/FTS/schema versions, embedding/preprocessing/ranking config, exact T4/L4 real-embedding/indexing cells, and required recall/supersession/deletion/run evidence. Include namespace/revision and local/Drive snapshot/restore instructions, with part 6 blocked.
+4. Create `Tidemark: hand off part 5 for GPU acceptance`, push both commits to `origin/main`, and verify remote `main` before the user starts.
 
-A failed integrity/deletion/tombstone test, non-deterministic ranking, missing real embedding/two-GPU evidence, or failed publication blocks completion. Handoff contains paths and revisions only, never raw memory values or credentials.
+Once the pre-GPU Handoff is remote-verified, part 6 may start. The user reviews embeddings, rankings, snapshots, and any failures separately; no further Handoff or agent bug-fix cycle is part of delivery. Any integrity/ranking failure or failed publication blocks publication of the current implementation. Handoff contains paths/revisions only, never raw memory values or credentials.
 
 ## Acceptance
 
@@ -261,7 +261,7 @@ A failed integrity/deletion/tombstone test, non-deterministic ranking, missing r
 - The real pinned embedding model is verified in the notebook before semantic retrieval results are reported.
 - Active state is local and Drive copies are consistent, integrity-checked snapshots with revision evidence.
 - The same memory workload runs on T4 and L4 with deterministic serial-equivalent rankings and measured embedding/indexing overlap; the selected CPU configuration stays within each runtime's vCPU/RAM budget.
-- The tested implementation and canonical part 5 Handoff are committed and automatically pushed, remote `main` is verified, and part 6 can start in a fresh session with exact schema/model/revision/snapshot context.
+- The CPU-tested implementation and pre-GPU Handoff are committed and automatically pushed before the user's run, with remote `main` verified and the part 6 bootstrap plus schema/model/revision/snapshot context included. Part 6 may proceed while the user independently reviews GPU results and fixes; no further Handoff or agent bug-fix cycle is required.
 
 ## Pitfalls
 
