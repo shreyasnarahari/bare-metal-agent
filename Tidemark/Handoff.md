@@ -1,18 +1,18 @@
 # Tidemark Handoff
 
-This is the canonical operational handoff for a fresh implementation session. The eight numbered files in this directory are the plan; this file is current state, not a ninth plan part. Replace it atomically after every completed phase. Earlier states remain available in Git history.
+This is the canonical operational handoff for a fresh implementation session. The eight numbered files in this directory are the plan; this file is current state, not a ninth plan part. Update it atomically **before the user's separate GPU run** with status `pushed_acceptance_pending`. The implementation and pre-GPU Handoff commits are pushed after CPU tests so a fresh Colab session can pull and follow them. The user reviews GPU results and any fixes independently; there is no later Handoff or agent bug-fix cycle in this workflow. Earlier states remain available in Git history.
 
 ## Status
 
-- **Current state:** parts 1 and 2 are both `pushed_acceptance_pending`. Both are on `origin/main`, pushed at the user's request before their live acceptance. Neither part's T4/L4 acceptance has run, so neither is complete and no commit or record claims it is. The user plans to run the notebook later and fix whatever it finds.
-- **Last completed implementation phase:** none (neither part has its live acceptance).
-- **Next action:** run `notebooks/04_tidemark.ipynb` (part 1's live cells, then `tidemark-prefix-smoke`) on a T4 and an L4. Fix any failures with new commits. Record the evidence here. Part 3 waits for that.
+- **Current state:** parts 1 and 2 are both `pushed_acceptance_pending`. Both implementation packages are on `origin/main`, pushed at the user's request before live review. Their T4/L4 acceptance has not run, so no live result is claimed. The user will review GPU results and any fixes independently; no additional Handoff or agent bug-fix cycle is scheduled.
+- **Last delivered implementation phase:** part 2 (CPU-verified; live review remains pending).
+- **Next implementation action:** part 3, using its plan and the committed interfaces below. The user may separately run `notebooks/04_tidemark.ipynb` (part 1's live cells, then `tidemark-prefix-smoke`) on a T4 and an L4 and review whatever it finds. Part 3 does not wait for that review.
 - **Branch / remote:** `main` / `origin`.
 - **Part 2 commits:** implementation `1f43c2a4ad525b13ba70db2f4430cc8e5592cc36` (tree `bf81b71215c91878fb2b1a37eab98578473af334`, 27 paths, base `eb909584792a2385b5c20196837b9263e73e77b6`). The Handoff commit is the commit containing this file; check it with `git log -1 -- Tidemark/Handoff.md`.
 - **Part 1 commits:** implementation `54612db611a0c7ed313d87b2f7241bad595bd359` (tree `df519f12b5f523d6c5c291552b84bf17d2bff729`), the user's own `b29d0086f8d4eb3e62a6d0bdbf911834b52ec2b6` (port probe and notebook 01), and Handoff `eb909584792a2385b5c20196837b9263e73e77b6`.
-- **Previous Handoff commit:** `eb909584792a2385b5c20196837b9263e73e77b6`.
+- **Previous Handoff commit:** `b9e51ba080082153ce3abca660bbd77aebfafba2` (part 2 Handoff, before the user revised the delivery workflow).
 - **Test branch:** `tidemark/part-1-acceptance` was deleted, with the user's approval, after part 1 reached `main`. No test branch exists.
-- **Written:** 2026-11-26 (UTC).
+- **Written:** 2026-11-26T10:24Z (UTC). This version follows the user's revised delivery workflow (pre-GPU Handoff, no post-GPU Handoff), committed with it.
 
 ## Part 1 delivered scope (on main, CPU-verified)
 
@@ -101,7 +101,7 @@ Every T4 and L4 cell (all 12 tasks per GPU) is **untested**.
 
 Expected live behavior to check, not a result: the seed set's mock-store observations are small (about 300 characters each), so on the required 16K path even a 40-step forced prefix should fit (roughly 7K tokens), with no truncation steps. Truncation is exercised on CPU. If the live runs show no truncation rows, that is expected, not a failure; part 3's observation corpus adds the large payloads.
 
-## Durable artifacts (once the notebook runs)
+## Durable artifacts (once the user runs the notebook)
 
 ```text
 local active state: /content/tidemark/
@@ -115,7 +115,11 @@ durable records: MyDrive/toolsmith/records/<gpu>/tidemark/
   smoke/autotune-<gpu>-<stamp>.json
   baseline/<run_id>/                  mirror of the local run folder
   report/<shape>/
+  prefix-gate.json                    part 2 CPU PrefixLint gate (both protocols)
+  prefix/prefix-v1-<gpu>-<shape>/     part 2 prefix-stable run: spec, scores, journals, prefix-summary.json
 ```
+
+The part 2 prefix run also writes locally under `/content/tidemark/prefix/prefix-v1-<gpu>-<shape>/` and mirrors to Drive when the cell ends.
 
 Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_RUN_ID`). Resume: rerun the notebook from the top. The baseline cell restores its run folder from Drive if the local copy is missing, the smoke cell confirms the recorded frozen scheduler instead of retuning, completed units are skipped, an interrupted episode resumes from its journal, and a changed spec (new fitted shape, model, context config, or dataset) is refused with `BaselineMismatch`. A deliberate change needs a new run id. No blob catalog, memory database, or slot file exists in part 1.
 
@@ -127,7 +131,7 @@ Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_R
   - Prefetch uses the scheduler's prefetch thread, not the process pool, because rendered prefixes live in an in-process cache.
   - For Qwen3.5, re-serialized old arguments decode to an identical prompt. PrefixLint still reports the rewrite as a `violation`: old messages are immutable.
   - The live warm-reuse figure needs `cache_semantics.confirmed`. Without it, reuse is null and the smoke reports zero warm steps.
-- **Open gate:** T4 and L4 live acceptance (parity, cache probe, utilization smoke, baseline, report) has not run. Part 1 is on `main` at the user's request but is not complete. Any code fix a live run needs is a new commit on top of `54612db`.
+- **GPU review pending (user-owned):** no T4 or L4 run of parts 1 or 2 has happened, so no live cache, latency, utilization, parity, or task-success result exists or is claimed. The user runs and reviews these separately; any fix they request is a separate task with its own tests and commits. It does not gate part 3.
 - **Pre-existing, not caused by Tidemark:** the golden manifests' episode ids (`ep_8393620aa57df809`, `ep_b345550151d9160c`, `ep_07922e66f89c0aa9`) predate Steadyhand part 6, which added `recovery_policy` and `system_prompt_variant` to the identity hash. Unchanged base code already derives `ep_268aa8ce0b358631`, `ep_b4a01a2f9f338bd8`, and `ep_7499cf1f6182975d` for the same scenarios (checked in a clean worktree of the base commit). Replay never compares ids, so the goldens still replay. The test pins both sets of ids; regenerating the goldens is a separate, deliberate decision.
 - The part 1 autotune varies only the scheduler's episode-worker count on the smoke workload (no server restart). Affinity stays `pinned` because the baseline measures cache reuse. KV/flash is decided by the fit ladder, and batch, thread, and compactor-slot grids are implemented and CPU-tested (`capacity_candidates`, `autotune`) but not run in the notebook.
 - Forced-prefix live steps send the real request (real prefill and cache counts) and then substitute the scripted calls. Their completion tokens and decode time are those of the discarded generation, and the slot cache holds the model's own output rather than the scripted turn. Rows are labeled `forced` and `model`.
@@ -136,9 +140,53 @@ Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_R
 - The port-probe `SO_REUSEADDR` change is now on `main` (`b29d008`), so `fit_capacity`'s same-port restart after an out-of-memory shrink can reuse a port left in TIME_WAIT. The test branch does not have it. The working tree has no unrelated changes left.
 - `results/` holds local scratch (for example `results/tidemark-chart-check/`) and is gitignored.
 
-## Next-session bootstrap
+## GPU run guide (the user's independent review)
 
-1. Read this file and `Tidemark/01-baseline-and-context-contract.md` and `Tidemark/02-prefix-stable-context-and-budgets.md`. Check the state:
+Runtime: a fresh Colab **T4**, then a fresh **L4** (records stay in separate per-GPU folders). Secrets are referred to by name only: `HF_TOKEN` and `LOCAL_KEY`, in `MyDrive/toolsmith/.env` or Colab Secrets. Model: Qwen3-8B Q4_K_M from `Qwen/Qwen3-8B-GGUF` on llama.cpp `b5401` with the `Qwen/Qwen3-8B` tokenizer (the shared provisioning cell under `STEADYHAND_PHASE=qwen3/wide`). Capacity is fitted at runtime: T4 starts at 2 slots of 16K, L4 at 4 slots of 16K, and the KV ladder is q8_0 with flash attention, then f16 with it, then f16 without. Slots shrink on OOM; per-slot context does not.
+
+Run `notebooks/04_tidemark.ipynb` top to bottom. The `drive-and-secrets` cell pulls `main`. Cell order:
+
+1. `environment`, `drive-and-secrets`, `install-project`, `hardware` (shared setup);
+2. `tidemark-cpu-gate` (golden replays and seed-set validation), then `tidemark-prefix-gate` (planted PrefixLint suite on CPU);
+3. `tidemark-settings`, `steadyhand-runtime` (provisioning in the background);
+4. `tidemark-capacity-probe`: envelope, capacity decisions, fitted server, scheduler, resource sampler;
+5. `tidemark-tokenizer-probe`: parity against `/tokenize` (stops the notebook on a mismatch) and the repeated-prompt cache probe;
+6. `tidemark-utilization-smoke`: episode-worker autotune on the N ≤ 10 tasks, then freeze;
+7. `tidemark-baseline` and `tidemark-baseline-report`: the naive baseline on all 12 seed tasks, then `steps.csv`, `prefill_by_step.svg`, `summary.json`, `report.md`;
+8. `tidemark-prefix-smoke`: part 2 live checks and the prefix-stable run;
+9. `cleanup`: stops the server, drains background copies, flushes Drive.
+
+Optional settings (environment variables, set before `tidemark-settings`):
+- `STEADYHAND_PHASE=qwen3/tall` for the 32K shape;
+- `TIDEMARK_GENERATION_PATH` (default `buffered_stream`);
+- `TIDEMARK_MAX_TOKENS` (512);
+- `TIDEMARK_AFFINITY` (`pinned`);
+- `TIDEMARK_BASELINE_RUN_ID`;
+- `TIDEMARK_AUTOTUNE` (`1`);
+- `TIDEMARK_SMOKE_MAX_N` (10).
+
+After a disconnect, run everything again from the top. Completed units are skipped, and an interrupted episode resumes from its journal.
+
+Review checklist (not a gate on the next part):
+- **Part 1:**
+  - parity passed;
+  - the cache semantics probe is confirmed, or unconfirmed with evidence;
+  - a legal fitted shape with recorded attempts;
+  - the utilization summary, with explanations for any miss of the 95% slot or 85% CPU targets;
+  - all 12 tasks scored, with infrastructure and did-not-fit outcomes kept visible;
+  - `prefill_by_step.svg` distinguishes cold and ordinary steps (truncation rows are not expected on 16K; see *Live/runtime state*).
+- **Part 2:**
+  - the lint prompt equals the production prompt, with exact spans;
+  - the live planted suite passes;
+  - in the same-slot cache probe, the planted timestamp forces a near-full prefill while the legal append reuses the cache;
+  - no live PrefixLint violation;
+  - warm reuse is reported against the 90% target (a target, not a pass condition).
+
+Artifacts worth keeping: everything under `MyDrive/toolsmith/records/<gpu>/tidemark/` listed in *Durable artifacts*, especially the run specs, scores, journals, `resource_samples.jsonl`, `utilization.json`, `prefix-summary.json`, the parity and cache-probe records, and the report folder.
+
+## Next-session bootstrap (part 3)
+
+1. Read this file and `Tidemark/03-observation-shaping-and-blob-store.md`. Check the repository:
 
    ```bash
    git status --short --branch --untracked-files=all
@@ -147,16 +195,19 @@ Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_R
    ```
 
    If the Handoff and the repository disagree, stop and report the mismatch.
-2. Rerun the CPU gates: `.venv/bin/python -m pytest tests/test_notebook_04.py tests/test_tidemark_assembler.py tests/test_tidemark_prefix_lint.py tests/test_steadyhand_context.py`.
-3. On a fresh **T4**, then a fresh **L4**, run `notebooks/04_tidemark.ipynb` top to bottom. The notebook pulls `main`, which has both parts. Part 1's acceptance is listed in its section above. `tidemark-prefix-smoke` must show:
-   - the lint prompt equals the production prompt, with exact spans;
-   - the live planted suite passes;
-   - the planted timestamp forces a near-full same-slot prefill, while the legal append reuses the cache;
-   - no live PrefixLint violation;
-   - warm reuse is reported against the 90% target (a target, not a pass condition).
-4. Fix any live failure with tests and a commit of exact paths (never `git add -A` or `git add .`), then rerun the affected cells.
-5. When both GPUs pass: rewrite this Handoff with the live evidence for parts 1 and 2 (run ids; model, GGUF, tokenizer, template, schema, and grammar hashes; planted divergence and cache-probe numbers; capacity and frozen-config hashes; Drive paths), set both parts to `complete_when_pushed`, commit it alone, `git push origin main`, and verify that `git ls-remote origin refs/heads/main` equals `git rev-parse HEAD`. Only then is part 3 the next action.
-6. If the push is rejected or authentication fails, keep the local commits and stop; do not rebase, merge, force-push, or retry indefinitely.
+2. Rerun the starting CPU gate:
+
+   ```bash
+   .venv/bin/python -m pytest tests/test_notebook_04.py tests/test_tidemark_assembler.py \
+     tests/test_tidemark_prefix_lint.py tests/test_steadyhand_context.py
+   ```
+
+3. Begin part 3. It builds on these interfaces:
+   - `ContextSession.shape_observation`: both strategies return the message unchanged today; part 3 shapes observations once, at arrival.
+   - `RecitationState.open_blob_handles`: rendered and bounded, empty today.
+   - `required_availability` (`blob_handle`, `any_restorable`): reduced to inline checks in part 1's seed set; part 3 adds the blob path.
+   - The frozen tool list must include `read_blob` from session creation (segment 0 never changes mid-session), with grammar-level masking through `allowed_tool_names` when needed.
+4. Deliver part 3 with the plan's pre-GPU protocol: CPU tests, implementation commit, `pushed_acceptance_pending` Handoff with its GPU run guide, one push, and remote verification. If a push is rejected or authentication fails, keep the local commits and stop; do not rebase, merge, force-push, or retry indefinitely.
 
 ## Safety
 
