@@ -4,19 +4,17 @@ This is the canonical operational handoff for a fresh implementation session. Th
 
 ## Status
 
-- **Current state:** `pushed_acceptance_pending`. Part 1 is implemented, CPU-verified, and on `origin/main`. The user asked for that push on 2026-11-26 before the plan's required live acceptance. That acceptance (tokenizer parity, cache probe, utilization smoke, and baseline on a real Colab T4 **and** L4) has **not** run. Part 1 is therefore not complete, and no commit or record claims it is.
-- **Last completed implementation phase:** none (part 1 awaits its live acceptance).
-- **Next action:** run part 1's live notebook gate on a T4 and on an L4 (see *Next-session bootstrap*). Do not start part 2 until both pass and this Handoff records them.
+- **Current state:** parts 1 and 2 are both `pushed_acceptance_pending`. Both are on `origin/main`, pushed at the user's request before their live acceptance. Neither part's T4/L4 acceptance has run, so neither is complete and no commit or record claims it is. The user plans to run the notebook later and fix whatever it finds.
+- **Last completed implementation phase:** none (neither part has its live acceptance).
+- **Next action:** run `notebooks/04_tidemark.ipynb` (part 1's live cells, then `tidemark-prefix-smoke`) on a T4 and an L4. Fix any failures with new commits. Record the evidence here. Part 3 waits for that.
 - **Branch / remote:** `main` / `origin`.
-- **Base commit:** `30a9ef1e988b1d24ad5c041eed4bfc5c5da7acda`.
-- **Implementation commit:** `54612db611a0c7ed313d87b2f7241bad595bd359`, "Tidemark: part 1 baseline and context contract (T4/L4 acceptance pending)". It holds 44 paths. Its tree, `df519f12b5f523d6c5c291552b84bf17d2bff729`, is identical to the acceptance candidate that passed the full suite in a clean worktree (1898 passed, 54 skipped).
-- **Other commit in this push:** `b29d0086f8d4eb3e62a6d0bdbf911834b52ec2b6`, the user's own changes, which the user had already run on GPU: `SO_REUSEADDR` in `LlamaCppServer`'s port probe, and a rerunnable Day 9 Qwen3.5 cell in `notebooks/01_toolsmith.ipynb`. It is not part of Tidemark.
-- **Handoff commit:** the commit containing this file, after `b29d008`. Check its SHA with `git log -1 -- Tidemark/Handoff.md`.
-- **Previous Handoff commit:** none (the planning Handoff was never committed).
-- **Test branch:** `origin/tidemark/part-1-acceptance` at `f0e15df9dce089665a542aeea2783d0f38a633fe`, the same tree as the implementation commit. It is redundant now that `main` has part 1. Delete it only with the user's approval.
-- **Written:** 2026-11-26T06:36Z (UTC).
+- **Part 2 commits:** implementation `1f43c2a4ad525b13ba70db2f4430cc8e5592cc36` (tree `bf81b71215c91878fb2b1a37eab98578473af334`, 27 paths, base `eb909584792a2385b5c20196837b9263e73e77b6`). The Handoff commit is the commit containing this file; check it with `git log -1 -- Tidemark/Handoff.md`.
+- **Part 1 commits:** implementation `54612db611a0c7ed313d87b2f7241bad595bd359` (tree `df519f12b5f523d6c5c291552b84bf17d2bff729`), the user's own `b29d0086f8d4eb3e62a6d0bdbf911834b52ec2b6` (port probe and notebook 01), and Handoff `eb909584792a2385b5c20196837b9263e73e77b6`.
+- **Previous Handoff commit:** `eb909584792a2385b5c20196837b9263e73e77b6`.
+- **Test branch:** `tidemark/part-1-acceptance` was deleted, with the user's approval, after part 1 reached `main`. No test branch exists.
+- **Written:** 2026-11-26 (UTC).
 
-## Delivered scope (on main, CPU-verified)
+## Part 1 delivered scope (on main, CPU-verified)
 
 ### Compatibility contract
 
@@ -56,7 +54,25 @@ This is the canonical operational handoff for a fresh implementation session. Th
 - The naive baseline drops only whole turns (an assistant call together with every result). It pins the system message, the current request (the last user message of the opening input), and the newest turn. It never lowers `max_tokens`; a turn that cannot fit is `context_budget_exhausted`, scored as `did_not_fit`.
 - The session sends messages with sorted keys (the journal's form), so live and replay render the same structure. Tool schemas keep registry order.
 
-## Verification evidence (this tree, CPU only)
+## Part 2 delivered scope (on main, CPU-verified)
+
+Paths (27): new `src/tidemark/{assembler,budgets,cache,prefix_lint,recitation,segments}.py`, `src/tidemark/eval/prefix.py`, `tests/test_tidemark_{assembler,budgets,prefix_lint,recitation}.py`; changed `src/steadyhand/{client,context,journal,loop,replay}.py`, `src/tidemark/{baseline,scheduler,types}.py`, `src/tidemark/eval/baseline.py`, `src/toolsmith/{api,prompting}.py`, `notebooks/04_tidemark.ipynb`, `tests/test_notebook_04.py`, `tests/test_steadyhand_context.py`, `tests/tidemark_support.py`, `README.md`.
+
+- **Segments and state:** `ContextState` is immutable, with explicit transitions (`append`, `with_recitation`, `advance_epoch`). `ContextAssembler.render` is pure. Messages are legal: one leading system message with the frozen tools (canonical keys, declared order), a user-role pinned charter and memory block, a user-role canonical-JSON summary (absent in epoch 0), recent messages in order, and one user-role recitation tail last. The tail is never kept in the history.
+- **Spans:** `toolsmith.prompting.render_with_token_spans` normalizes history once, renders boundary prefixes without the generation prompt, and renders the final prompt exactly as `ToolsmithService`. It requires each prefix to be a text and token prefix of the next, or returns `span_mapping_unavailable` with no spans. `ChatPromptRenderer.render` gained `add_generation_prompt` (default `True`). A test checks that `ToolsmithService.render_prompt` equals the linted text for both protocols.
+- **Budgets:** the hard limit is `slot_context - max_tokens - safety_margin`; the soft limit defaults to 70% of it. Per-segment counts come from exact spans only. The decision order is exhausted, then compaction pending, then ok. The overflow policy is `exhaust` (part 2 has no compactor). `check_static` and `PrefixStableSession.validate` reject a frozen catalog that cannot fit.
+- **Recitation:** a typed, bounded state with no clock or random values. Plan items are agent-authored and empty unless supplied; nothing is derived from tool output. Trimming is by priority, and the tail cap is checked on exact spans.
+- **PrefixLint:** the cause comes from order-sensitive segment hashes. A token change with no logical change is `token_boundary_merge`. `FingerprintStore` keeps the previous ids as 4-byte binary, not in JSONL; resume re-derives fingerprints by replay.
+- **Journal:** `context_render` gains optional fields `stable_prefix_tokens`, `expected_common_prefix_floor`, `observed_common_prefix_tokens`, `first_divergent_index`, `first_changed_segment`, `divergence_cause`, `lint_status`, `previous_prompt_sha256`, and `allowed_tool_names`. The new `context_transition` event (`start`/`append`/`truncate`/`epoch`, with journal seqs) is written before its `context_render`. The naive baseline now emits transitions too. Journal version stays 1, and part 1 records still read. Lint fields are not volatile.
+- **Seam:** `ContextSession.render` also receives `seqs` (from `steadyhand.context.history_seqs`) and `budget_state` (the controller's counts). The paraphrase passes `unjournaled=1`. `allowed_tool_names` goes to `client.complete` only when set.
+- **Tool masking:** `ToolsmithService.chat(allowed_tool_names=...)` keeps every tool in the prompt, compiles the grammar and validator from the subset, and rejects unknown or empty subsets (`invalid_allowed_tools`). `None` is byte-for-byte legacy. `SteadyhandClient.complete(allowed_tool_names=...)`; `ContextConfig.allowed_tool_names`.
+- **Caches:** `ContentCache` (thread-safe LRU with hit counters) holds rendered prefixes, keyed by exact order-sensitive content, tools, protocol, thinking flag, and template revision. `ToolsmithService(grammar_cache=...)` keys grammars by tools, choice, protocol, and compiler version. Counters are overhead only. `run_baseline(prepare=...)` warms upcoming tasks on the scheduler's prefetch thread.
+- **ContextConfig:** strategy `prefix_stable`; new fields `pinned_memory`, `allowed_tool_names`, `recitation`, and `overflow`. These are always in `as_dict`, so part 1 naive config hashes changed too; no live part 1 records exist.
+- **Notebook:** `tidemark-prefix-gate` (CPU; the planted suite for both protocols, executed by the tests) after `tidemark-cpu-gate`, and `tidemark-prefix-smoke` (live) after `tidemark-baseline-report`.
+
+Part 2 CPU verification on the exact committed tree: the plan's command (`tests/test_tidemark_assembler.py tests/test_tidemark_budgets.py tests/test_tidemark_prefix_lint.py tests/test_tidemark_recitation.py tests/test_api.py tests/test_steadyhand_replay.py`) gives 98 passed. The full suite gives 1940 passed, 54 skipped. `compileall` and `git diff --check` are clean. The planted suite passes on the CPU fake template for both Qwen protocols, with first-divergence indexes inside the named segments.
+
+## Part 1 verification evidence (CPU only)
 
 Commands run on the final tree (WSL2, Python 3.13.16, `.venv`):
 
@@ -105,6 +121,12 @@ Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_R
 
 ## Known issues and boundaries
 
+- **Part 2 boundaries:**
+  - The planted breakers are generated in code (`tidemark/eval/prefix.py`), not stored under `tests/fixtures/tidemark_prompts/`.
+  - The batch/ubatch and `--cache-reuse` autotune grid is not run in the notebook. The part 1 `capacity_candidates(batches=...)` and `autotune` mechanisms exist, but every scored part 2 run uses the frozen part 1 shape.
+  - Prefetch uses the scheduler's prefetch thread, not the process pool, because rendered prefixes live in an in-process cache.
+  - For Qwen3.5, re-serialized old arguments decode to an identical prompt. PrefixLint still reports the rewrite as a `violation`: old messages are immutable.
+  - The live warm-reuse figure needs `cache_semantics.confirmed`. Without it, reuse is null and the smoke reports zero warm steps.
 - **Open gate:** T4 and L4 live acceptance (parity, cache probe, utilization smoke, baseline, report) has not run. Part 1 is on `main` at the user's request but is not complete. Any code fix a live run needs is a new commit on top of `54612db`.
 - **Pre-existing, not caused by Tidemark:** the golden manifests' episode ids (`ep_8393620aa57df809`, `ep_b345550151d9160c`, `ep_07922e66f89c0aa9`) predate Steadyhand part 6, which added `recovery_policy` and `system_prompt_variant` to the identity hash. Unchanged base code already derives `ep_268aa8ce0b358631`, `ep_b4a01a2f9f338bd8`, and `ep_7499cf1f6182975d` for the same scenarios (checked in a clean worktree of the base commit). Replay never compares ids, so the goldens still replay. The test pins both sets of ids; regenerating the goldens is a separate, deliberate decision.
 - The part 1 autotune varies only the scheduler's episode-worker count on the smoke workload (no server restart). Affinity stays `pinned` because the baseline measures cache reuse. KV/flash is decided by the fit ladder, and batch, thread, and compactor-slot grids are implemented and CPU-tested (`capacity_candidates`, `autotune`) but not run in the notebook.
@@ -116,26 +138,25 @@ Default `run_id`: `baseline-v1-<t4|l4>-wide` (override with `TIDEMARK_BASELINE_R
 
 ## Next-session bootstrap
 
-1. Read this file and `Tidemark/01-baseline-and-context-contract.md`. Check the state and that part 1 is in history:
+1. Read this file and `Tidemark/01-baseline-and-context-contract.md` and `Tidemark/02-prefix-stable-context-and-budgets.md`. Check the state:
 
    ```bash
    git status --short --branch --untracked-files=all
    git pull --ff-only origin main            # only with a clean worktree
-   git merge-base --is-ancestor 54612db611a0c7ed313d87b2f7241bad595bd359 HEAD && echo part-1-present
+   git merge-base --is-ancestor 1f43c2a4ad525b13ba70db2f4430cc8e5592cc36 HEAD && echo part-2-present
    ```
 
    If the Handoff and the repository disagree, stop and report the mismatch.
-2. Rerun the CPU starting gate:
-
-   ```bash
-   .venv/bin/python -m pytest tests/test_notebook_04.py tests/test_tidemark_baseline.py tests/test_steadyhand_context.py
-   ```
-
-3. On a fresh **T4** runtime, then a fresh **L4** runtime, run `notebooks/04_tidemark.ipynb` top to bottom. The `drive-and-secrets` cell pulls `main`, which now has part 1, so no branch checkout is needed. Cells, in order: `tidemark-cpu-gate`, `tidemark-settings`, `steadyhand-runtime`, `tidemark-capacity-probe`, `tidemark-tokenizer-probe` (must pass parity; it stops the notebook otherwise), `tidemark-utilization-smoke`, `tidemark-baseline`, `tidemark-baseline-report`, `cleanup`. Secrets by name only: `HF_TOKEN`, `LOCAL_KEY`.
-4. Acceptance to confirm on each GPU: parity passed; cache semantics confirmed (or explicitly unconfirmed with evidence); a legal fitted shape; resource samples and the utilization summary with explanations for any miss; the baseline manifest and scores for the same 12 task ids; `steps.csv` and `prefill_by_step.svg` generated from records with cold, ordinary, and truncation steps distinguishable; the report showing both GPUs.
-5. If a live run needs a code change: fix it with tests, rerun the phase tests, the full suite, `compileall`, and `git diff --check`, and commit the fix by its exact paths (never `git add -A` or `git add .`). Then rerun the affected live cells.
-6. When both GPUs pass: rewrite this Handoff (status `complete_when_pushed`, the live evidence, run ids, model/GGUF/tokenizer/llama.cpp revisions, capacity and frozen-config hashes, and Drive paths), commit `Tidemark: hand off part 1` with only this file, run `git push origin main`, and verify that `git ls-remote origin refs/heads/main` equals `git rev-parse HEAD`. Only then is part 2 the next action.
-7. If the push is rejected or authentication fails, keep the local commits and stop; do not rebase, merge, force-push, or retry indefinitely.
+2. Rerun the CPU gates: `.venv/bin/python -m pytest tests/test_notebook_04.py tests/test_tidemark_assembler.py tests/test_tidemark_prefix_lint.py tests/test_steadyhand_context.py`.
+3. On a fresh **T4**, then a fresh **L4**, run `notebooks/04_tidemark.ipynb` top to bottom. The notebook pulls `main`, which has both parts. Part 1's acceptance is listed in its section above. `tidemark-prefix-smoke` must show:
+   - the lint prompt equals the production prompt, with exact spans;
+   - the live planted suite passes;
+   - the planted timestamp forces a near-full same-slot prefill, while the legal append reuses the cache;
+   - no live PrefixLint violation;
+   - warm reuse is reported against the 90% target (a target, not a pass condition).
+4. Fix any live failure with tests and a commit of exact paths (never `git add -A` or `git add .`), then rerun the affected cells.
+5. When both GPUs pass: rewrite this Handoff with the live evidence for parts 1 and 2 (run ids; model, GGUF, tokenizer, template, schema, and grammar hashes; planted divergence and cache-probe numbers; capacity and frozen-config hashes; Drive paths), set both parts to `complete_when_pushed`, commit it alone, `git push origin main`, and verify that `git ls-remote origin refs/heads/main` equals `git rev-parse HEAD`. Only then is part 3 the next action.
+6. If the push is rejected or authentication fails, keep the local commits and stop; do not rebase, merge, force-push, or retry indefinitely.
 
 ## Safety
 
