@@ -99,7 +99,10 @@ class LlamaCppServer:
             raise FileNotFoundError(f"GGUF model not found: {self.model}")
 
         # Check the port first: llama-server's own bind error is buried in its log.
+        # SO_REUSEADDR matches llama-server, so a port left in TIME_WAIT after stop()
+        # is usable, while a live listener still makes bind() fail.
         with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind((self.host, self.port))
             except OSError as exc:
