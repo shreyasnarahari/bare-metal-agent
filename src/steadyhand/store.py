@@ -43,12 +43,32 @@ _CENT = Decimal("0.01")
 
 
 class NotFoundError(LookupError):
-    """The store has no row with the requested id."""
+    """The store has no row with the requested id.
 
-    def __init__(self, entity: str, entity_id: str) -> None:
+    ``field`` and ``hint`` let a handler outside the mock store (a blob read) name its own
+    argument and advice; the store's own errors leave both unset and read exactly as before.
+    """
+
+    def __init__(self, entity: str, entity_id: str, *, field: str | None = None, hint: str | None = None) -> None:
         super().__init__(f"{entity} {entity_id!r} was not found")
         self.entity = entity
         self.entity_id = entity_id
+        self.field = field
+        self.hint = hint
+
+
+class ArgumentRejected(ValueError):
+    """A handler refused a well-formed argument it can only check against its own state.
+
+    The executor reports it as ``invalid_arguments`` naming ``field`` (a JSON Pointer), never as a
+    handler crash. No store handler raises it; a blob read uses it for an offset past the end.
+    """
+
+    def __init__(self, field: str, problem: str, got: Any = None) -> None:
+        super().__init__(f"{field}: {problem}")
+        self.field = field
+        self.problem = problem
+        self.got = got
 
 
 class StoreConflictError(ValueError):
@@ -535,6 +555,7 @@ def _lookup(rows: dict[str, Any], entity: str, entity_id: str) -> Any:
 
 
 __all__ = [
+    "ArgumentRejected",
     "CANCELLABLE_STATUSES",
     "Customer",
     "FIXTURE_PATH",

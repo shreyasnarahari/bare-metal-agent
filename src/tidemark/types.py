@@ -70,6 +70,9 @@ class ContextConfig:
     allowed_tool_names: tuple[str, ...] | None = None
     recitation: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_RECITATION))
     overflow: str = "exhaust"
+    # Part 3: the observation shaping configuration (tidemark.observations.ObservationConfig.as_dict: reducer
+    # policy, blob namespace, catalog id, formats). None disables shaping and leaves the canonical form unchanged.
+    observations: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -137,6 +140,8 @@ class ContextConfig:
             "allowed_tool_names": list(self.allowed_tool_names) if self.allowed_tool_names is not None else None,
             "recitation": dict(sorted(self.recitation.items())),
             "overflow": self.overflow,
+            # Present only with shaping, so part 1 and 2 configuration hashes are unchanged.
+            **({"observations": dict(self.observations)} if self.observations is not None else {}),
         }
 
     def sha256(self) -> str:
@@ -147,7 +152,7 @@ class ContextConfig:
         known = {
             "version", "strategy", "slot_context", "max_tokens", "safety_margin", "soft_limit", "segment_caps",
             "tokenizer", "template_sha256", "generation_path", "cache_semantics", "pinned_memory",
-            "allowed_tool_names", "recitation", "overflow",
+            "allowed_tool_names", "recitation", "overflow", "observations",
         }
         unexpected = set(value) - known
         if unexpected:

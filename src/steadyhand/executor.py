@@ -29,6 +29,16 @@ this executor, distinguishes a sandbox or proxy that failed to start
 (``sandbox_violation``), an exhausted ceiling (``resource_exhausted``), a
 deadline (``timeout``), and an ordinary result (any exit code or signal).
 
+Trusted execution resources (Tidemark part 3) reach a handler the same way
+the idempotency key does: ``execution_context`` is a server-side parameter,
+hidden from every model-facing schema, and passed only to handlers whose
+signature names it (``read_blob``). The server builds it (episode id, step, a
+read-only journal view, the episode's blob namespace, taint); the model can
+never choose a path, root, or tenant through it. Handlers without the
+parameter see no change. A handler that refuses a well-formed argument it can
+only check against its own state raises ``ArgumentRejected`` and the model
+gets ``invalid_arguments`` for that field.
+
 A timed-out thread cannot be killed and keeps running in the background. The
 real store handlers are microsecond-scale dict operations, so in practice only
 a deliberately blocking stub reaches the timeout. Such stubs must not touch the
@@ -51,12 +61,13 @@ from toolsmith.evaluation.models import canonical_hash
 from .errors import ErrorObservation
 from .policy import Effect, ToolPolicy
 from .registry import SteadyhandRegistry
-from .store import NotFoundError, Store
+from .store import ArgumentRejected, NotFoundError, Store
 from .types import ToolCall, ToolResult
 from .validate import (
     decode_arguments,
     handler_error_observation,
     not_found_observation,
+    rejected_argument_observation,
     sandbox_violation_observation,
     timeout_observation,
     unknown_tool_observation,
@@ -85,10 +96,12 @@ class SequentialExecutor:
         idempotency_key: str | None = None,
         call_index: int | None = None,
         backend: BackendRunner | None = None,
+        execution_context: Any = None,
     ) -> ToolResult:
         """``idempotency_key`` reaches handlers that accept one (the server side of strategy d).
         ``call_index`` is an injector index reserved earlier, for parallel reads. ``backend`` runs
-        calls that must never run in-process; without it they are refused."""
+        calls that must never run in-process; without it they are refused. ``execution_context``
+        (trusted server resources) reaches only handlers that name it."""
         started = time.monotonic()
 
         def refused(error: ErrorObservation, digest: str | None) -> ToolResult:
@@ -124,6 +137,9 @@ class SequentialExecutor:
         handler_arguments = dict(arguments)
         if idempotency_key is not None and _accepts_key(tool.handler):
             handler_arguments["idempotency_key"] = idempotency_key
+        # Trusted resources likewise: only handlers that name the parameter receive them.
+        if _accepts_context(tool.handler):
+            handler_arguments["execution_context"] = execution_context
 
         def invoke(target: Store) -> ToolResult:
             if needs_backend:
@@ -175,6 +191,8 @@ class SequentialExecutor:
             return failed(timeout_observation(call.name, policy))
         if isinstance(raised, NotFoundError):
             return failed(not_found_observation(call.name, raised))
+        if isinstance(raised, ArgumentRejected):
+            return failed(rejected_argument_observation(call.name, raised))
         if raised is not None:
             return failed(handler_error_observation(call.name, f"{type(raised).__name__}: {raised}"))
         # A result must be plain JSON: it goes into the conversation and the journal as is.
@@ -222,6 +240,12 @@ class SequentialExecutor:
 @lru_cache(maxsize=None)
 def _accepts_key(handler: Any) -> bool:
     return "idempotency_key" in inspect.signature(handler).parameters
+
+
+# Whether a handler takes trusted execution resources (cached: signatures never change).
+@lru_cache(maxsize=None)
+def _accepts_context(handler: Any) -> bool:
+    return "execution_context" in inspect.signature(handler).parameters
 
 
 __all__ = ["SequentialExecutor"]

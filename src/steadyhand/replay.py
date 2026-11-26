@@ -31,6 +31,11 @@ A Tidemark episode (its manifest carries a ``context_config``) replays only
 with a context session whose ``identity()`` equals that configuration; the
 session re-renders every request on CPU, so ``context_render`` and the
 rendered-message hash in each ``model_turn`` are re-derived and compared.
+With observation shaping (part 3) the session recomputes every shaped message
+from the recorded raw result and verifies, never writes, the blobs it names:
+a session's ``check_journal`` first refuses a journal whose referenced blobs
+are missing or corrupt, and the shaper checks each blob's catalog entry and
+bytes as it goes. Resume runs the same check before its first live call.
 Recorded turns come back with the metrics their ``backend_timings`` record
 holds, so counts and measurement paths reproduce exactly and only the
 declared timings are volatile.
@@ -59,7 +64,7 @@ from typing import Any
 from bulkhead.replay import BackendIdentity, ExecutionBackend, ExecutionOutcome, ExecutionRequest, RecordedExecutionBackend
 from toolsmith.evaluation.models import canonical_hash
 
-from .context import ContextSession
+from .context import ContextSession, check_recorded_journal
 from .controller import DEFAULT_GUARD_LIMIT, Budgets
 from .executor import SequentialExecutor
 from .faults import FaultSchedule
@@ -288,11 +293,15 @@ class ResumingBackend:
 
 
 def registry_for(schema_sha256: str) -> SteadyhandRegistry:
-    """The built-in registry whose model-facing schemas hash to ``schema_sha256`` (store tools, optionally exec tools)."""
-    for exec_tools in (False, True):
-        candidate = build_registry(exec_tools=exec_tools)
-        if candidate.schemas_sha256() == schema_sha256:
-            return candidate
+    """The built-in registry whose model-facing schemas hash to ``schema_sha256``.
+
+    Store tools, optionally with the exec tools and Tidemark's ``read_blob``.
+    """
+    for context_tools in (False, True):
+        for exec_tools in (False, True):
+            candidate = build_registry(exec_tools=exec_tools, context_tools=context_tools)
+            if candidate.schemas_sha256() == schema_sha256:
+                return candidate
     return build_registry()  # require_match then names the schema mismatch
 
 
@@ -367,6 +376,8 @@ def replay_episode(
         context_server=manifest.context_server,
     )
     require_match(manifest, current)
+    # A Tidemark session checks what the journal references (blobs) before anything re-runs.
+    check_recorded_journal(context, records)
 
     # Re-run with the model, clock, and cancellation all served from the recording. The journal
     # compares each new event with the recorded one instead of writing it.
@@ -482,6 +493,8 @@ def run_claimed_episode(
             if journal_path.exists():
                 _drop_torn_tail(journal_path)
                 expected = read_journal(journal_path)
+                # Missing or corrupt referenced blobs stop the resume before another model call.
+                check_recorded_journal(context, expected)
                 run_client = ResumingClient(ReplayClient.from_records(expected), client)
                 run_clock = ReplayClock.from_records(expected, live=clock)
                 if backend is not None:

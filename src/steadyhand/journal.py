@@ -37,6 +37,14 @@ exactly; the milliseconds (``attempt_timings``, ``ttft_ms``, ``prompt_ms``,
 ``predicted_ms``, ``response_elapsed_ms``) are volatile. Missing values stay
 null and never become zero. Journals written without a session are unchanged.
 
+Tidemark part 3 adds ``observation_shaped``, written immediately after the
+raw ``tool_result`` it shapes (``source_seq`` names that record, which must be
+the one just before it) and before any ``taint_transition``. It carries
+hashes, byte and real-token counts, bounded omitted ranges, the blob handle
+and catalog revision, and bounded preview metadata, never the raw or shaped
+payload (the ``tool_result`` and the shaped request history hold those). Every
+field compares exactly in replay. An unshaped observation writes no event.
+
 Only genuinely variable fields are volatile: model and tool timings, and a
 sandbox run's or egress decision's elapsed time, resource usage, and proxy
 byte counts. Verdicts, rule ids, taint labels, request hashes, and every
@@ -143,8 +151,19 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "reused_tokens", "cache_reuse_fraction", "cache_status", "ttft_ms", "prompt_ms", "predicted_ms",
         "response_elapsed_ms", "slot_id", "measurement_path",
     }),
+    # Tidemark part 3: one observation shaped at arrival (immediately after its tool_result).
+    "observation_shaped": frozenset({
+        "step", "source_seq", "tool_call_id", "tool", "reducer", "raw_content_sha256", "shaped_content_sha256",
+        "raw_bytes", "shaped_bytes", "raw_tokens", "shaped_tokens", "omitted_ranges", "blob_handle", "blob_bytes",
+        "blob_parts", "catalog_revision", "preview_metadata",
+    }),
 }
-CONTEXT_EVENTS = frozenset({"context_render", "backend_timings", "context_transition"})
+CONTEXT_EVENTS = frozenset({"context_render", "backend_timings", "context_transition", "observation_shaped"})
+# Bounds on observation_shaped evidence: it describes a payload, it never carries one.
+MAX_OMITTED_RANGES = 64
+MAX_PREVIEW_METADATA_BYTES = 4096
+_BLOB_HANDLE = re.compile(r"blob://sha256:[0-9a-f]{64}")
+OMITTED_RANGE_KEYS = frozenset({"part", "lines", "bytes", "items", "pointer", "count", "chars"})
 TRANSITIONS = ("start", "append", "truncate", "epoch")
 LINT_STATUSES = ("cold_start", "expected_append", "expected_tail_only", "expected_epoch", "violation")
 # Fields an event carries in exactly one of its forms.
@@ -286,6 +305,10 @@ def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
         problem = check_context_values(event, record)
         if problem is not None:
             raise JournalFormatError(f"{event}: {problem[1]}", seq=expected_seq, field=problem[0])
+    if event == "observation_shaped" and record["source_seq"] != expected_seq - 1:
+        raise JournalFormatError(
+            "observation_shaped must immediately follow the tool_result it shapes", seq=expected_seq, field="source_seq",
+        )
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -310,10 +333,66 @@ def _optional_hash(value: Any) -> bool:
     return value is None or (isinstance(value, str) and bool(_SHA256.fullmatch(value)))
 
 
+def _span(value: Any) -> bool:
+    return isinstance(value, list) and len(value) == 2 and all(_count(item) for item in value) and value[0] <= value[1]
+
+
+def check_observation_values(record: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The first bad value in an ``observation_shaped`` record, as ``(field, problem)``, or None."""
+    for name in ("source_seq", "raw_bytes", "shaped_bytes", "raw_tokens", "shaped_tokens"):
+        if not _count(record[name]):
+            return name, f"{name} must be a non-negative integer"
+    for name in ("tool_call_id", "tool", "reducer"):
+        if not isinstance(record[name], str) or not record[name]:
+            return name, f"{name} must be a non-empty string"
+    for name in ("raw_content_sha256", "shaped_content_sha256"):
+        if record[name] is None or not _optional_hash(record[name]):
+            return name, f"{name} must be a sha256 hex digest"
+    ranges = record["omitted_ranges"]
+    if not isinstance(ranges, list) or len(ranges) > MAX_OMITTED_RANGES:
+        return "omitted_ranges", f"omitted_ranges must be a list of at most {MAX_OMITTED_RANGES} ranges"
+    for item in ranges:
+        if not isinstance(item, dict) or not item or set(item) - OMITTED_RANGE_KEYS:
+            return "omitted_ranges", f"each omitted range is an object with keys from {sorted(OMITTED_RANGE_KEYS)}"
+        if any(name in item and not _span(item[name]) for name in ("lines", "bytes", "items", "chars")):
+            return "omitted_ranges", "lines, bytes, items, and chars are [start, end] pairs with start <= end"
+        if "count" in item and not _count(item["count"]):
+            return "omitted_ranges", "count must be a non-negative integer"
+        if any(name in item and not isinstance(item[name], str) for name in ("part", "pointer")):
+            return "omitted_ranges", "part and pointer must be strings"
+    parts = record["blob_parts"]
+    if not isinstance(parts, list) or not all(
+        isinstance(part, dict) and set(part) == {"part", "handle", "bytes"} and isinstance(part["part"], str)
+        and isinstance(part["handle"], str) and bool(_BLOB_HANDLE.fullmatch(part["handle"])) and _count(part["bytes"])
+        for part in parts
+    ):
+        return "blob_parts", "blob_parts holds {part, handle, bytes} objects with full sha256 handles"
+    handle, size, revision = record["blob_handle"], record["blob_bytes"], record["catalog_revision"]
+    if parts:
+        if handle != parts[0]["handle"] or size != parts[0]["bytes"]:
+            return "blob_handle", "blob_handle and blob_bytes name the first blob part"
+        if not _count(revision):
+            return "catalog_revision", "a shaped observation with a blob names its catalog revision"
+    elif handle is not None or size is not None or revision is not None:
+        return "blob_handle", "without blob parts, blob_handle, blob_bytes, and catalog_revision are null"
+    metadata = record["preview_metadata"]
+    if not isinstance(metadata, dict):
+        return "preview_metadata", "preview_metadata must be an object"
+    try:
+        size_bytes = len(json.dumps(metadata, ensure_ascii=False, allow_nan=False, sort_keys=True).encode("utf-8"))
+    except (TypeError, ValueError):
+        return "preview_metadata", "preview_metadata must be plain JSON"
+    if size_bytes > MAX_PREVIEW_METADATA_BYTES:
+        return "preview_metadata", f"preview_metadata must stay under {MAX_PREVIEW_METADATA_BYTES} bytes"
+    return None
+
+
 def check_context_values(event: str, record: Mapping[str, Any]) -> tuple[str, str] | None:
     """The first bad value in a Tidemark context record, as ``(field, problem)``, or None."""
     if not _count(record.get("step")):
         return "step", "step must be a non-negative integer"
+    if event == "observation_shaped":
+        return check_observation_values(record)
     if event == "context_transition":
         if record["transition"] not in TRANSITIONS:
             return "transition", f"unknown transition {record['transition']!r}"
@@ -684,6 +763,42 @@ class EpisodeJournal:
             "response_elapsed_ms": _round_ms(response_elapsed_ms),
             "slot_id": slot_id,
             "measurement_path": measurement_path,
+        })
+
+    def observation_shaped(
+        self,
+        *,
+        step: int,
+        source_seq: int,
+        tool_call_id: str,
+        tool: str,
+        reducer: str,
+        raw_content_sha256: str,
+        shaped_content_sha256: str,
+        raw_bytes: int,
+        shaped_bytes: int,
+        raw_tokens: int,
+        shaped_tokens: int,
+        omitted_ranges: Sequence[Mapping[str, Any]],
+        blob_handle: str | None,
+        blob_bytes: int | None,
+        blob_parts: Sequence[Mapping[str, Any]],
+        catalog_revision: int | None,
+        preview_metadata: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """How one observation was shaped at arrival: hashes, counts, ranges, and handles, never the payload."""
+        previous = self.records[-1] if self.records else None
+        if previous is None or previous["seq"] != source_seq or previous["event"] != "tool_result" or (
+            previous["tool_call_id"] != tool_call_id
+        ):
+            raise ValueError("observation_shaped must immediately follow the tool_result it shapes")
+        return self._context("observation_shaped", {
+            "step": step, "source_seq": source_seq, "tool_call_id": tool_call_id, "tool": tool, "reducer": reducer,
+            "raw_content_sha256": raw_content_sha256, "shaped_content_sha256": shaped_content_sha256,
+            "raw_bytes": raw_bytes, "shaped_bytes": shaped_bytes, "raw_tokens": raw_tokens,
+            "shaped_tokens": shaped_tokens, "omitted_ranges": [dict(item) for item in omitted_ranges],
+            "blob_handle": blob_handle, "blob_bytes": blob_bytes, "blob_parts": [dict(part) for part in blob_parts],
+            "catalog_revision": catalog_revision, "preview_metadata": dict(preview_metadata),
         })
 
     def _context(self, event: str, fields: dict[str, Any]) -> dict[str, Any]:

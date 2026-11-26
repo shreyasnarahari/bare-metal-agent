@@ -340,7 +340,19 @@ class ResourceSampler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._extra: dict[str, Callable[[], Mapping[str, Any]]] = {}
         self.samples_written = 0
+
+    def add_counts(self, name: str, counts: Callable[[], Mapping[str, Any]] | None) -> None:
+        """Add (or with ``None`` remove) another source of counts merged into every later sample.
+
+        Part 3 adds the shaping pool (running, waiting, in-flight bytes) without rebuilding the sampler.
+        """
+        with self._lock:
+            if counts is None:
+                self._extra.pop(name, None)
+            else:
+                self._extra[name] = counts
 
     def set_phase(self, phase: str) -> None:
         """Label later samples: ``setup``, ``autotune``, ``scored``, ``drain``, or a custom phase."""
@@ -392,6 +404,7 @@ class ResourceSampler:
                 "disk_free_mib": disk,
                 **((self._gpu.latest or {}) if self._gpu is not None else {}),
                 **dict(self._snapshot() if self._snapshot else {}),
+                **{key: value for counts in self._extra.values() for key, value in dict(counts()).items()},
                 "drive_lag_s": self._drive_lag() if self._drive_lag else None,
             }
             self.path.parent.mkdir(parents=True, exist_ok=True)

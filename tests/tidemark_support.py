@@ -85,3 +85,51 @@ class FakeService:
 
     def render_prompt(self, request):
         return qwen_like_render(request.messages, request.tools, request.tool_choice)
+
+
+# Part 3: shaping sessions, blob stores, and registries with large-output tools.
+
+
+def shaping_session(root, namespace="ep-ns", *, read_only=False, policy=None, slot_context=16384, cache=None, pool=None,
+                    tokenizer=None):
+    """A prefix-stable session with an observation shaper over the blob store at ``root``."""
+    from tidemark.assembler import PrefixStableSession, SpanRenderer
+    from tidemark.blobs import BlobStore
+    from tidemark.eval.prefix import ChatMLTemplate
+    from tidemark.observations import DEFAULT_POLICY, ObservationConfig, ObservationShaper
+    from tidemark.tokenizer import RegexTokenizer
+    from tidemark.types import ContextConfig
+
+    tokenizer = tokenizer or RegexTokenizer()
+    store = BlobStore(root, read_only=read_only)
+    config = ObservationConfig.for_store(store, namespace, policy or DEFAULT_POLICY)
+    context = ContextConfig(slot_context=slot_context, max_tokens=256, strategy="prefix_stable",
+                            tokenizer=tokenizer.identity(), observations=config.as_dict())
+    shaper = ObservationShaper(config, tokenizer, store, cache=cache, pool=pool)
+    renderer = SpanRenderer(ChatMLTemplate(), tokenizer, protocol=QWEN3_PROFILE.protocol)
+    return PrefixStableSession(context, renderer, observations=shaper)
+
+
+def tool_registry(*handlers, context_tools=True, secure=True):
+    """The ten store tools, extra read tools with untrusted output (``handlers``), and ``read_blob``."""
+    from bulkhead.manifest import SecuritySpec, Trust
+    from steadyhand.registry import SteadyhandRegistry
+    from steadyhand.tools import READ_POLICY, RESULT_SCHEMAS, TOOL_SECURITY, TOOL_SPECS
+    from steadyhand.tools_context import register_context_tools
+
+    registry = SteadyhandRegistry()
+    for handler, policy, semantic in TOOL_SPECS:
+        registry.register(handler, policy, semantic, RESULT_SCHEMAS[handler.__name__], security=TOOL_SECURITY[handler.__name__])
+    for handler in handlers:
+        spec = SecuritySpec(sandbox=None, output_trust=Trust.UNTRUSTED, sinks=()) if secure else None
+        registry.register(handler, READ_POLICY, security=spec)
+    if context_tools:
+        register_context_tools(registry)
+    return registry.freeze()
+
+
+def big_log(lines=3000, critical_at=1500, critical="src/net/socket.c:88:12: error: 'fd' undeclared (first use in this function)"):
+    rows = [f"step {i}: compiling module_{i}.c ok" for i in range(lines)]
+    if critical_at is not None:
+        rows[critical_at] = critical
+    return "".join(row + "\n" for row in rows)

@@ -1,0 +1,61 @@
+{
+  "entries": {
+    "api-nested-flags": {
+      "blob_handles": [
+        "blob://sha256:99fc8102a08f8c324694cfc8f103571e29ff80a6385fb5fbad9cae2c44482b0c"
+      ],
+      "omitted_ranges": 25,
+      "shaped_content_sha256": "9155c4e4bb7070352561590f1f6b0c387ed7aa08e3f891ec1669dd6e818ab206",
+      "shaped_tokens": 630
+    },
+    "deploy-log-critical-middle": {
+      "blob_handles": [
+        "blob://sha256:b31333a22033db462478e87c6f4760e1b030aa016cbc6c00eb5ac92166bdf6a1"
+      ],
+      "omitted_ranges": 2,
+      "shaped_content_sha256": "6d0d94d83fe33458dfabcf650615781605d0a63c1de54a198a3db14228050d51",
+      "shaped_tokens": 821
+    },
+    "exec-control-bytes": {
+      "blob_handles": [
+        "blob://sha256:6940ef9c681920e7edf841cc5c3bb47cfaae8e63ace465cc56eea0b87d5317e1",
+        "blob://sha256:f879caf243f1822c82ec04029d2c328264f16f67c707eb7f477fdf823e6f7c80"
+      ],
+      "omitted_ranges": 2,
+      "shaped_content_sha256": "383b2acbc14c379e14b369c2c250becd3b5e482e63c7785b1b204469142ab1a1",
+      "shaped_tokens": 915
+    },
+    "gcc-make-undeclared": {
+      "blob_handles": [
+        "blob://sha256:68d3672ee140e987c10a1d6f0547e81f741ef4acdf10090175e7f420827d0db8"
+      ],
+      "omitted_ranges": 2,
+      "shaped_content_sha256": "85dddf8ed8554e3a0196d9597031eb1bb5c16097ea2b9d3334c3b03949c6c7e6",
+      "shaped_tokens": 779
+    },
+    "html-runbook-link": {
+      "blob_handles": [
+        "blob://sha256:38ffbd68f1219a4586461d5e9e78b854318f289eb75e478f682c540fa5194e2e"
+      ],
+      "omitted_ranges": 1,
+      "shaped_content_sha256": "eb02f24b9de59bdc484a030b6f36c8c85e87c8c455d517114fccf5a967bd979d",
+      "shaped_tokens": 775
+    },
+    "store-payments-420-refunds": {
+      "blob_handles": [
+        "blob://sha256:fa3e0734c763b29e29e8ee98a0969877870a544dd6b1560d80b80abadc850dc0"
+      ],
+      "omitted_ranges": 4,
+      "shaped_content_sha256": "eed2c6908e74b47c23637b79db686eaf8b99e635d4edae1f9eaa4201dc0dc6aa",
+      "shaped_tokens": 580
+    }
+  },
+  "note": "sha256 of each entry's shaped message content and its blob handles, under the default policy and the CPU fake tokenizer (regex-fake-v1). A change here changes recorded journals: bump REDUCER_VERSION and regenerate deliberately.",
+  "policy_sha256": "ec01bef050f86b58f2fad0361e2be79723ab4609bfe8f603ceae526b7e012f70",
+  "reducer_version": "tidemark-reducers-v1",
+  "tokenizer": {
+    "kind": "fake",
+    "name": "regex-fake-v1",
+    "parity": "not_applicable"
+  }
+}

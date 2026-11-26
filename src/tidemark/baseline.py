@@ -40,6 +40,7 @@ from steadyhand.types import ModelTurn
 from toolsmith.evaluation.models import canonical_hash
 
 from . import __version__
+from .observations import ObservationShaper, ShapingSupport
 from .telemetry import backend_timing_fields
 from .tokenizer import Tokenizer, token_ids_sha256
 from .types import ContextConfig
@@ -144,15 +145,21 @@ def _ranges(indexes: Sequence[int]) -> tuple[tuple[int, int], ...]:
     return tuple((start, end) for start, end in ranges)
 
 
-class NaiveAppendTruncate:
-    """Part 1's measurement baseline (see the module docstring). One instance per episode."""
+class NaiveAppendTruncate(ShapingSupport):
+    """Part 1's measurement baseline (see the module docstring). One instance per episode.
+
+    ``observations`` (part 3) shapes large tool results once, at arrival, for paired ablations;
+    without it every observation stays exactly as it arrived.
+    """
 
     strategy = "naive_append_truncate"
     version = __version__
 
-    def __init__(self, config: ContextConfig, *, render: PromptRender, tokenizer: Tokenizer) -> None:
+    def __init__(self, config: ContextConfig, *, render: PromptRender, tokenizer: Tokenizer,
+                 observations: ObservationShaper | None = None) -> None:
         if config.strategy != self.strategy:
             raise ValueError(f"NaiveAppendTruncate needs strategy {self.strategy!r}, not {config.strategy!r}")
+        self._init_shaping(observations, config.observations)
         self.config = config
         self._render = render
         self._tokenizer = tokenizer

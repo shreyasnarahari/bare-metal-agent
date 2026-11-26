@@ -129,6 +129,8 @@ class RecoveryContext:
     verified: bool = False
     switched: bool = False
     security: SecurityGate | None = None
+    # Trusted server resources for handlers that take them (read_blob); the same object the first attempt got.
+    execution_context: Any = None
 
     @property
     def validated(self) -> bool:
@@ -161,6 +163,8 @@ class RecoveryContext:
             options["injector"] = self.injector
         if key is not None:
             options["idempotency_key"] = key
+        if self.execution_context is not None:
+            options["execution_context"] = self.execution_context
         result = self.executor.run(call, registry, self.store, **options)
         if result.fault is not None:
             self.journal.injected_fault(step=self.step, fault=result.fault.as_dict())

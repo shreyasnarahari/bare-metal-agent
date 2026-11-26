@@ -1,0 +1,3378 @@
+{
+ "captured_total_inr": "48210.00",
+ "ledger_entries": [],
+ "order_id": "ord_4417",
+ "payments": [
+  {
+   "amount_inr": "48210.00",
+   "created_at": "2026-11-03T09:15:00.000Z",
+   "method": "upi",
+   "order_id": "ord_4417",
+   "payment_id": "pay_771",
+   "status": "captured"
+  }
+ ],
+ "refunded_total_inr": "19033.00",
+ "refunds": [
+  {
+   "amount_inr": "53.00",
+   "created_at": "2026-11-03T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 0: duplicate duplicate late late missing missing missing missing duplicate late damaged missing",
+   "refund_id": "ref_9000",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "84.00",
+   "created_at": "2026-11-03T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 1: late duplicate missing late missing late damaged damaged late late missing late",
+   "refund_id": "ref_9001",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "74.00",
+   "created_at": "2026-11-03T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 2: late missing late damaged damaged missing duplicate duplicate missing damaged missing duplicate",
+   "refund_id": "ref_9002",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-03T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 3: duplicate damaged damaged duplicate damaged damaged damaged late damaged late missing missing",
+   "refund_id": "ref_9003",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "74.00",
+   "created_at": "2026-11-03T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 4: missing damaged missing late late duplicate duplicate duplicate missing duplicate duplicate duplicate",
+   "refund_id": "ref_9004",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-03T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 5: late missing duplicate duplicate duplicate missing late duplicate damaged missing missing missing",
+   "refund_id": "ref_9005",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-03T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 6: missing late missing duplicate late late damaged late duplicate damaged missing late",
+   "refund_id": "ref_9006",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "9.00",
+   "created_at": "2026-11-03T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 7: damaged duplicate duplicate damaged duplicate missing duplicate damaged duplicate late duplicate duplicate",
+   "refund_id": "ref_9007",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-03T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 8: missing damaged duplicate missing missing missing late late missing late missing late",
+   "refund_id": "ref_9008",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-03T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 9: missing damaged late damaged duplicate late damaged duplicate duplicate late duplicate damaged",
+   "refund_id": "ref_9009",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-03T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 10: damaged damaged late damaged duplicate late damaged late missing damaged duplicate late",
+   "refund_id": "ref_9010",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-03T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 11: late damaged late duplicate late damaged duplicate missing duplicate duplicate damaged late",
+   "refund_id": "ref_9011",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "54.00",
+   "created_at": "2026-11-03T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 12: damaged duplicate missing damaged missing damaged missing late missing missing late late",
+   "refund_id": "ref_9012",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-03T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 13: damaged missing late late missing damaged late missing duplicate duplicate damaged missing",
+   "refund_id": "ref_9013",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "5.00",
+   "created_at": "2026-11-03T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 14: damaged missing late missing damaged missing damaged damaged late missing damaged duplicate",
+   "refund_id": "ref_9014",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "18.00",
+   "created_at": "2026-11-04T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 15: late missing missing duplicate late late late late duplicate duplicate duplicate duplicate",
+   "refund_id": "ref_9015",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-04T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 16: missing duplicate damaged duplicate late damaged damaged duplicate damaged duplicate damaged damaged",
+   "refund_id": "ref_9016",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "57.00",
+   "created_at": "2026-11-04T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 17: late missing duplicate damaged late duplicate missing late damaged damaged missing missing",
+   "refund_id": "ref_9017",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "22.00",
+   "created_at": "2026-11-04T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 18: missing late duplicate duplicate damaged missing late duplicate late duplicate late duplicate",
+   "refund_id": "ref_9018",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-04T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 19: late duplicate missing missing missing late late late missing duplicate missing late",
+   "refund_id": "ref_9019",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "53.00",
+   "created_at": "2026-11-04T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 20: late missing missing duplicate late missing damaged duplicate missing late late missing",
+   "refund_id": "ref_9020",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "42.00",
+   "created_at": "2026-11-04T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 21: duplicate duplicate damaged duplicate damaged late late damaged duplicate late late missing",
+   "refund_id": "ref_9021",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-04T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 22: damaged late missing damaged missing missing missing missing late missing damaged duplicate",
+   "refund_id": "ref_9022",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "70.00",
+   "created_at": "2026-11-04T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 23: duplicate damaged missing damaged duplicate duplicate damaged duplicate late damaged missing damaged",
+   "refund_id": "ref_9023",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-04T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 24: duplicate missing missing duplicate damaged duplicate missing late late missing late duplicate",
+   "refund_id": "ref_9024",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-04T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 25: missing duplicate damaged duplicate late missing missing duplicate damaged damaged damaged missing",
+   "refund_id": "ref_9025",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "3.00",
+   "created_at": "2026-11-04T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 26: damaged duplicate missing late duplicate missing damaged late missing damaged missing duplicate",
+   "refund_id": "ref_9026",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "76.00",
+   "created_at": "2026-11-04T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 27: missing missing duplicate damaged damaged late damaged damaged duplicate late missing duplicate",
+   "refund_id": "ref_9027",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-04T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 28: late duplicate missing missing late missing late missing late damaged damaged late",
+   "refund_id": "ref_9028",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "46.00",
+   "created_at": "2026-11-04T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 29: duplicate duplicate duplicate damaged duplicate damaged late damaged missing damaged damaged damaged",
+   "refund_id": "ref_9029",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-04T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 30: duplicate damaged missing damaged missing missing damaged damaged late late duplicate duplicate",
+   "refund_id": "ref_9030",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-04T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 31: late damaged damaged duplicate damaged duplicate duplicate duplicate late damaged missing missing",
+   "refund_id": "ref_9031",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-04T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 32: duplicate missing damaged missing missing duplicate duplicate damaged damaged late late duplicate",
+   "refund_id": "ref_9032",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "73.00",
+   "created_at": "2026-11-04T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 33: duplicate late missing duplicate damaged missing missing missing damaged late missing late",
+   "refund_id": "ref_9033",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "85.00",
+   "created_at": "2026-11-04T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 34: late duplicate duplicate missing duplicate late damaged damaged late late missing damaged",
+   "refund_id": "ref_9034",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-04T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 35: damaged duplicate duplicate missing duplicate duplicate late damaged late missing late duplicate",
+   "refund_id": "ref_9035",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-04T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 36: late missing duplicate damaged damaged damaged duplicate duplicate damaged late damaged missing",
+   "refund_id": "ref_9036",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-04T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 37: damaged damaged missing duplicate missing missing damaged damaged duplicate damaged duplicate late",
+   "refund_id": "ref_9037",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "17.00",
+   "created_at": "2026-11-04T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 38: late damaged missing missing damaged missing late duplicate late damaged damaged missing",
+   "refund_id": "ref_9038",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-05T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 39: late damaged late missing damaged late missing duplicate damaged duplicate late late",
+   "refund_id": "ref_9039",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-05T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 40: missing duplicate damaged late missing damaged missing late damaged missing duplicate missing",
+   "refund_id": "ref_9040",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-05T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 41: late damaged missing late missing damaged late damaged damaged damaged missing duplicate",
+   "refund_id": "ref_9041",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-05T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 42: late late missing missing late duplicate missing duplicate duplicate damaged late missing",
+   "refund_id": "ref_9042",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-05T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 43: missing duplicate duplicate late late duplicate missing damaged duplicate duplicate late missing",
+   "refund_id": "ref_9043",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-05T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 44: missing duplicate duplicate missing duplicate damaged duplicate late damaged late damaged missing",
+   "refund_id": "ref_9044",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-05T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 45: damaged late late missing duplicate late damaged duplicate damaged missing duplicate damaged",
+   "refund_id": "ref_9045",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-05T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 46: damaged duplicate duplicate duplicate duplicate duplicate duplicate late damaged late missing damaged",
+   "refund_id": "ref_9046",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-05T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 47: duplicate duplicate duplicate duplicate duplicate late late duplicate late late damaged damaged",
+   "refund_id": "ref_9047",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "69.00",
+   "created_at": "2026-11-05T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 48: missing duplicate duplicate missing late missing duplicate missing damaged missing late missing",
+   "refund_id": "ref_9048",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-05T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 49: missing late damaged late missing damaged duplicate damaged late damaged late damaged",
+   "refund_id": "ref_9049",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "54.00",
+   "created_at": "2026-11-05T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 50: late missing damaged late late missing duplicate missing late missing missing duplicate",
+   "refund_id": "ref_9050",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "36.00",
+   "created_at": "2026-11-05T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 51: late missing damaged missing late damaged missing late duplicate damaged late duplicate",
+   "refund_id": "ref_9051",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "36.00",
+   "created_at": "2026-11-05T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 52: damaged duplicate duplicate damaged late duplicate damaged damaged late duplicate damaged late",
+   "refund_id": "ref_9052",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "33.00",
+   "created_at": "2026-11-05T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 53: damaged late missing damaged missing late late late duplicate duplicate missing late",
+   "refund_id": "ref_9053",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "17.00",
+   "created_at": "2026-11-05T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 54: damaged damaged damaged missing missing late missing duplicate missing missing late missing",
+   "refund_id": "ref_9054",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "50.00",
+   "created_at": "2026-11-05T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 55: damaged duplicate missing damaged missing late duplicate duplicate late duplicate duplicate late",
+   "refund_id": "ref_9055",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-05T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 56: duplicate duplicate damaged missing damaged missing damaged missing late missing late damaged",
+   "refund_id": "ref_9056",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-05T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 57: duplicate missing missing missing missing missing damaged damaged damaged late late damaged",
+   "refund_id": "ref_9057",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "67.00",
+   "created_at": "2026-11-05T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 58: late late damaged late duplicate damaged damaged damaged missing missing late damaged",
+   "refund_id": "ref_9058",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "72.00",
+   "created_at": "2026-11-05T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 59: late missing damaged damaged duplicate late damaged duplicate damaged damaged duplicate missing",
+   "refund_id": "ref_9059",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "76.00",
+   "created_at": "2026-11-05T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 60: late late late damaged duplicate damaged duplicate missing duplicate damaged damaged late",
+   "refund_id": "ref_9060",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "48.00",
+   "created_at": "2026-11-05T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 61: damaged damaged late damaged duplicate damaged missing missing duplicate missing duplicate duplicate",
+   "refund_id": "ref_9061",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-05T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 62: damaged late missing damaged duplicate duplicate duplicate late duplicate duplicate duplicate damaged",
+   "refund_id": "ref_9062",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "71.00",
+   "created_at": "2026-11-06T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 63: missing missing late missing missing damaged damaged damaged damaged missing duplicate damaged",
+   "refund_id": "ref_9063",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-06T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 64: late late missing duplicate missing damaged damaged duplicate damaged duplicate late missing",
+   "refund_id": "ref_9064",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "72.00",
+   "created_at": "2026-11-06T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 65: missing damaged duplicate duplicate damaged duplicate missing late duplicate damaged late damaged",
+   "refund_id": "ref_9065",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "3.00",
+   "created_at": "2026-11-06T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 66: duplicate late late missing missing late damaged damaged missing duplicate late late",
+   "refund_id": "ref_9066",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-06T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 67: damaged damaged missing late duplicate late missing duplicate duplicate missing late duplicate",
+   "refund_id": "ref_9067",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "73.00",
+   "created_at": "2026-11-06T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 68: missing missing damaged duplicate late missing damaged missing damaged late missing late",
+   "refund_id": "ref_9068",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-06T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 69: damaged damaged duplicate late damaged duplicate missing late missing missing late damaged",
+   "refund_id": "ref_9069",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-06T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 70: missing damaged duplicate damaged damaged late duplicate duplicate missing duplicate late damaged",
+   "refund_id": "ref_9070",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "70.00",
+   "created_at": "2026-11-06T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 71: damaged missing damaged missing damaged late damaged missing duplicate duplicate damaged missing",
+   "refund_id": "ref_9071",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-06T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 72: duplicate late missing duplicate damaged damaged damaged late damaged late damaged missing",
+   "refund_id": "ref_9072",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-06T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 73: duplicate damaged late damaged duplicate damaged late damaged missing damaged late late",
+   "refund_id": "ref_9073",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-06T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 74: late damaged damaged duplicate duplicate damaged missing duplicate missing duplicate late duplicate",
+   "refund_id": "ref_9074",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "82.00",
+   "created_at": "2026-11-06T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 75: duplicate missing damaged duplicate duplicate late missing missing duplicate late missing duplicate",
+   "refund_id": "ref_9075",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "47.00",
+   "created_at": "2026-11-06T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 76: missing damaged late missing missing duplicate duplicate duplicate damaged missing duplicate duplicate",
+   "refund_id": "ref_9076",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-06T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 77: damaged damaged duplicate missing damaged late duplicate damaged duplicate late duplicate damaged",
+   "refund_id": "ref_9077",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-06T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 78: late damaged missing duplicate damaged duplicate late late late duplicate late missing",
+   "refund_id": "ref_9078",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "59.00",
+   "created_at": "2026-11-06T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 79: damaged damaged missing late late late missing missing late duplicate damaged late",
+   "refund_id": "ref_9079",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-06T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 80: duplicate late late missing damaged missing late late damaged late missing duplicate",
+   "refund_id": "ref_9080",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "45.00",
+   "created_at": "2026-11-06T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 81: damaged missing duplicate damaged missing missing late late damaged duplicate damaged missing",
+   "refund_id": "ref_9081",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "18.00",
+   "created_at": "2026-11-06T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 82: late missing duplicate damaged duplicate duplicate missing damaged damaged late late missing",
+   "refund_id": "ref_9082",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-06T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 83: damaged missing duplicate missing missing duplicate damaged duplicate damaged missing late missing",
+   "refund_id": "ref_9083",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-06T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 84: damaged late damaged duplicate duplicate duplicate missing late duplicate late duplicate late",
+   "refund_id": "ref_9084",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "51.00",
+   "created_at": "2026-11-06T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 85: duplicate missing missing late duplicate duplicate damaged damaged damaged missing damaged damaged",
+   "refund_id": "ref_9085",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-06T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 86: damaged late duplicate late damaged damaged damaged late damaged duplicate late damaged",
+   "refund_id": "ref_9086",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "48.00",
+   "created_at": "2026-11-07T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 87: damaged damaged late duplicate late missing late late duplicate missing duplicate damaged",
+   "refund_id": "ref_9087",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-07T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 88: damaged missing late late duplicate late duplicate duplicate late duplicate late late",
+   "refund_id": "ref_9088",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "12.00",
+   "created_at": "2026-11-07T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 89: duplicate missing late duplicate duplicate missing missing damaged late missing late late",
+   "refund_id": "ref_9089",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "76.00",
+   "created_at": "2026-11-07T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 90: missing late damaged missing late late damaged damaged duplicate damaged damaged missing",
+   "refund_id": "ref_9090",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-07T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 91: missing duplicate late late damaged damaged missing damaged damaged missing damaged damaged",
+   "refund_id": "ref_9091",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-07T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 92: late missing duplicate duplicate damaged late late late late late damaged late",
+   "refund_id": "ref_9092",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-07T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 93: damaged missing late duplicate damaged missing missing duplicate late duplicate late duplicate",
+   "refund_id": "ref_9093",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-07T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 94: missing damaged duplicate duplicate missing late missing missing missing damaged duplicate duplicate",
+   "refund_id": "ref_9094",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-07T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 95: late damaged missing late missing duplicate late missing duplicate damaged late late",
+   "refund_id": "ref_9095",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-07T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 96: late late missing missing duplicate missing damaged late missing missing damaged missing",
+   "refund_id": "ref_9096",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "3.00",
+   "created_at": "2026-11-07T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 97: missing damaged duplicate damaged late late late duplicate duplicate missing duplicate missing",
+   "refund_id": "ref_9097",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-07T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 98: damaged missing late missing duplicate late late damaged late damaged duplicate damaged",
+   "refund_id": "ref_9098",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "9.00",
+   "created_at": "2026-11-07T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 99: late damaged duplicate missing damaged missing missing damaged damaged late late damaged",
+   "refund_id": "ref_9099",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "9.00",
+   "created_at": "2026-11-07T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 100: late missing missing missing duplicate missing duplicate duplicate duplicate damaged late duplicate",
+   "refund_id": "ref_9100",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-07T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 101: duplicate missing late damaged damaged duplicate late late damaged late missing duplicate",
+   "refund_id": "ref_9101",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-07T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 102: missing missing late late duplicate damaged duplicate duplicate damaged late late missing",
+   "refund_id": "ref_9102",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-07T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 103: duplicate late duplicate duplicate missing missing damaged damaged late late late late",
+   "refund_id": "ref_9103",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-07T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 104: missing duplicate damaged late damaged missing duplicate missing duplicate late missing damaged",
+   "refund_id": "ref_9104",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "36.00",
+   "created_at": "2026-11-07T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 105: missing duplicate missing damaged missing damaged late late late late missing damaged",
+   "refund_id": "ref_9105",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-07T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 106: missing damaged missing damaged late late late duplicate duplicate late duplicate damaged",
+   "refund_id": "ref_9106",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "17.00",
+   "created_at": "2026-11-07T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 107: damaged damaged duplicate missing missing missing duplicate duplicate damaged damaged duplicate duplicate",
+   "refund_id": "ref_9107",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-07T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 108: damaged damaged missing missing late damaged late damaged damaged damaged late late",
+   "refund_id": "ref_9108",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-07T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 109: damaged damaged missing damaged damaged damaged damaged duplicate missing damaged missing late",
+   "refund_id": "ref_9109",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-07T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 110: late duplicate missing damaged late late damaged missing missing missing missing late",
+   "refund_id": "ref_9110",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "88.00",
+   "created_at": "2026-11-08T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 111: late late duplicate missing missing duplicate damaged missing missing damaged late damaged",
+   "refund_id": "ref_9111",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "14.00",
+   "created_at": "2026-11-08T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 112: duplicate missing missing damaged damaged missing late missing late damaged missing missing",
+   "refund_id": "ref_9112",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-08T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 113: missing damaged damaged duplicate damaged duplicate damaged duplicate damaged duplicate late duplicate",
+   "refund_id": "ref_9113",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "30.00",
+   "created_at": "2026-11-08T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 114: missing damaged missing missing duplicate missing missing damaged duplicate damaged duplicate damaged",
+   "refund_id": "ref_9114",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-08T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 115: duplicate missing missing damaged missing damaged late duplicate late duplicate missing late",
+   "refund_id": "ref_9115",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "45.00",
+   "created_at": "2026-11-08T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 116: damaged late duplicate missing missing late missing missing late late damaged late",
+   "refund_id": "ref_9116",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-08T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 117: late missing duplicate late duplicate duplicate damaged damaged late late damaged missing",
+   "refund_id": "ref_9117",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-08T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 118: missing missing damaged duplicate damaged damaged late duplicate duplicate damaged late damaged",
+   "refund_id": "ref_9118",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "65.00",
+   "created_at": "2026-11-08T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 119: duplicate duplicate missing damaged missing missing late late damaged duplicate duplicate missing",
+   "refund_id": "ref_9119",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-08T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 120: late missing duplicate duplicate duplicate late missing late late late missing damaged",
+   "refund_id": "ref_9120",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-08T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 121: missing duplicate late late late missing duplicate damaged duplicate duplicate duplicate missing",
+   "refund_id": "ref_9121",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "7.00",
+   "created_at": "2026-11-08T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 122: damaged duplicate late duplicate late damaged missing duplicate late missing late late",
+   "refund_id": "ref_9122",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-08T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 123: late duplicate late missing damaged damaged damaged missing damaged duplicate missing damaged",
+   "refund_id": "ref_9123",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "47.00",
+   "created_at": "2026-11-08T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 124: damaged missing duplicate duplicate damaged missing duplicate late damaged damaged missing duplicate",
+   "refund_id": "ref_9124",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-08T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 125: damaged damaged late duplicate duplicate damaged missing missing missing missing damaged missing",
+   "refund_id": "ref_9125",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-08T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 126: late missing missing damaged damaged damaged late late duplicate damaged damaged duplicate",
+   "refund_id": "ref_9126",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "69.00",
+   "created_at": "2026-11-08T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 127: damaged duplicate missing missing late duplicate late damaged duplicate damaged duplicate missing",
+   "refund_id": "ref_9127",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-08T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 128: duplicate duplicate damaged damaged missing missing missing damaged late missing missing damaged",
+   "refund_id": "ref_9128",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "15.00",
+   "created_at": "2026-11-08T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 129: late late late duplicate damaged missing missing missing missing duplicate damaged duplicate",
+   "refund_id": "ref_9129",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-08T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 130: duplicate missing duplicate late duplicate late damaged late missing damaged late damaged",
+   "refund_id": "ref_9130",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "19.00",
+   "created_at": "2026-11-08T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 131: late duplicate damaged missing late late duplicate duplicate late duplicate late late",
+   "refund_id": "ref_9131",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "14.00",
+   "created_at": "2026-11-08T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 132: late duplicate duplicate missing late damaged late missing missing duplicate late damaged",
+   "refund_id": "ref_9132",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "40.00",
+   "created_at": "2026-11-08T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 133: duplicate damaged late duplicate damaged missing missing duplicate damaged late duplicate damaged",
+   "refund_id": "ref_9133",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "35.00",
+   "created_at": "2026-11-08T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 134: damaged late missing damaged missing duplicate duplicate missing late duplicate damaged duplicate",
+   "refund_id": "ref_9134",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "52.00",
+   "created_at": "2026-11-09T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 135: late damaged missing missing missing late late missing damaged late missing late",
+   "refund_id": "ref_9135",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "76.00",
+   "created_at": "2026-11-09T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 136: missing missing missing damaged missing late damaged duplicate duplicate damaged duplicate late",
+   "refund_id": "ref_9136",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-09T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 137: missing damaged damaged late late missing late late damaged late duplicate missing",
+   "refund_id": "ref_9137",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-09T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 138: missing missing missing missing late late damaged missing late late late duplicate",
+   "refund_id": "ref_9138",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "47.00",
+   "created_at": "2026-11-09T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 139: missing damaged damaged damaged missing duplicate damaged damaged damaged late late damaged",
+   "refund_id": "ref_9139",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-09T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 140: damaged duplicate late damaged damaged damaged damaged late missing late missing duplicate",
+   "refund_id": "ref_9140",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "67.00",
+   "created_at": "2026-11-09T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 141: missing late duplicate missing duplicate late late damaged late damaged late duplicate",
+   "refund_id": "ref_9141",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-09T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 142: damaged damaged late missing damaged duplicate damaged damaged damaged damaged late late",
+   "refund_id": "ref_9142",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "11.00",
+   "created_at": "2026-11-09T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 143: late late late late duplicate missing missing duplicate missing missing damaged duplicate",
+   "refund_id": "ref_9143",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-09T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 144: missing damaged damaged missing duplicate damaged missing damaged missing damaged damaged damaged",
+   "refund_id": "ref_9144",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-09T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 145: duplicate late late duplicate duplicate damaged duplicate duplicate late missing late duplicate",
+   "refund_id": "ref_9145",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "69.00",
+   "created_at": "2026-11-09T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 146: duplicate duplicate duplicate late damaged duplicate late missing missing late late missing",
+   "refund_id": "ref_9146",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "84.00",
+   "created_at": "2026-11-09T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 147: damaged late damaged late late late missing late damaged duplicate late late",
+   "refund_id": "ref_9147",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-09T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 148: duplicate duplicate duplicate duplicate missing late damaged duplicate missing missing late late",
+   "refund_id": "ref_9148",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-09T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 149: missing late duplicate late duplicate duplicate duplicate missing missing damaged late damaged",
+   "refund_id": "ref_9149",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-09T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 150: missing missing duplicate late late duplicate duplicate damaged missing duplicate duplicate missing",
+   "refund_id": "ref_9150",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-09T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 151: duplicate missing missing missing duplicate missing missing duplicate missing missing missing damaged",
+   "refund_id": "ref_9151",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-09T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 152: late missing late duplicate missing missing duplicate late late missing missing late",
+   "refund_id": "ref_9152",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-09T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 153: damaged missing duplicate late duplicate damaged damaged missing missing missing damaged duplicate",
+   "refund_id": "ref_9153",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "67.00",
+   "created_at": "2026-11-09T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 154: duplicate damaged missing late damaged duplicate duplicate damaged damaged late missing duplicate",
+   "refund_id": "ref_9154",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "33.00",
+   "created_at": "2026-11-09T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 155: missing missing late late missing late duplicate damaged duplicate late duplicate missing",
+   "refund_id": "ref_9155",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "21.00",
+   "created_at": "2026-11-09T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 156: duplicate late duplicate late duplicate damaged duplicate late damaged duplicate missing duplicate",
+   "refund_id": "ref_9156",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-09T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 157: duplicate damaged damaged duplicate damaged damaged duplicate missing damaged missing missing missing",
+   "refund_id": "ref_9157",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "46.00",
+   "created_at": "2026-11-09T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 158: late damaged duplicate missing late late damaged damaged duplicate damaged damaged missing",
+   "refund_id": "ref_9158",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-10T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 159: damaged damaged missing late late damaged missing damaged damaged duplicate duplicate late",
+   "refund_id": "ref_9159",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-10T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 160: late duplicate missing missing late duplicate damaged duplicate missing damaged late missing",
+   "refund_id": "ref_9160",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "28.00",
+   "created_at": "2026-11-10T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 161: duplicate late missing missing damaged late damaged duplicate missing missing late late",
+   "refund_id": "ref_9161",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "15.00",
+   "created_at": "2026-11-10T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 162: duplicate damaged duplicate missing damaged damaged damaged damaged missing late missing duplicate",
+   "refund_id": "ref_9162",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "20.00",
+   "created_at": "2026-11-10T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 163: missing duplicate missing damaged missing duplicate damaged late damaged late late duplicate",
+   "refund_id": "ref_9163",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-10T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 164: missing missing duplicate missing damaged late duplicate duplicate late duplicate damaged damaged",
+   "refund_id": "ref_9164",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "71.00",
+   "created_at": "2026-11-10T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 165: duplicate damaged late duplicate late missing damaged damaged missing duplicate missing duplicate",
+   "refund_id": "ref_9165",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-10T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 166: late late missing late damaged duplicate duplicate missing missing duplicate missing missing",
+   "refund_id": "ref_9166",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-10T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 167: damaged late damaged duplicate duplicate duplicate missing missing missing duplicate late missing",
+   "refund_id": "ref_9167",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-10T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 168: damaged late damaged late duplicate damaged late missing damaged damaged missing late",
+   "refund_id": "ref_9168",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "11.00",
+   "created_at": "2026-11-10T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 169: missing missing missing missing late damaged late missing missing missing duplicate late",
+   "refund_id": "ref_9169",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-10T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 170: late damaged duplicate missing damaged late missing duplicate missing late duplicate damaged",
+   "refund_id": "ref_9170",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "88.00",
+   "created_at": "2026-11-10T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 171: missing missing missing late duplicate missing duplicate late missing missing damaged late",
+   "refund_id": "ref_9171",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "74.00",
+   "created_at": "2026-11-10T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 172: late missing damaged late duplicate duplicate missing duplicate missing missing duplicate missing",
+   "refund_id": "ref_9172",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-10T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 173: missing duplicate damaged duplicate late late missing missing missing late damaged damaged",
+   "refund_id": "ref_9173",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "47.00",
+   "created_at": "2026-11-10T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 174: missing duplicate damaged late missing missing late damaged missing late duplicate duplicate",
+   "refund_id": "ref_9174",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-10T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 175: missing duplicate missing damaged damaged damaged duplicate duplicate duplicate missing duplicate missing",
+   "refund_id": "ref_9175",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "5.00",
+   "created_at": "2026-11-10T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 176: late missing damaged missing duplicate duplicate late missing missing missing missing duplicate",
+   "refund_id": "ref_9176",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "88.00",
+   "created_at": "2026-11-10T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 177: duplicate late missing damaged duplicate damaged damaged late damaged duplicate duplicate late",
+   "refund_id": "ref_9177",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "67.00",
+   "created_at": "2026-11-10T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 178: missing missing late damaged missing duplicate missing late duplicate damaged late missing",
+   "refund_id": "ref_9178",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-10T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 179: duplicate duplicate duplicate duplicate damaged duplicate missing duplicate duplicate missing late late",
+   "refund_id": "ref_9179",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "82.00",
+   "created_at": "2026-11-10T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 180: missing late missing late duplicate missing late duplicate duplicate damaged duplicate missing",
+   "refund_id": "ref_9180",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "52.00",
+   "created_at": "2026-11-10T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 181: late missing late duplicate missing duplicate duplicate damaged missing duplicate damaged late",
+   "refund_id": "ref_9181",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-10T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 182: duplicate missing missing duplicate missing damaged missing missing damaged damaged damaged late",
+   "refund_id": "ref_9182",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "56.00",
+   "created_at": "2026-11-11T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 183: missing late duplicate late damaged duplicate duplicate damaged damaged missing damaged duplicate",
+   "refund_id": "ref_9183",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-11T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 184: missing damaged duplicate duplicate damaged duplicate damaged late damaged damaged damaged duplicate",
+   "refund_id": "ref_9184",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-11T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 185: late damaged damaged damaged duplicate damaged duplicate duplicate late damaged damaged late",
+   "refund_id": "ref_9185",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "44.00",
+   "created_at": "2026-11-11T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 186: damaged damaged duplicate missing missing duplicate duplicate late damaged late missing late",
+   "refund_id": "ref_9186",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "39.00",
+   "created_at": "2026-11-11T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 187: damaged duplicate missing duplicate missing damaged missing duplicate missing damaged duplicate duplicate",
+   "refund_id": "ref_9187",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "11.00",
+   "created_at": "2026-11-11T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 188: duplicate late missing missing missing missing missing damaged damaged duplicate missing missing",
+   "refund_id": "ref_9188",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "56.00",
+   "created_at": "2026-11-11T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 189: duplicate late damaged duplicate late missing damaged late damaged duplicate damaged missing",
+   "refund_id": "ref_9189",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-11T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 190: late late damaged missing late late missing duplicate duplicate duplicate missing missing",
+   "refund_id": "ref_9190",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-11T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 191: duplicate late duplicate damaged damaged late missing damaged damaged damaged duplicate damaged",
+   "refund_id": "ref_9191",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-11T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 192: missing damaged duplicate damaged missing duplicate duplicate missing missing duplicate missing damaged",
+   "refund_id": "ref_9192",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "29.00",
+   "created_at": "2026-11-11T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 193: damaged late damaged late late duplicate damaged duplicate duplicate missing duplicate late",
+   "refund_id": "ref_9193",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-11T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 194: damaged late duplicate missing missing duplicate damaged damaged damaged late missing late",
+   "refund_id": "ref_9194",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-11T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 195: missing missing damaged damaged missing late missing late duplicate duplicate damaged duplicate",
+   "refund_id": "ref_9195",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-11T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 196: damaged late duplicate missing missing missing missing duplicate damaged missing duplicate duplicate",
+   "refund_id": "ref_9196",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "35.00",
+   "created_at": "2026-11-11T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 197: late damaged damaged missing duplicate damaged damaged duplicate late late missing duplicate",
+   "refund_id": "ref_9197",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "5.00",
+   "created_at": "2026-11-11T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 198: late duplicate late duplicate duplicate damaged late missing duplicate duplicate damaged damaged",
+   "refund_id": "ref_9198",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-11T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 199: missing damaged damaged missing late late late late missing late duplicate late",
+   "refund_id": "ref_9199",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-11T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 200: missing missing duplicate duplicate duplicate missing late damaged damaged damaged duplicate duplicate",
+   "refund_id": "ref_9200",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-11T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 201: missing late late missing late damaged late late duplicate late damaged late",
+   "refund_id": "ref_9201",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "18.00",
+   "created_at": "2026-11-11T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 202: missing damaged missing late damaged missing missing late missing duplicate missing missing",
+   "refund_id": "ref_9202",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "12.00",
+   "created_at": "2026-11-11T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 203: damaged late damaged duplicate duplicate damaged late damaged damaged missing missing duplicate",
+   "refund_id": "ref_9203",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "50.00",
+   "created_at": "2026-11-11T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 204: duplicate damaged missing damaged damaged damaged duplicate damaged duplicate missing damaged damaged",
+   "refund_id": "ref_9204",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "28.00",
+   "created_at": "2026-11-11T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 205: late damaged damaged late damaged damaged duplicate duplicate missing missing late missing",
+   "refund_id": "ref_9205",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-11T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 206: damaged duplicate missing duplicate missing duplicate late damaged missing duplicate late damaged",
+   "refund_id": "ref_9206",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-12T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 207: missing missing damaged duplicate late duplicate damaged damaged missing missing damaged missing",
+   "refund_id": "ref_9207",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-12T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 208: missing duplicate missing duplicate duplicate missing duplicate missing damaged duplicate duplicate late",
+   "refund_id": "ref_9208",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "21.00",
+   "created_at": "2026-11-12T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 209: missing late duplicate duplicate missing damaged late missing duplicate damaged duplicate duplicate",
+   "refund_id": "ref_9209",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "80.00",
+   "created_at": "2026-11-12T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 210: missing duplicate duplicate duplicate damaged duplicate late duplicate duplicate damaged late duplicate",
+   "refund_id": "ref_9210",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-12T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 211: duplicate late duplicate late duplicate damaged late damaged missing late damaged late",
+   "refund_id": "ref_9211",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "54.00",
+   "created_at": "2026-11-12T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 212: late missing missing damaged late late late damaged damaged duplicate late duplicate",
+   "refund_id": "ref_9212",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "56.00",
+   "created_at": "2026-11-12T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 213: duplicate duplicate late missing missing duplicate missing late late duplicate late late",
+   "refund_id": "ref_9213",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-12T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 214: damaged late damaged duplicate damaged missing late damaged damaged missing damaged late",
+   "refund_id": "ref_9214",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "61.00",
+   "created_at": "2026-11-12T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 215: missing duplicate duplicate missing late late missing damaged missing missing duplicate missing",
+   "refund_id": "ref_9215",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "29.00",
+   "created_at": "2026-11-12T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 216: missing duplicate missing duplicate damaged missing missing duplicate duplicate duplicate duplicate damaged",
+   "refund_id": "ref_9216",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "66.00",
+   "created_at": "2026-11-12T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 217: damaged late missing missing duplicate damaged missing missing damaged missing missing late",
+   "refund_id": "ref_9217",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-12T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 218: late duplicate missing late damaged duplicate duplicate damaged damaged late damaged late",
+   "refund_id": "ref_9218",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-12T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 219: duplicate late late late late missing late damaged duplicate duplicate missing late",
+   "refund_id": "ref_9219",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "72.00",
+   "created_at": "2026-11-12T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 220: late missing missing late duplicate duplicate duplicate missing missing duplicate late missing",
+   "refund_id": "ref_9220",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "50.00",
+   "created_at": "2026-11-12T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 221: duplicate late duplicate damaged late missing duplicate duplicate damaged duplicate duplicate missing",
+   "refund_id": "ref_9221",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-12T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 222: missing duplicate damaged missing late missing duplicate late missing damaged duplicate late",
+   "refund_id": "ref_9222",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-12T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 223: late missing damaged missing missing missing late damaged duplicate missing duplicate late",
+   "refund_id": "ref_9223",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-12T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 224: missing damaged late missing late duplicate damaged missing duplicate missing late damaged",
+   "refund_id": "ref_9224",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "75.00",
+   "created_at": "2026-11-12T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 225: duplicate missing damaged missing missing damaged damaged missing duplicate duplicate damaged damaged",
+   "refund_id": "ref_9225",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "56.00",
+   "created_at": "2026-11-12T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 226: late missing duplicate late duplicate missing duplicate damaged late missing duplicate missing",
+   "refund_id": "ref_9226",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-12T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 227: duplicate duplicate duplicate duplicate missing duplicate late duplicate duplicate late late missing",
+   "refund_id": "ref_9227",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-12T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 228: late missing missing missing damaged duplicate missing damaged duplicate late damaged late",
+   "refund_id": "ref_9228",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-12T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 229: damaged duplicate damaged damaged duplicate duplicate late duplicate damaged missing damaged damaged",
+   "refund_id": "ref_9229",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "45.00",
+   "created_at": "2026-11-12T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 230: late late late missing late missing duplicate duplicate duplicate missing damaged missing",
+   "refund_id": "ref_9230",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-13T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 231: damaged late missing late damaged damaged missing missing duplicate late late duplicate",
+   "refund_id": "ref_9231",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "71.00",
+   "created_at": "2026-11-13T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 232: missing missing missing late late damaged late duplicate duplicate missing damaged damaged",
+   "refund_id": "ref_9232",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "8.00",
+   "created_at": "2026-11-13T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 233: late late duplicate missing duplicate late duplicate damaged missing damaged late duplicate",
+   "refund_id": "ref_9233",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-13T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 234: missing missing missing late late missing missing late late damaged damaged damaged",
+   "refund_id": "ref_9234",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "46.00",
+   "created_at": "2026-11-13T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 235: late late duplicate missing late damaged late late duplicate duplicate duplicate duplicate",
+   "refund_id": "ref_9235",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "42.00",
+   "created_at": "2026-11-13T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 236: late duplicate missing damaged damaged duplicate late duplicate duplicate late damaged damaged",
+   "refund_id": "ref_9236",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-13T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 237: damaged duplicate late missing duplicate damaged duplicate late late missing late damaged",
+   "refund_id": "ref_9237",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "12.00",
+   "created_at": "2026-11-13T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 238: duplicate duplicate missing duplicate late late late duplicate duplicate late late missing",
+   "refund_id": "ref_9238",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-13T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 239: missing damaged duplicate damaged duplicate late missing missing damaged duplicate damaged damaged",
+   "refund_id": "ref_9239",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-13T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 240: missing late duplicate damaged damaged missing missing missing late missing late late",
+   "refund_id": "ref_9240",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "9.00",
+   "created_at": "2026-11-13T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 241: missing late missing duplicate damaged missing damaged late late missing damaged damaged",
+   "refund_id": "ref_9241",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-13T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 242: duplicate late damaged late duplicate late damaged damaged late duplicate damaged damaged",
+   "refund_id": "ref_9242",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "21.00",
+   "created_at": "2026-11-13T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 243: late missing missing late duplicate duplicate damaged damaged late late late late",
+   "refund_id": "ref_9243",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "45.00",
+   "created_at": "2026-11-13T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 244: damaged late late late late duplicate duplicate damaged late damaged late damaged",
+   "refund_id": "ref_9244",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-13T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 245: late missing duplicate late late late duplicate missing damaged damaged duplicate late",
+   "refund_id": "ref_9245",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-13T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 246: missing late damaged late missing missing late damaged late duplicate missing duplicate",
+   "refund_id": "ref_9246",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "8.00",
+   "created_at": "2026-11-13T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 247: duplicate duplicate duplicate damaged damaged late missing damaged missing duplicate duplicate late",
+   "refund_id": "ref_9247",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "40.00",
+   "created_at": "2026-11-13T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 248: duplicate missing damaged missing missing missing missing late late missing damaged late",
+   "refund_id": "ref_9248",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "6.00",
+   "created_at": "2026-11-13T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 249: damaged missing missing damaged duplicate duplicate missing damaged missing late missing damaged",
+   "refund_id": "ref_9249",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-13T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 250: late duplicate damaged late late duplicate missing duplicate duplicate late duplicate duplicate",
+   "refund_id": "ref_9250",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-13T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 251: late late missing damaged late late duplicate duplicate damaged duplicate damaged missing",
+   "refund_id": "ref_9251",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "7.00",
+   "created_at": "2026-11-13T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 252: missing late missing missing damaged missing damaged damaged late duplicate duplicate missing",
+   "refund_id": "ref_9252",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "72.00",
+   "created_at": "2026-11-13T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 253: duplicate damaged damaged late duplicate missing duplicate late missing late duplicate missing",
+   "refund_id": "ref_9253",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-13T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 254: damaged late late missing missing late damaged missing damaged late damaged late",
+   "refund_id": "ref_9254",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-14T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 255: damaged duplicate late missing late damaged late late damaged late missing missing",
+   "refund_id": "ref_9255",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "28.00",
+   "created_at": "2026-11-14T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 256: missing duplicate late late duplicate damaged late late duplicate damaged duplicate missing",
+   "refund_id": "ref_9256",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "41.00",
+   "created_at": "2026-11-14T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 257: missing duplicate missing duplicate late missing damaged duplicate missing duplicate missing late",
+   "refund_id": "ref_9257",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-14T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 258: late duplicate late late missing late damaged missing duplicate damaged missing duplicate",
+   "refund_id": "ref_9258",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "5.00",
+   "created_at": "2026-11-14T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 259: damaged late damaged late missing missing late damaged late damaged missing missing",
+   "refund_id": "ref_9259",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "4.00",
+   "created_at": "2026-11-14T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 260: late damaged missing duplicate duplicate damaged damaged damaged duplicate late missing duplicate",
+   "refund_id": "ref_9260",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-14T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 261: late damaged duplicate duplicate duplicate missing late missing damaged missing damaged late",
+   "refund_id": "ref_9261",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "33.00",
+   "created_at": "2026-11-14T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 262: late duplicate duplicate missing late duplicate missing late damaged damaged damaged missing",
+   "refund_id": "ref_9262",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-14T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 263: late damaged late late duplicate missing duplicate late late damaged duplicate late",
+   "refund_id": "ref_9263",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "73.00",
+   "created_at": "2026-11-14T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 264: duplicate missing missing late missing late late missing late damaged damaged duplicate",
+   "refund_id": "ref_9264",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "52.00",
+   "created_at": "2026-11-14T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 265: damaged duplicate missing duplicate missing missing late duplicate missing duplicate late missing",
+   "refund_id": "ref_9265",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "85.00",
+   "created_at": "2026-11-14T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 266: damaged late duplicate missing damaged damaged duplicate duplicate damaged missing damaged duplicate",
+   "refund_id": "ref_9266",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "77.00",
+   "created_at": "2026-11-14T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 267: late duplicate missing duplicate damaged duplicate late duplicate damaged late damaged duplicate",
+   "refund_id": "ref_9267",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-14T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 268: duplicate late damaged late duplicate damaged damaged duplicate late missing damaged damaged",
+   "refund_id": "ref_9268",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "86.00",
+   "created_at": "2026-11-14T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 269: late missing late duplicate missing missing damaged missing missing duplicate damaged damaged",
+   "refund_id": "ref_9269",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-14T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 270: missing damaged duplicate missing late duplicate missing damaged damaged duplicate duplicate damaged",
+   "refund_id": "ref_9270",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "65.00",
+   "created_at": "2026-11-14T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 271: damaged duplicate late late damaged duplicate late missing duplicate damaged duplicate damaged",
+   "refund_id": "ref_9271",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-14T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 272: missing duplicate duplicate late missing damaged duplicate duplicate late missing damaged duplicate",
+   "refund_id": "ref_9272",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "20.00",
+   "created_at": "2026-11-14T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 273: missing late duplicate damaged damaged duplicate duplicate damaged duplicate duplicate late missing",
+   "refund_id": "ref_9273",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "33.00",
+   "created_at": "2026-11-14T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 274: duplicate missing missing duplicate late duplicate late missing damaged damaged missing duplicate",
+   "refund_id": "ref_9274",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "70.00",
+   "created_at": "2026-11-14T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 275: damaged duplicate late duplicate late duplicate duplicate duplicate damaged missing late late",
+   "refund_id": "ref_9275",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "18.00",
+   "created_at": "2026-11-14T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 276: duplicate missing damaged duplicate late duplicate missing duplicate duplicate missing damaged duplicate",
+   "refund_id": "ref_9276",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-14T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 277: duplicate duplicate late late duplicate late damaged duplicate late damaged late damaged",
+   "refund_id": "ref_9277",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-14T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 278: late duplicate missing late damaged late late damaged damaged late late damaged",
+   "refund_id": "ref_9278",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "30.00",
+   "created_at": "2026-11-15T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 279: damaged missing damaged damaged missing missing damaged duplicate late missing missing duplicate",
+   "refund_id": "ref_9279",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-15T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 280: late duplicate missing duplicate damaged missing damaged damaged late missing missing missing",
+   "refund_id": "ref_9280",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "33.00",
+   "created_at": "2026-11-15T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 281: late missing damaged missing duplicate duplicate duplicate late damaged missing missing duplicate",
+   "refund_id": "ref_9281",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "84.00",
+   "created_at": "2026-11-15T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 282: damaged missing late duplicate missing missing late duplicate damaged damaged damaged duplicate",
+   "refund_id": "ref_9282",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-15T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 283: duplicate late duplicate duplicate missing missing damaged late missing damaged missing late",
+   "refund_id": "ref_9283",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "65.00",
+   "created_at": "2026-11-15T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 284: duplicate duplicate duplicate damaged missing late late missing duplicate duplicate duplicate missing",
+   "refund_id": "ref_9284",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "53.00",
+   "created_at": "2026-11-15T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 285: late damaged late late missing late damaged missing missing missing damaged duplicate",
+   "refund_id": "ref_9285",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-15T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 286: late late damaged late damaged late damaged missing late damaged duplicate damaged",
+   "refund_id": "ref_9286",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "28.00",
+   "created_at": "2026-11-15T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 287: missing missing late duplicate late late damaged damaged missing late late late",
+   "refund_id": "ref_9287",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-15T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 288: duplicate missing duplicate damaged duplicate duplicate damaged damaged duplicate late late duplicate",
+   "refund_id": "ref_9288",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "29.00",
+   "created_at": "2026-11-15T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 289: duplicate duplicate duplicate duplicate damaged late duplicate missing damaged missing duplicate duplicate",
+   "refund_id": "ref_9289",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "68.00",
+   "created_at": "2026-11-15T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 290: late duplicate damaged missing damaged duplicate missing duplicate duplicate missing late duplicate",
+   "refund_id": "ref_9290",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-15T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 291: duplicate late missing duplicate late missing damaged damaged duplicate missing duplicate missing",
+   "refund_id": "ref_9291",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "80.00",
+   "created_at": "2026-11-15T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 292: missing damaged late duplicate damaged missing missing damaged damaged late missing damaged",
+   "refund_id": "ref_9292",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "49.00",
+   "created_at": "2026-11-15T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 293: duplicate damaged late late damaged damaged late duplicate late late duplicate late",
+   "refund_id": "ref_9293",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-15T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 294: late late late duplicate missing damaged missing duplicate damaged late damaged late",
+   "refund_id": "ref_9294",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-15T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 295: late missing duplicate late duplicate duplicate duplicate duplicate missing late missing late",
+   "refund_id": "ref_9295",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-15T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 296: missing late late damaged late duplicate late duplicate duplicate duplicate damaged duplicate",
+   "refund_id": "ref_9296",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "39.00",
+   "created_at": "2026-11-15T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 297: late duplicate duplicate duplicate duplicate late damaged missing duplicate damaged late duplicate",
+   "refund_id": "ref_9297",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "66.00",
+   "created_at": "2026-11-15T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 298: damaged damaged late duplicate missing duplicate missing late missing late damaged damaged",
+   "refund_id": "ref_9298",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "44.00",
+   "created_at": "2026-11-15T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 299: damaged missing late damaged missing late damaged missing duplicate missing duplicate damaged",
+   "refund_id": "ref_9299",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-15T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 300: late duplicate duplicate duplicate damaged late missing damaged damaged damaged duplicate duplicate",
+   "refund_id": "ref_9300",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "84.00",
+   "created_at": "2026-11-15T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 301: duplicate damaged late duplicate damaged duplicate late late missing missing damaged duplicate",
+   "refund_id": "ref_9301",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "35.00",
+   "created_at": "2026-11-15T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 302: missing damaged missing damaged late missing duplicate missing duplicate duplicate missing late",
+   "refund_id": "ref_9302",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "8.00",
+   "created_at": "2026-11-16T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 303: missing late missing damaged damaged duplicate duplicate late late missing missing duplicate",
+   "refund_id": "ref_9303",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "48.00",
+   "created_at": "2026-11-16T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 304: missing missing missing missing duplicate late late damaged late late late damaged",
+   "refund_id": "ref_9304",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "51.00",
+   "created_at": "2026-11-16T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 305: duplicate late missing duplicate missing duplicate late missing missing missing damaged damaged",
+   "refund_id": "ref_9305",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "52.00",
+   "created_at": "2026-11-16T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 306: duplicate damaged duplicate missing late duplicate damaged damaged late late missing missing",
+   "refund_id": "ref_9306",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-16T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 307: damaged missing duplicate damaged damaged damaged missing missing damaged missing damaged damaged",
+   "refund_id": "ref_9307",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "48.00",
+   "created_at": "2026-11-16T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 308: damaged late duplicate duplicate late duplicate duplicate duplicate duplicate duplicate late duplicate",
+   "refund_id": "ref_9308",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "70.00",
+   "created_at": "2026-11-16T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 309: damaged missing duplicate late damaged duplicate damaged damaged late late missing duplicate",
+   "refund_id": "ref_9309",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "3.00",
+   "created_at": "2026-11-16T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 310: duplicate missing damaged damaged duplicate duplicate missing damaged late duplicate duplicate late",
+   "refund_id": "ref_9310",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-16T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 311: duplicate missing damaged late missing duplicate late missing missing missing missing late",
+   "refund_id": "ref_9311",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "4.00",
+   "created_at": "2026-11-16T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 312: late missing duplicate late late duplicate damaged missing missing duplicate missing damaged",
+   "refund_id": "ref_9312",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-16T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 313: duplicate damaged duplicate damaged damaged late late duplicate damaged damaged late late",
+   "refund_id": "ref_9313",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "18.00",
+   "created_at": "2026-11-16T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 314: missing late damaged duplicate late duplicate damaged damaged missing missing damaged duplicate",
+   "refund_id": "ref_9314",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "39.00",
+   "created_at": "2026-11-16T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 315: damaged duplicate missing late duplicate missing late late late duplicate late duplicate",
+   "refund_id": "ref_9315",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "79.00",
+   "created_at": "2026-11-16T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 316: missing duplicate damaged duplicate duplicate missing damaged missing duplicate duplicate late duplicate",
+   "refund_id": "ref_9316",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-16T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 317: damaged late missing duplicate damaged duplicate damaged missing late missing late late",
+   "refund_id": "ref_9317",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "49.00",
+   "created_at": "2026-11-16T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 318: damaged duplicate damaged missing missing damaged late missing missing damaged missing late",
+   "refund_id": "ref_9318",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-16T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 319: duplicate damaged duplicate late late duplicate missing duplicate duplicate missing duplicate missing",
+   "refund_id": "ref_9319",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "17.00",
+   "created_at": "2026-11-16T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 320: damaged damaged damaged duplicate late duplicate late missing late damaged late duplicate",
+   "refund_id": "ref_9320",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-16T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 321: missing missing missing late duplicate missing late duplicate duplicate late late duplicate",
+   "refund_id": "ref_9321",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-16T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 322: duplicate late late missing damaged damaged late damaged late damaged missing damaged",
+   "refund_id": "ref_9322",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "46.00",
+   "created_at": "2026-11-16T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 323: missing missing damaged damaged missing damaged duplicate missing damaged missing missing damaged",
+   "refund_id": "ref_9323",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "67.00",
+   "created_at": "2026-11-16T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 324: missing missing duplicate duplicate late late damaged damaged late damaged late late",
+   "refund_id": "ref_9324",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "82.00",
+   "created_at": "2026-11-16T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 325: damaged damaged duplicate late late late duplicate missing damaged duplicate damaged missing",
+   "refund_id": "ref_9325",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-16T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 326: duplicate duplicate missing missing damaged missing damaged missing missing late duplicate missing",
+   "refund_id": "ref_9326",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-17T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 327: missing duplicate damaged late missing duplicate missing duplicate duplicate late missing missing",
+   "refund_id": "ref_9327",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "49.00",
+   "created_at": "2026-11-17T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 328: missing late damaged missing duplicate duplicate missing late late damaged late late",
+   "refund_id": "ref_9328",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "57.00",
+   "created_at": "2026-11-17T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 329: damaged duplicate damaged duplicate damaged missing duplicate missing missing duplicate late damaged",
+   "refund_id": "ref_9329",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "58.00",
+   "created_at": "2026-11-17T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 330: missing missing damaged missing missing late late damaged late late damaged duplicate",
+   "refund_id": "ref_9330",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "15.00",
+   "created_at": "2026-11-17T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 331: duplicate duplicate duplicate missing damaged missing duplicate damaged missing duplicate duplicate duplicate",
+   "refund_id": "ref_9331",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-17T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 332: duplicate missing missing late missing duplicate late duplicate duplicate duplicate late damaged",
+   "refund_id": "ref_9332",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-17T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 333: damaged duplicate late missing damaged missing damaged late late duplicate damaged missing",
+   "refund_id": "ref_9333",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "11.00",
+   "created_at": "2026-11-17T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 334: late missing duplicate late late duplicate late missing damaged damaged duplicate damaged",
+   "refund_id": "ref_9334",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-17T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 335: late missing missing late duplicate duplicate damaged late late missing missing late",
+   "refund_id": "ref_9335",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "12.00",
+   "created_at": "2026-11-17T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 336: late missing duplicate missing late damaged missing late duplicate damaged missing missing",
+   "refund_id": "ref_9336",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-17T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 337: late missing damaged damaged missing duplicate late duplicate missing duplicate missing late",
+   "refund_id": "ref_9337",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "77.00",
+   "created_at": "2026-11-17T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 338: late missing damaged missing damaged missing late missing missing duplicate missing missing",
+   "refund_id": "ref_9338",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-17T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 339: late damaged damaged duplicate damaged damaged damaged damaged late duplicate missing missing",
+   "refund_id": "ref_9339",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "16.00",
+   "created_at": "2026-11-17T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 340: missing duplicate late missing late late missing late duplicate missing missing damaged",
+   "refund_id": "ref_9340",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-17T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 341: missing late damaged damaged missing duplicate damaged late duplicate damaged missing damaged",
+   "refund_id": "ref_9341",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-17T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 342: late duplicate late duplicate missing missing duplicate damaged damaged duplicate missing damaged",
+   "refund_id": "ref_9342",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "57.00",
+   "created_at": "2026-11-17T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 343: late damaged duplicate damaged late missing duplicate late missing late duplicate damaged",
+   "refund_id": "ref_9343",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "45.00",
+   "created_at": "2026-11-17T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 344: late missing late late late missing damaged missing duplicate duplicate missing duplicate",
+   "refund_id": "ref_9344",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-17T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 345: damaged damaged duplicate duplicate late duplicate missing late missing damaged duplicate damaged",
+   "refund_id": "ref_9345",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-17T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 346: missing damaged duplicate late missing damaged late duplicate duplicate missing late missing",
+   "refund_id": "ref_9346",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "77.00",
+   "created_at": "2026-11-17T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 347: damaged damaged late late duplicate duplicate damaged duplicate late damaged duplicate late",
+   "refund_id": "ref_9347",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "48.00",
+   "created_at": "2026-11-17T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 348: late duplicate damaged late damaged damaged duplicate late duplicate late late damaged",
+   "refund_id": "ref_9348",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "13.00",
+   "created_at": "2026-11-17T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 349: damaged late missing duplicate late duplicate duplicate late missing missing damaged damaged",
+   "refund_id": "ref_9349",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "19.00",
+   "created_at": "2026-11-17T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 350: late missing damaged duplicate missing late missing missing damaged duplicate missing duplicate",
+   "refund_id": "ref_9350",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "62.00",
+   "created_at": "2026-11-18T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 351: late late damaged damaged late duplicate duplicate damaged late missing missing damaged",
+   "refund_id": "ref_9351",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "36.00",
+   "created_at": "2026-11-18T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 352: late duplicate missing duplicate damaged damaged late duplicate damaged damaged late duplicate",
+   "refund_id": "ref_9352",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "60.00",
+   "created_at": "2026-11-18T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 353: duplicate missing duplicate missing late damaged duplicate late duplicate late missing damaged",
+   "refund_id": "ref_9353",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-18T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 354: damaged late damaged late missing late late duplicate duplicate damaged missing late",
+   "refund_id": "ref_9354",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "55.00",
+   "created_at": "2026-11-18T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 355: missing damaged missing late late late duplicate late damaged damaged duplicate damaged",
+   "refund_id": "ref_9355",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-18T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 356: missing late late late duplicate duplicate duplicate missing damaged missing missing duplicate",
+   "refund_id": "ref_9356",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "78.00",
+   "created_at": "2026-11-18T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 357: late duplicate late missing damaged duplicate missing duplicate missing damaged late duplicate",
+   "refund_id": "ref_9357",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "89.00",
+   "created_at": "2026-11-18T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 358: duplicate duplicate missing damaged missing late damaged late duplicate missing duplicate duplicate",
+   "refund_id": "ref_9358",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "85.00",
+   "created_at": "2026-11-18T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 359: late missing late missing damaged damaged damaged late duplicate late duplicate missing",
+   "refund_id": "ref_9359",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "51.00",
+   "created_at": "2026-11-18T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 360: duplicate missing damaged late late missing damaged missing duplicate missing damaged missing",
+   "refund_id": "ref_9360",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "66.00",
+   "created_at": "2026-11-18T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 361: missing damaged duplicate missing duplicate missing missing duplicate late missing missing duplicate",
+   "refund_id": "ref_9361",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "17.00",
+   "created_at": "2026-11-18T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 362: missing missing duplicate damaged damaged missing duplicate missing missing late duplicate late",
+   "refund_id": "ref_9362",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "30.00",
+   "created_at": "2026-11-18T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 363: missing damaged missing missing missing missing damaged late duplicate duplicate duplicate duplicate",
+   "refund_id": "ref_9363",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "76.00",
+   "created_at": "2026-11-18T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 364: duplicate late duplicate missing damaged damaged duplicate duplicate missing damaged missing duplicate",
+   "refund_id": "ref_9364",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "72.00",
+   "created_at": "2026-11-18T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 365: missing damaged damaged missing late missing damaged duplicate damaged damaged late missing",
+   "refund_id": "ref_9365",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "40.00",
+   "created_at": "2026-11-18T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 366: late duplicate damaged late damaged damaged late duplicate late late damaged late",
+   "refund_id": "ref_9366",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "51.00",
+   "created_at": "2026-11-18T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 367: damaged missing late missing late missing late late late missing missing missing",
+   "refund_id": "ref_9367",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "26.00",
+   "created_at": "2026-11-18T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 368: damaged duplicate duplicate duplicate missing missing late late missing missing damaged missing",
+   "refund_id": "ref_9368",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "25.00",
+   "created_at": "2026-11-18T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 369: damaged late damaged damaged damaged duplicate damaged duplicate damaged damaged late missing",
+   "refund_id": "ref_9369",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "74.00",
+   "created_at": "2026-11-18T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 370: late late late duplicate duplicate duplicate missing damaged missing duplicate damaged late",
+   "refund_id": "ref_9370",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-18T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 371: duplicate duplicate damaged late duplicate late duplicate late damaged duplicate damaged damaged",
+   "refund_id": "ref_9371",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-18T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 372: duplicate late damaged missing missing missing missing missing damaged damaged late duplicate",
+   "refund_id": "ref_9372",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "57.00",
+   "created_at": "2026-11-18T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 373: late damaged missing damaged late late missing duplicate late missing missing duplicate",
+   "refund_id": "ref_9373",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "19.00",
+   "created_at": "2026-11-18T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 374: late late late damaged missing late damaged late late late duplicate damaged",
+   "refund_id": "ref_9374",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-19T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 375: late damaged missing duplicate missing damaged missing missing damaged damaged late duplicate",
+   "refund_id": "ref_9375",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "52.00",
+   "created_at": "2026-11-19T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 376: missing missing late missing missing duplicate damaged duplicate damaged late missing late",
+   "refund_id": "ref_9376",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "53.00",
+   "created_at": "2026-11-19T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 377: missing missing missing damaged missing duplicate late damaged damaged damaged missing late",
+   "refund_id": "ref_9377",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-19T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 378: duplicate late late duplicate late missing missing duplicate late late duplicate missing",
+   "refund_id": "ref_9378",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "3.00",
+   "created_at": "2026-11-19T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 379: late late damaged missing missing duplicate missing late damaged late missing damaged",
+   "refund_id": "ref_9379",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "2.00",
+   "created_at": "2026-11-19T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 380: duplicate missing missing late late duplicate damaged late duplicate damaged duplicate missing",
+   "refund_id": "ref_9380",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "9.00",
+   "created_at": "2026-11-19T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 381: damaged duplicate damaged damaged missing damaged damaged missing duplicate damaged damaged damaged",
+   "refund_id": "ref_9381",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "37.00",
+   "created_at": "2026-11-19T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 382: damaged missing missing missing damaged duplicate damaged damaged duplicate damaged missing late",
+   "refund_id": "ref_9382",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "57.00",
+   "created_at": "2026-11-19T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 383: duplicate missing late missing late damaged missing damaged duplicate duplicate late damaged",
+   "refund_id": "ref_9383",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "24.00",
+   "created_at": "2026-11-19T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 384: duplicate missing missing damaged late late duplicate late damaged missing missing damaged",
+   "refund_id": "ref_9384",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "42.00",
+   "created_at": "2026-11-19T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 385: damaged damaged late missing duplicate damaged missing late missing missing duplicate damaged",
+   "refund_id": "ref_9385",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "80.00",
+   "created_at": "2026-11-19T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 386: duplicate damaged duplicate duplicate missing missing missing damaged duplicate missing missing missing",
+   "refund_id": "ref_9386",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "10.00",
+   "created_at": "2026-11-19T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 387: damaged damaged duplicate duplicate damaged damaged missing late missing duplicate late duplicate",
+   "refund_id": "ref_9387",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "28.00",
+   "created_at": "2026-11-19T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 388: late duplicate duplicate damaged late duplicate damaged damaged duplicate damaged damaged missing",
+   "refund_id": "ref_9388",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "35.00",
+   "created_at": "2026-11-19T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 389: duplicate late duplicate duplicate duplicate late late missing missing late duplicate late",
+   "refund_id": "ref_9389",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "40.00",
+   "created_at": "2026-11-19T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 390: damaged missing late late duplicate duplicate late damaged damaged damaged missing duplicate",
+   "refund_id": "ref_9390",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "32.00",
+   "created_at": "2026-11-19T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 391: damaged damaged duplicate duplicate duplicate duplicate missing duplicate late missing duplicate late",
+   "refund_id": "ref_9391",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "63.00",
+   "created_at": "2026-11-19T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 392: duplicate missing duplicate missing duplicate late damaged missing damaged late late late",
+   "refund_id": "ref_9392",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "11.00",
+   "created_at": "2026-11-19T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 393: missing late late damaged damaged missing duplicate damaged damaged missing late late",
+   "refund_id": "ref_9393",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "53.00",
+   "created_at": "2026-11-19T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 394: duplicate damaged missing damaged damaged duplicate damaged missing missing damaged duplicate damaged",
+   "refund_id": "ref_9394",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "7.00",
+   "created_at": "2026-11-19T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 395: duplicate duplicate damaged damaged late missing late duplicate late duplicate damaged damaged",
+   "refund_id": "ref_9395",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "83.00",
+   "created_at": "2026-11-19T21:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 396: late duplicate damaged duplicate duplicate late missing duplicate late duplicate damaged damaged",
+   "refund_id": "ref_9396",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "87.00",
+   "created_at": "2026-11-19T22:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 397: late missing duplicate damaged missing missing duplicate duplicate damaged damaged late late",
+   "refund_id": "ref_9397",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "61.00",
+   "created_at": "2026-11-19T23:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 398: late missing duplicate duplicate duplicate missing missing duplicate damaged late missing missing",
+   "refund_id": "ref_9398",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "22.00",
+   "created_at": "2026-11-20T00:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 399: missing missing late duplicate missing missing damaged damaged late duplicate missing missing",
+   "refund_id": "ref_9399",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-20T01:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 400: missing missing missing missing late late late missing missing duplicate duplicate late",
+   "refund_id": "ref_9400",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "38.00",
+   "created_at": "2026-11-20T02:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 401: late missing late missing late duplicate missing missing damaged missing missing damaged",
+   "refund_id": "ref_9401",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "66.00",
+   "created_at": "2026-11-20T03:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 402: damaged duplicate missing damaged damaged duplicate damaged late missing late damaged duplicate",
+   "refund_id": "ref_9402",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "81.00",
+   "created_at": "2026-11-20T04:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 403: missing duplicate late damaged missing late duplicate late duplicate damaged duplicate damaged",
+   "refund_id": "ref_9403",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "15.00",
+   "created_at": "2026-11-20T05:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 404: damaged late damaged damaged missing damaged late missing missing missing late damaged",
+   "refund_id": "ref_9404",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "6.00",
+   "created_at": "2026-11-20T06:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 405: missing duplicate duplicate damaged late late late missing damaged damaged duplicate damaged",
+   "refund_id": "ref_9405",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "31.00",
+   "created_at": "2026-11-20T07:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 406: duplicate damaged late duplicate damaged late damaged duplicate duplicate late late damaged",
+   "refund_id": "ref_9406",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "71.00",
+   "created_at": "2026-11-20T08:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 407: damaged late damaged duplicate damaged missing late damaged late duplicate damaged missing",
+   "refund_id": "ref_9407",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "29.00",
+   "created_at": "2026-11-20T09:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 408: missing missing duplicate missing missing damaged missing duplicate late duplicate late duplicate",
+   "refund_id": "ref_9408",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "43.00",
+   "created_at": "2026-11-20T10:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 409: missing damaged late late late missing late late damaged duplicate missing missing",
+   "refund_id": "ref_9409",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "69.00",
+   "created_at": "2026-11-20T11:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 410: damaged missing duplicate late duplicate duplicate damaged missing late missing missing damaged",
+   "refund_id": "ref_9410",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "23.00",
+   "created_at": "2026-11-20T12:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 411: damaged missing duplicate damaged late damaged duplicate damaged late damaged damaged duplicate",
+   "refund_id": "ref_9411",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "34.00",
+   "created_at": "2026-11-20T13:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 412: late duplicate duplicate missing damaged missing duplicate damaged missing late late missing",
+   "refund_id": "ref_9412",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-20T14:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 413: missing damaged missing duplicate damaged damaged damaged late duplicate duplicate missing damaged",
+   "refund_id": "ref_9413",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "36.00",
+   "created_at": "2026-11-20T15:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 414: damaged missing damaged missing late missing late duplicate damaged late late duplicate",
+   "refund_id": "ref_9414",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "27.00",
+   "created_at": "2026-11-20T16:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 415: missing late missing duplicate damaged duplicate damaged damaged duplicate damaged late duplicate",
+   "refund_id": "ref_9415",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "58.00",
+   "created_at": "2026-11-20T17:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 416: duplicate duplicate damaged damaged late duplicate late damaged duplicate missing damaged duplicate",
+   "refund_id": "ref_9416",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "50.00",
+   "created_at": "2026-11-20T18:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 417: duplicate missing missing damaged damaged damaged duplicate missing missing late duplicate late",
+   "refund_id": "ref_9417",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "49.00",
+   "created_at": "2026-11-20T19:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 418: late duplicate late damaged missing duplicate damaged damaged missing damaged missing late",
+   "refund_id": "ref_9418",
+   "status": "processed"
+  },
+  {
+   "amount_inr": "51.00",
+   "created_at": "2026-11-20T20:15:00.000Z",
+   "order_id": "ord_4417",
+   "reason": "partial refund batch 419: damaged duplicate damaged missing missing late missing damaged missing damaged missing missing",
+   "refund_id": "ref_9419",
+   "status": "processed"
+  }
+ ]
+}

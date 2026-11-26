@@ -33,12 +33,29 @@ A render that cannot fit the required current turn records ``context_render``
 with ``status="context_budget_exhausted"`` and the episode aborts with that
 code. It never deletes the current request or lowers ``max_tokens``.
 
+Observation shaping (Tidemark part 3) happens once, when a tool result
+arrives, never at render time. With a session the loop journals the raw
+``tool_result`` first (its seq is the shaping source), then asks the seam for
+the message to append. A session that implements ``shape_result`` gets an
+``ObservationSource`` (the raw observation, its seq, and whether the journal is
+still verifying a recorded prefix) and returns a ``ShapedObservation``; when
+the message differs from the raw one the seam journals ``observation_shaped``
+immediately after the ``tool_result`` and before any taint transition. A
+session without it keeps ``shape_observation`` (parts 1 and 2: unchanged).
+Typed errors are never shaped. Taint and replay still use the raw result.
+
+A session may also supply trusted execution resources for handlers that take
+them (``execution_context``; the ``read_blob`` tool) and check a recorded
+journal's references before replay or resume (``check_journal``). Both are
+optional; the seam skips a session that does not define them.
+
 A session is per episode and is not shared between concurrent episodes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -82,6 +99,74 @@ def history_seqs(records: Sequence[Mapping[str, Any]]) -> list[int]:
         elif event in ("tool_result", "observation"):
             seqs.append(record["seq"])
     return seqs
+
+
+class JournalView(Sequence[dict[str, Any]]):
+    """A read-only view of an episode's journal records: every access returns a copy."""
+
+    def __init__(self, records: Sequence[Mapping[str, Any]]) -> None:
+        self._records = records
+
+    def __len__(self) -> int:
+        return len(self._records)
+
+    def __getitem__(self, index: Any) -> Any:  # type: ignore[override]
+        if isinstance(index, slice):
+            return [deepcopy(dict(record)) for record in self._records[index]]
+        return deepcopy(dict(self._records[index]))
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        for index in range(len(self._records)):
+            yield self[index]
+
+
+@dataclass(frozen=True)
+class CallEnvironment:
+    """What the loop knows about one call before it runs, for a session's ``execution_context``.
+
+    Built by the server in call order; nothing here comes from the model.
+    """
+
+    episode_id: str
+    step: int
+    tool: str
+    tool_call_id: str
+    journal: JournalView
+    taint: str | None = None
+
+
+@dataclass(frozen=True)
+class ObservationSource:
+    """One raw tool result on its way into the history (the shaping input).
+
+    ``observation`` and ``content`` are exactly what the unshaped tool message
+    would hold. ``source_seq`` is the raw ``tool_result`` record. ``verifying``
+    is true while the journal is replaying a recorded prefix (replay, or the
+    first part of a resume): a session must then reproduce, never write.
+    """
+
+    episode_id: str
+    step: int
+    source_seq: int
+    tool_call_id: str
+    tool: str
+    ok: bool
+    handler_called: bool
+    observation: dict[str, Any]
+    content: str
+    verifying: bool = False
+
+
+@dataclass(frozen=True)
+class ShapedObservation:
+    """A session's answer for one tool result: the message to append and, when shaped, the event fields.
+
+    ``event`` holds every ``observation_shaped`` field except ``step``; ``None``
+    means the message is the raw one and nothing is journaled.
+    """
+
+    message: dict[str, Any]
+    event: dict[str, Any] | None = None
 
 
 def context_config_sha256(config: Mapping[str, Any]) -> str:
@@ -171,7 +256,12 @@ class ContextSession(Protocol):
         ...
 
     def shape_observation(self, message: Mapping[str, Any], *, step: int) -> dict[str, Any]:
-        """The tool message to append to the history (part 1's baseline returns it unchanged)."""
+        """The tool message to append to the history (part 1's baseline returns it unchanged).
+
+        A session may instead define ``shape_result(source: ObservationSource) -> ShapedObservation``
+        (part 3), which the seam prefers; ``execution_context(env: CallEnvironment)`` and
+        ``check_journal(records)`` are optional too.
+        """
         ...
 
     def backend_timings(self, turn: ModelTurn, rendered: RenderedContext) -> dict[str, Any]:
@@ -289,6 +379,34 @@ class ModelSeam:
             return message
         return dict(self.context.shape_observation(message, step=step))
 
+    def shape_result(
+        self, call_id: str, tool: str, result_ok: bool, handler_called: bool, observation: Mapping[str, Any],
+        message: dict[str, Any], *, step: int, source_seq: int,
+    ) -> dict[str, Any]:
+        """The message for one journaled tool result (``source_seq``); journals ``observation_shaped`` when shaped.
+
+        Called after the raw ``tool_result`` is journaled and before taint is applied.
+        """
+        if self.context is None:
+            return message
+        shaper = getattr(self.context, "shape_result", None)
+        if shaper is None:
+            return dict(self.context.shape_observation(message, step=step))
+        source = ObservationSource(
+            episode_id=self.journal.episode_id, step=step, source_seq=source_seq, tool_call_id=call_id, tool=tool,
+            ok=result_ok, handler_called=handler_called, observation=dict(observation),
+            content=str(message["content"]), verifying=self.journal.verifying,
+        )
+        shaped = shaper(source)
+        if shaped.event is not None:
+            self.journal.observation_shaped(step=step, **shaped.event)
+        return dict(shaped.message)
+
+    def execution_context(self, environment: CallEnvironment) -> Any:
+        """Trusted resources for one call's handler, or None (no session, or a session without resources)."""
+        provider = getattr(self.context, "execution_context", None) if self.context is not None else None
+        return provider(environment) if provider is not None else None
+
     def _transitions(self, step: int, rendered: RenderedContext) -> None:
         for transition in rendered.transitions:
             self.journal.context_transition(step=step, **{name: transition[name] for name in TRANSITION_FIELDS})
@@ -324,11 +442,23 @@ class ModelSeam:
         )
 
 
+def check_recorded_journal(context: ContextSession | None, records: Sequence[Mapping[str, Any]]) -> None:
+    """Let a session check a recorded journal (missing or corrupt blobs) before replay or resume runs anything."""
+    checker = getattr(context, "check_journal", None) if context is not None else None
+    if checker is not None:
+        checker(records)
+
+
 __all__ = [
     "CONTEXT_BUDGET_EXHAUSTED",
+    "CallEnvironment",
     "ContextSession",
+    "JournalView",
     "ModelCall",
     "ModelSeam",
+    "ObservationSource",
+    "ShapedObservation",
+    "check_recorded_journal",
     "PREFIX_FIELDS",
     "RENDER_OK",
     "RENDER_STATUSES",

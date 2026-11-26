@@ -287,12 +287,13 @@ TOOL_SECURITY: dict[str, SecuritySpec] = {
 }
 
 
-def build_registry(*, exec_tools: bool = False) -> SteadyhandRegistry:
+def build_registry(*, exec_tools: bool = False, context_tools: bool = False) -> SteadyhandRegistry:
     """A frozen registry of the ten tools with their policies. Safe to share across workers.
 
     ``exec_tools=True`` also registers the disabled ``run_python`` and
-    ``run_shell`` exec tools (``steadyhand.tools_exec``). They change the
-    model-facing schemas, so the default registry and its hashes stay as they were.
+    ``run_shell`` exec tools (``steadyhand.tools_exec``). ``context_tools=True``
+    registers Tidemark's ``read_blob`` (``steadyhand.tools_context``) last. Both
+    change the model-facing schemas, so the default registry and its hashes stay as they were.
     """
     registry = SteadyhandRegistry()
     for handler, policy, semantic in TOOL_SPECS:
@@ -302,6 +303,10 @@ def build_registry(*, exec_tools: bool = False) -> SteadyhandRegistry:
         from .tools_exec import register_exec_tools
 
         register_exec_tools(registry)
+    if context_tools:
+        from .tools_context import register_context_tools
+
+        register_context_tools(registry)
     return registry.freeze()
 
 

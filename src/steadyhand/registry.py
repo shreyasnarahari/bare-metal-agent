@@ -38,8 +38,8 @@ SemanticCheck = Callable[["Store", Mapping[str, Any]], list[FieldProblem]]
 # refund_via_ledger lives in the switch strategy's alternatives registry (part 6).
 RESERVED_TOOL_NAMES = frozenset({"refund_via_ledger"})
 # Server-side parameters the executor supplies. Never in the model-facing schema,
-# so a model cannot pass its own idempotency key (the closed schema rejects it).
-SERVER_PARAMETERS = frozenset({"idempotency_key"})
+# so a model cannot pass its own idempotency key or execution resources (the closed schema rejects them).
+SERVER_PARAMETERS = frozenset({"idempotency_key", "execution_context"})
 
 
 def arguments_schema(handler: Callable[..., Any]) -> dict[str, Any]:
@@ -244,4 +244,4 @@ class SteadyhandRegistry:
                 )
 
 
-__all__ = ["RESERVED_TOOL_NAMES", "SemanticCheck", "SteadyhandRegistry", "arguments_schema"]
+__all__ = ["RESERVED_TOOL_NAMES", "SERVER_PARAMETERS", "SemanticCheck", "SteadyhandRegistry", "arguments_schema"]

@@ -557,6 +557,7 @@ class SecuredExecutor:
         idempotency_key: str | None = None,
         call_index: int | None = None,
         authorization: Authorization | None = None,
+        execution_context: Any = None,
     ) -> ToolResult:
         if authorization is None:
             authorization = self.gate.authorize(call, registry, via=via)
@@ -571,6 +572,8 @@ class SecuredExecutor:
             options["idempotency_key"] = idempotency_key
         if call_index is not None:
             options["call_index"] = call_index
+        if execution_context is not None:
+            options["execution_context"] = execution_context  # trusted resources, only after ALLOW
         return self.inner.run(call, registry, store, **options)
 
 

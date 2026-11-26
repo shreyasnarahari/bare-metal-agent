@@ -32,7 +32,7 @@ from .errors import (
 )
 from .policy import ToolPolicy
 from .registry import SemanticCheck, SteadyhandRegistry
-from .store import NotFoundError, Store, money
+from .store import ArgumentRejected, NotFoundError, Store, money
 from .types import ModelTurn, ToolCall, ToolResult
 
 MAX_LISTED_TOOL_NAMES = 12  # an unknown-tool hint lists the registered names only up to this many
@@ -197,16 +197,23 @@ def parse_error_observation(turn: ModelTurn) -> ErrorObservation:
 
 def not_found_observation(tool: str, error: NotFoundError) -> ErrorObservation:
     """The id names no row; repeating the call will not help."""
+    field = getattr(error, "field", None) or f"{error.entity}_id"
+    hint = getattr(error, "hint", None) or (
+        "The store has no such row. Check the id with the user or find it "
+        "another way; repeating this call will not help."
+    )
     return ErrorObservation(
         error_type=ErrorType.NOT_FOUND,
         tool=tool,
         retryable=False,
-        hint=(
-            "The store has no such row. Check the id with the user or find it "
-            "another way; repeating this call will not help."
-        ),
-        details=(FieldProblem(f"{error.entity}_id", f"no {error.entity} with this id exists", error.entity_id),),
+        hint=hint,
+        details=(FieldProblem(field, f"no {error.entity} with this id exists", error.entity_id),),
     )
+
+
+def rejected_argument_observation(tool: str, error: ArgumentRejected) -> ErrorObservation:
+    """A handler refused an argument it could only check against its own state (an offset past a blob's end)."""
+    return invalid_arguments(tool, (FieldProblem(error.field, error.problem, error.got),))
 
 
 def timeout_observation(tool: str, policy: ToolPolicy) -> ErrorObservation:
@@ -427,6 +434,7 @@ __all__ = [
     "json_pointer",
     "must_be_future",
     "not_found_observation",
+    "rejected_argument_observation",
     "outcome_unknown_observation",
     "suspicious_result_observation",
     "parse_error_observation",

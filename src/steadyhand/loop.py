@@ -39,6 +39,14 @@ and the final paraphrase alike), owns the slot-headroom check on real
 rendered tokens instead of the controller's "history only grows" estimate,
 and sees each tool message before it joins the history.
 
+With a session, each call's observation is finished in this order: journal
+the raw ``tool_result`` (its seq is the source), let the session shape the
+message once (persisting any blob and journaling ``observation_shaped``),
+append the shaped message, then apply taint from the raw result and its seq.
+The next call is decided only after that. Without a session the order and
+bytes are the old ones. A session may also give handlers that ask for them
+(``read_blob``) trusted execution resources, built here in call order.
+
 Endings: ``done`` (visible text), ``budget_exhausted``, ``escalated``, or
 ``aborted`` (backend, request, truncation, ``context_budget_exhausted``, or cancellation). For the two
 controller endings, ``final_content`` is rendered from the journal records,
@@ -55,7 +63,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from .context import CONTEXT_BUDGET_EXHAUSTED, ContextSession, ModelSeam
+from .context import CONTEXT_BUDGET_EXHAUSTED, CallEnvironment, ContextSession, JournalView, ModelSeam
 from .controller import (
     DEFAULT_GUARD_LIMIT,
     Budgets,
@@ -130,6 +138,7 @@ class _Plan:
     call_index: int | None = None
     skipped: bool = False
     authorization: Authorization | None = None  # Bulkhead's decision; None when Bulkhead is off
+    execution_context: Any = None  # trusted resources from the context session (read_blob); None otherwise
 
     @property
     def refused(self) -> bool:
@@ -467,7 +476,23 @@ def _plan(call: ToolCall, episode: _Episode, *, reserve_fault_index: bool, skip:
         plan.key = idempotency_key(episode.journal.episode_id, call.name, verdict.arguments)
     if reserve_fault_index and episode.injector is not None:
         plan.call_index = episode.injector.reserve(call.name)
+    plan.execution_context = _execution_context(call, episode)
     return plan
+
+
+def _execution_context(call: ToolCall, episode: _Episode) -> Any:
+    """The session's trusted resources for one allowed call, built in call order (None without a session)."""
+    if episode.seam is None or not episode.seam.enabled:
+        return None
+    environment = CallEnvironment(
+        episode_id=episode.journal.episode_id,
+        step=episode.controller.steps,
+        tool=call.name,
+        tool_call_id=call.id,
+        journal=JournalView(episode.journal.records),
+        taint=episode.security.taint.value if episode.security is not None else None,
+    )
+    return episode.seam.execution_context(environment)
 
 
 def _first_attempt(plan: _Plan, episode: _Episode) -> ToolResult:
@@ -481,6 +506,8 @@ def _first_attempt(plan: _Plan, episode: _Episode) -> ToolResult:
         options["call_index"] = plan.call_index
     if plan.authorization is not None:
         options["authorization"] = plan.authorization  # the executor is a SecuredExecutor
+    if plan.execution_context is not None:
+        options["execution_context"] = plan.execution_context
     return episode.executor.run(plan.call, episode.registry, episode.store, **options)
 
 
@@ -554,6 +581,7 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
             budget=episode.budget,
             idempotency_key=plan.key,
             security=episode.security,
+            execution_context=plan.execution_context,
         )
         outcome = apply_recovery(episode.strategy, context, first)
         result, escalate_reason, suspicious = outcome.result, outcome.escalate_reason, outcome.suspicious
@@ -570,8 +598,17 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
     if not plan.decision.blocked:
         controller.guard.record_outcome(plan.decision.key, result)
     message = observation_message(call, result)
-    episode.history.append(episode.seam.shape_observation(message, step=step) if episode.seam is not None else message)
-    record = journal.tool_result(step=step, result=result)
+    seam = episode.seam
+    if seam is not None and seam.enabled:
+        # Raw result first (the source of truth for replay and taint), then shape once, then append.
+        record = journal.tool_result(step=step, result=result)
+        episode.history.append(seam.shape_result(
+            call.id, call.name, result.ok, result.handler_called, result.observation(), message,
+            step=step, source_seq=record["seq"],
+        ))
+    else:
+        episode.history.append(message)
+        record = journal.tool_result(step=step, result=result)
     if episode.security is not None:
         # Taint lands before the next call in this message (or the next turn) is decided.
         episode.security.observe(call_id=call.id, tool=call.name, result=result, source_seq=record["seq"])

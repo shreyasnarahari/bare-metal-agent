@@ -353,18 +353,35 @@ def gold_problems(before: Store, after: Store, gold: Mapping[str, Any]) -> list[
 # Evidence availability
 
 
-def fact_available(messages: Sequence[Mapping[str, Any]], fact: str, required: str) -> dict[str, Any]:
+BLOB_HANDLE_IN_TEXT = re.compile(r"blob://sha256:[0-9a-f]{64}")
+
+
+def fact_available(messages: Sequence[Mapping[str, Any]], fact: str, required: str, *, blobs: Any = None) -> dict[str, Any]:
     """Whether ``fact`` was reachable in the rendered request. Inline evidence always counts.
 
-    ``blob_handle``, ``memory``, and ``any_restorable`` also accept a restorable
-    reference, but part 1 has no blob store or memory, so only inline is checked.
+    ``blob_handle`` and ``any_restorable`` also accept a blob whose handle the
+    request names and whose bytes (read through ``blobs``, the session's
+    namespaced reader) contain the fact. ``memory`` waits for part 5, so only
+    inline evidence counts for it.
     """
+    handles: list[str] = []
     for message in messages:
         texts = [message.get("content") or ""] + [
             (call.get("function") or {}).get("arguments") or "" for call in message.get("tool_calls") or []
         ]
         if any(isinstance(text, str) and fact in text for text in texts):
             return {"available": True, "via": "inline", "required": required}
+        for text in texts:
+            if isinstance(text, str):
+                handles.extend(BLOB_HANDLE_IN_TEXT.findall(text))
+    if blobs is not None and required in ("blob_handle", "any_restorable"):
+        for handle in dict.fromkeys(handles):
+            try:
+                payload = blobs.read_bytes(handle).decode("utf-8")
+            except Exception:  # an unreadable handle is not evidence
+                continue
+            if fact in payload or json.dumps(fact, ensure_ascii=False)[1:-1] in payload:
+                return {"available": True, "via": "blob_handle", "required": required, "handle": handle}
     return {"available": False, "via": None, "required": required}
 
 
@@ -390,7 +407,8 @@ class EvidenceProbe:
         rendered = self.inner.render(history, step=step, tools=tools, tool_choice=tool_choice,
                                      initial_count=initial_count, **options)
         if tool_choice != "none":
-            found = fact_available(rendered.messages, self.task.planted_fact["text"], self.task.required_availability)
+            found = fact_available(rendered.messages, self.task.planted_fact["text"], self.task.required_availability,
+                                   blobs=getattr(self.inner, "blob_reader", None))
             self.by_step[step] = found["available"]
             if step == self.task.needed_at_step and self.at_needed is None:
                 self.at_needed = found
@@ -398,6 +416,28 @@ class EvidenceProbe:
 
     def shape_observation(self, message: Mapping[str, Any], *, step: int) -> dict[str, Any]:
         return self.inner.shape_observation(message, step=step)
+
+    def shape_result(self, source: Any) -> Any:
+        shaper = getattr(self.inner, "shape_result", None)
+        if shaper is not None:
+            return shaper(source)
+        from steadyhand.context import ShapedObservation
+
+        message = {"role": "tool", "tool_call_id": source.tool_call_id, "content": source.content}
+        return ShapedObservation(dict(self.inner.shape_observation(message, step=source.step)))
+
+    def execution_context(self, environment: Any) -> Any:
+        provider = getattr(self.inner, "execution_context", None)
+        return provider(environment) if provider is not None else None
+
+    def check_journal(self, records: Any) -> None:
+        checker = getattr(self.inner, "check_journal", None)
+        if checker is not None:
+            checker(records)
+
+    @property
+    def blob_reader(self) -> Any:
+        return getattr(self.inner, "blob_reader", None)
 
     def backend_timings(self, turn: ModelTurn, rendered: RenderedContext) -> dict[str, Any]:
         return self.inner.backend_timings(turn, rendered)

@@ -38,6 +38,7 @@ from toolsmith.prompting import SPANS_OK, TokenSpans, normalize_history, render_
 from . import __version__
 from .budgets import EXHAUSTED, COMPACTION_PENDING, BudgetConfigError, check_static, evaluate
 from .cache import ContentCache
+from .observations import ObservationShaper, ShapingSupport
 from .prefix_lint import Fingerprint, FingerprintStore, lint
 from .recitation import PlanItem, RecitationState, bound
 from .segments import (
@@ -284,8 +285,13 @@ def initial_state(
     return state, initial_count
 
 
-class PrefixStableSession:
-    """The ``prefix_stable`` context strategy (see the module docstring). One instance per episode."""
+class PrefixStableSession(ShapingSupport):
+    """The ``prefix_stable`` context strategy (see the module docstring). One instance per episode.
+
+    ``observations`` (part 3) shapes each large tool result once, at arrival, so the recent segment
+    holds the shaped message from the start and is never rewritten later; the recitation tail lists
+    the newest open blob handles.
+    """
 
     strategy = "prefix_stable"
     version = __version__
@@ -298,9 +304,11 @@ class PrefixStableSession:
         plan: Sequence[PlanItem] = (),
         fingerprint_store: FingerprintStore | None = None,
         checkpoint_key: str | None = None,
+        observations: ObservationShaper | None = None,
     ) -> None:
         if config.strategy != self.strategy:
             raise ValueError(f"PrefixStableSession needs strategy {self.strategy!r}, not {config.strategy!r}")
+        self._init_shaping(observations, config.observations)
         self.config = config
         self.assembler = ContextAssembler(renderer)
         self.renderer = renderer
@@ -316,7 +324,7 @@ class PrefixStableSession:
         return self.config.as_dict()
 
     def shape_observation(self, message: Mapping[str, Any], *, step: int) -> dict[str, Any]:
-        """Part 2 keeps observations as they arrived (part 3 shapes them once, at arrival)."""
+        """Without a shaper, observations stay as they arrived (``shape_result`` shapes them once, at arrival)."""
         return dict(message)
 
     def backend_timings(self, turn: ModelTurn, rendered: RenderedContext) -> dict[str, Any]:
@@ -346,6 +354,7 @@ class PrefixStableSession:
             completed_step_count=int(budget_state.get("steps", step)) if budget_state else step,
             prompt_tokens_used=len(previous.token_ids) if previous is not None else None,
             remaining_step_budget=remaining,
+            open_blob_handles=self.open_blob_handles,
         )
 
     def _exhausted(self, detail: str, transitions: tuple[dict[str, Any], ...] = ()) -> RenderedContext:
