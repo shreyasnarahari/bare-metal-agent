@@ -28,6 +28,14 @@ identity and serves the recorded runs instead of calling any backend, so a
 matching manifest proves the recording is consistent and the control plane
 reproduces, not that the backend still enforces anything (see
 ``steadyhand.replay``).
+
+Tidemark context fields are optional in the same way. With a context session,
+the full canonical ``context_config`` is stored, and its hash and the
+``tidemark_version`` are identity fields: a changed strategy, budget,
+tokenizer or template, or generation path gives a new episode id.
+``context_server`` (GGUF, llama.cpp tag, KV type, cache and slot-save flags)
+is resume-checked but not part of the id. Without a session all of them stay
+``None`` and are left out of the id and the file.
 """
 
 from __future__ import annotations
@@ -89,6 +97,12 @@ SECURITY_IDENTITY_FIELDS = ("security_spec_sha256", "task_policy_sha256", "paren
 RESUME_FIELDS = ("backend",)
 # Every Bulkhead field; left out of the written manifest while None.
 SECURITY_FIELDS = (*SECURITY_IDENTITY_FIELDS, "security_config", "security_specs", "backend", "bulkhead_version")
+# Tidemark identity fields: part of the id only when a context session is enabled.
+CONTEXT_IDENTITY_FIELDS = ("context_config_sha256", "tidemark_version")
+# Checked on resume but not part of the id: the serving properties a context run depends on.
+CONTEXT_RESUME_FIELDS = ("context_server",)
+# Every Tidemark field; left out of the written manifest while None.
+CONTEXT_FIELDS = (*CONTEXT_IDENTITY_FIELDS, "context_config", *CONTEXT_RESUME_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -137,6 +151,11 @@ class EpisodeManifest:
     backend: dict[str, Any] | None = None  # part 3: the execution backend's identity; resume-checked
     bulkhead_version: str | None = None
     parent_episode_id: str | None = None
+    # Tidemark (part 1). None without a context session; then absent from the identity and the file.
+    context_config: dict[str, Any] | None = None
+    context_config_sha256: str | None = None
+    tidemark_version: str | None = None
+    context_server: dict[str, Any] | None = None
     completed: bool = False
 
     @property
@@ -144,14 +163,23 @@ class EpisodeManifest:
         """Whether this episode ran with Bulkhead enabled."""
         return self.task_policy_sha256 is not None
 
+    @property
+    def contextual(self) -> bool:
+        """Whether this episode ran with a Tidemark context session."""
+        return self.context_config_sha256 is not None
+
     def identity(self) -> dict[str, Any]:
         """The fields hashed into the episode id."""
-        names = (*IDENTITY_FIELDS, *SECURITY_IDENTITY_FIELDS) if self.secured else IDENTITY_FIELDS
+        names: tuple[str, ...] = IDENTITY_FIELDS
+        if self.secured:
+            names = (*names, *SECURITY_IDENTITY_FIELDS)
+        if self.contextual:
+            names = (*names, *CONTEXT_IDENTITY_FIELDS)
         return {name: getattr(self, name) for name in names}
 
     def as_dict(self) -> dict[str, Any]:
         value = asdict(self)
-        for name in SECURITY_FIELDS:
+        for name in (*SECURITY_FIELDS, *CONTEXT_FIELDS):
             if value[name] is None:
                 del value[name]
         return value
@@ -196,12 +224,21 @@ def build_manifest(
     security: SecurityConfig | None = None,
     parent_episode_id: str | None = None,
     backend: BackendIdentity | None = None,
+    context_config: Mapping[str, Any] | None = None,
+    context_version: str | None = None,
+    context_server: Mapping[str, Any] | None = None,
 ) -> EpisodeManifest:
     """The manifest for an episode about to start on ``store`` (hashed before any write).
 
     ``security`` enables Bulkhead; ``parent_episode_id`` links an approved retry to the episode that
     asked; ``backend`` is the identity of the backend that will run sandboxed calls.
+    ``context_config`` (a session's ``identity()``) and ``context_version`` enable the Tidemark fields;
+    ``context_server`` describes the serving shape a resume must match.
     """
+    if (context_config is None) != (context_version is None):
+        raise ValueError("context_config and context_version go together")
+    if context_server is not None and context_config is None:
+        raise ValueError("Only a context-enabled episode can have a context_server")
     if (parent_episode_id is not None or backend is not None) and security is None:
         raise ValueError("Only a Bulkhead-secured episode can have a parent episode or a backend")
     task = [dict(message) for message in messages]
@@ -240,6 +277,15 @@ def build_manifest(
             "security_specs": registry.security_specs(),
             "backend": backend.as_dict() if backend is not None else None,
             "bulkhead_version": bulkhead.__version__,
+        }
+    if context_config is not None:
+        # Only a context-enabled episode hashes these, so legacy ids stay exactly as they were.
+        values["context_config_sha256"] = canonical_hash(dict(context_config))
+        values["tidemark_version"] = context_version
+        extra = {
+            **extra,
+            "context_config": dict(context_config),
+            "context_server": dict(context_server) if context_server is not None else None,
         }
     return EpisodeManifest(
         episode_id=episode_id_for(values),
@@ -310,7 +356,10 @@ def mark_completed(path: str | Path) -> EpisodeManifest:
 def require_match(
     recorded: EpisodeManifest,
     current: EpisodeManifest,
-    fields: Sequence[str] = (*IDENTITY_FIELDS, *SECURITY_IDENTITY_FIELDS, *SERVER_FIELDS, *RESUME_FIELDS),
+    fields: Sequence[str] = (
+        *IDENTITY_FIELDS, *SECURITY_IDENTITY_FIELDS, *CONTEXT_IDENTITY_FIELDS, *SERVER_FIELDS, *RESUME_FIELDS,
+        *CONTEXT_RESUME_FIELDS,
+    ),
 ) -> None:
     """Raise ``ReplayMismatch`` naming the first field where the two manifests disagree."""
     for name in fields:
@@ -334,6 +383,9 @@ def try_claim(path: str | Path) -> bool:
 
 
 __all__ = [
+    "CONTEXT_FIELDS",
+    "CONTEXT_IDENTITY_FIELDS",
+    "CONTEXT_RESUME_FIELDS",
     "EpisodeManifest",
     "IDENTITY_FIELDS",
     "RESUME_FIELDS",

@@ -3,6 +3,9 @@
 Prompt rendering, native tool-call parsing, grammars, and the shim's one-shot
 model-output repair all stay inside ``toolsmith``. This module only builds the
 request, calls ``chat()`` (never ``chat_stream()``), and classifies the result.
+A service built with ``generation_path="buffered_stream"`` measures TTFT inside
+``chat()`` and still returns one complete response, so nothing here streams.
+Each turn carries the service's per-attempt evidence as ``ModelTurn.metrics``.
 
 Concurrency: ``SteadyhandClient`` keeps no per-call state. ``ToolsmithService``
 recompiles a grammar in ``_prepare`` without a lock, so each worker thread gets
@@ -16,7 +19,7 @@ import os
 import time
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -36,7 +39,7 @@ from toolsmith.protocols import ModelProfile
 from toolsmith.validation import StructuredOutputValidationError, ToolCallValidationError
 
 from .controller import has_visible_character
-from .types import ModelTurn, ToolCall, TurnKind
+from .types import ModelTurn, ToolCall, TurnKind, TurnMetrics
 
 DEFAULT_MAX_TOKENS = 256
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -88,9 +91,18 @@ class SteadyhandClient:
         """The model profile of the wrapped service."""
         return self.service.profile
 
+    @property
+    def generation_path(self) -> str:
+        """``non_streaming`` or ``buffered_stream`` (the service's TTFT path)."""
+        return getattr(self.service, "generation_path", "non_streaming")
+
     def settings(self) -> dict[str, Any]:
-        """What the journal records about this model configuration."""
-        return {
+        """What the journal records about this model configuration.
+
+        ``generation_path`` appears only when it is not the default, so legacy
+        episodes keep their journals and ids.
+        """
+        settings = {
             "profile": self.profile.name,
             "model": self.profile.model,
             "protocol": self.profile.protocol.value,
@@ -101,16 +113,19 @@ class SteadyhandClient:
             "seed": self.seed,
             "slot_context": self.slot_context,
         }
+        if self.generation_path != "non_streaming":
+            settings["generation_path"] = self.generation_path
+        return settings
 
-    def complete(
+    def request(
         self,
         messages: Sequence[Mapping[str, Any]],
         tools: Sequence[Mapping[str, Any]],
         *,
         tool_choice: str | dict[str, Any] = "auto",
-    ) -> ModelTurn:
-        """One chat completion through the shim, as a ``ModelTurn`` (failures become failure turns)."""
-        request = ChatCompletionRequest(
+    ) -> ChatCompletionRequest:
+        """The shim request ``complete()`` sends for these messages."""
+        return ChatCompletionRequest(
             model=self.profile.model,
             messages=deepcopy([dict(message) for message in messages]),
             tools=deepcopy([dict(tool) for tool in tools]),
@@ -120,9 +135,41 @@ class SteadyhandClient:
             seed=self.seed,
             chat_template_kwargs={"enable_thinking": self.enable_thinking},
         )
+
+    def render_prompt(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]],
+        *,
+        tool_choice: str | dict[str, Any] = "auto",
+    ) -> str:
+        """The exact prompt text ``complete()`` would send first (the model's own chat template)."""
+        return self.service.render_prompt(self.request(messages, tools, tool_choice=tool_choice))
+
+    def complete(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        tools: Sequence[Mapping[str, Any]],
+        *,
+        tool_choice: str | dict[str, Any] = "auto",
+        id_slot: int | None = None,
+    ) -> ModelTurn:
+        """One chat completion through the shim, as a ``ModelTurn`` (failures become failure turns).
+
+        ``id_slot`` pins the request to a llama-server slot (a scheduler lease).
+        """
+        request = self.request(messages, tools, tool_choice=tool_choice)
         started = time.perf_counter()
+
+        def metrics(attempts: Sequence[Mapping[str, Any]] = ()) -> TurnMetrics:
+            return TurnMetrics.from_toolsmith(
+                attempts,
+                response_elapsed_ms=(time.perf_counter() - started) * 1000.0,
+                generation_path=self.generation_path,
+            )
+
         try:
-            response = self.service.chat(request)
+            response = self.service.chat(request) if id_slot is None else self.service.chat(request, id_slot=id_slot)
         except APIError as exc:
             message = str(exc)
             if exc.code == "completion_truncated" and self.slot_context is not None:
@@ -134,6 +181,7 @@ class SteadyhandClient:
                 raw_output=getattr(exc, "raw_output", None),
                 repair_attempts=exc.repair_attempts,
                 elapsed_s=time.perf_counter() - started,
+                metrics=metrics(getattr(exc, "attempt_metrics", ()) or ()),
             )
         except LlamaCppError as exc:
             return ModelTurn.failure(
@@ -141,12 +189,15 @@ class SteadyhandClient:
                 backend_error_code(exc),
                 f"{type(exc).__name__}: {exc}",
                 elapsed_s=time.perf_counter() - started,
+                metrics=metrics(),
             )
-        return classify_completion(response, elapsed_s=time.perf_counter() - started)
+        turn = classify_completion(response, elapsed_s=time.perf_counter() - started)
+        attempts = (response.get("toolsmith") or {}).get("attempts") or ()
+        return replace(turn, metrics=metrics(attempts if isinstance(attempts, list) else ()))
 
 
 def classify_completion(response: Mapping[str, Any], *, elapsed_s: float = 0.0) -> ModelTurn:
-    """Turn an OpenAI-shaped chat completion from the shim into a ``ModelTurn``."""
+    """Turn an OpenAI-shaped chat completion from the shim into a ``ModelTurn`` (metrics left unset)."""
     usage = response.get("usage") or {}
     prompt_tokens = int(usage.get("prompt_tokens") or 0)
     completion_tokens = int(usage.get("completion_tokens") or 0)
@@ -284,13 +335,18 @@ def worker_service(
     profile: ModelProfile,
     *,
     use_grammars: bool = True,
+    generation_path: str = "non_streaming",
 ) -> ToolsmithService:
-    """One ``ToolsmithService`` per worker thread. The recorder stays unset: the journal is the record."""
+    """One ``ToolsmithService`` per worker thread. The recorder stays unset: the journal is the record.
+
+    ``generation_path="buffered_stream"`` measures TTFT (a manifest identity field for Tidemark runs).
+    """
     return ToolsmithService(
         llama_client,
         renderer,
         profile=profile,
         use_grammars=use_grammars,
+        generation_path=generation_path,
     )
 
 

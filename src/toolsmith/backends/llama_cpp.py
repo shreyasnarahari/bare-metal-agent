@@ -99,8 +99,12 @@ class LlamaCppClient:
         temperature: float = 0.6,
         grammar: str | None = None,
         seed: int | None = None,
+        id_slot: int | None = None,
     ) -> dict[str, Any]:
-        """One non-streaming completion. Raises ``CompletionTruncatedError`` at the token limit."""
+        """One non-streaming completion. Raises ``CompletionTruncatedError`` at the token limit.
+
+        ``id_slot`` pins the request to one llama-server slot (sent only when given).
+        """
         response = self._request(
             "POST",
             "/completion",
@@ -111,6 +115,7 @@ class LlamaCppClient:
                 grammar=grammar,
                 seed=seed,
                 stream=False,
+                id_slot=id_slot,
             ),
         )
         if self._is_truncated(response):
@@ -125,6 +130,7 @@ class LlamaCppClient:
         temperature: float = 0.6,
         grammar: str | None = None,
         seed: int | None = None,
+        id_slot: int | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield each streamed event as it arrives.
 
@@ -138,6 +144,7 @@ class LlamaCppClient:
             grammar=grammar,
             seed=seed,
             stream=True,
+            id_slot=id_slot,
         )
         # The terminal event (stop=true) carries timings and the stop reason; content arrives
         # in pieces before it, so it is collected for a truncation error.
@@ -190,6 +197,7 @@ class LlamaCppClient:
         grammar: str | None,
         seed: int | None,
         stream: bool,
+        id_slot: int | None = None,
     ) -> dict[str, Any]:
         if max_tokens < 1:
             raise ValueError("max_tokens must be positive")
@@ -207,6 +215,10 @@ class LlamaCppClient:
             payload["grammar"] = grammar
         if seed is not None:
             payload["seed"] = seed
+        if id_slot is not None:
+            if isinstance(id_slot, bool) or not isinstance(id_slot, int) or id_slot < 0:
+                raise ValueError("id_slot must be a non-negative integer")
+            payload["id_slot"] = id_slot
         return payload
 
     @staticmethod

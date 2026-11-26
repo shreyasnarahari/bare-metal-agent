@@ -1,0 +1,50 @@
+{
+  "_note": "Expected RegexTokenizer (CPU fake) output for the plain parity cases. A change here means the fake or the corpus changed; it says nothing about the real model tokenizer.",
+  "tokenizer": {
+    "name": "regex-fake-v1",
+    "kind": "fake",
+    "parity": "not_applicable"
+  },
+  "cases": {
+    "empty": {
+      "count": 0,
+      "ids_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    "ascii": {
+      "count": 20,
+      "ids_sha256": "7b6a4424a1becf7b0b766df7e867348c7d317d61cbca9bde639c0140ae350036"
+    },
+    "non_ascii": {
+      "count": 27,
+      "ids_sha256": "ff39bc0ea7d1f0f7360565d419e83cd533e76d3df877a77daeaa07f4c805e2b0"
+    },
+    "combining": {
+      "count": 24,
+      "ids_sha256": "a5af03103d71b5cf33ae1130daac9ab0641e681ae137274b88f40a5e08fe3bed"
+    },
+    "emoji": {
+      "count": 28,
+      "ids_sha256": "c5d22e6572357098badac574bb120472cfa81bf026fcbe37825a19c9d229fca7"
+    },
+    "newlines": {
+      "count": 12,
+      "ids_sha256": "0ed932e4314750f5ab3703dba1b88ffc5befcc8cb60add6908dc25424aa445c7"
+    },
+    "markup_adjacent": {
+      "count": 9,
+      "ids_sha256": "ad2165cbfae3a37477388d531b8ce2f890ba328220fb53293bf501504b0b37b3"
+    },
+    "tool_markup_adjacent": {
+      "count": 38,
+      "ids_sha256": "d6d9df0e3036f6d7f99ec4070383c5d37b9d2078095995ead3bf8ee8c54cd4ae"
+    },
+    "think_markup_adjacent": {
+      "count": 18,
+      "ids_sha256": "6a2bb8d4196c8de8e677f620bc39e0bb3afffb92246306483dd63965602a4948"
+    },
+    "json_dense": {
+      "count": 38,
+      "ids_sha256": "c83de3037b22c4c6f3ea54070f357df908ca924d7d233e7d7a7be861e6f30b3f"
+    }
+  }
+}

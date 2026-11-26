@@ -32,7 +32,7 @@ from steadyhand import (
 )
 from steadyhand.faults import FaultInjector, FaultMode, FaultSpec, build_schedule
 from steadyhand.journal import ReplayMismatch, check_record, manifest_path_for
-from steadyhand.manifest import SECURITY_FIELDS, EpisodeManifest, build_manifest, load_manifest, require_match
+from steadyhand.manifest import CONTEXT_FIELDS, SECURITY_FIELDS, EpisodeManifest, build_manifest, load_manifest, require_match
 from steadyhand.replay import replay_episode, run_claimed_episode
 from steadyhand.security import (
     SecuredExecutor,
@@ -169,7 +169,8 @@ def test_without_bulkhead_journals_and_manifests_are_unchanged(tmp_path):
         SteadyhandClient(FakeService()).settings(), build_registry(), load_fixture().clone(), initial_messages(GOAL),
         budgets={"max_steps": 8}, guard_limit=3,
     )
-    assert set(legacy.as_dict()) == {field.name for field in fields(EpisodeManifest)} - set(SECURITY_FIELDS)
+    # Bulkhead and Tidemark fields are both left out of a manifest that uses neither.
+    assert set(legacy.as_dict()) == {field.name for field in fields(EpisodeManifest)} - set(SECURITY_FIELDS) - set(CONTEXT_FIELDS)
     for manifest_file in sorted(GOLDEN.glob("*.manifest.json")):
         manifest = load_manifest(manifest_file)  # golden manifests predate Bulkhead and still load
         assert not manifest.secured and not set(SECURITY_FIELDS) & set(manifest.as_dict())

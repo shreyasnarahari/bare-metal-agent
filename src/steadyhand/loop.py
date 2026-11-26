@@ -32,8 +32,15 @@ order afterwards, so replay stays exact. A message that contains any write,
 or (with Bulkhead) any call with a sink or egress, runs sequentially, so a
 later call is always decided after the earlier results are in.
 
+Every model request goes through ``steadyhand.context.ModelSeam``. Without
+``context=`` that is exactly the old path. With a Tidemark ``ContextSession``,
+the session renders the request messages (agent turns, parse-error follow-ups,
+and the final paraphrase alike), owns the slot-headroom check on real
+rendered tokens instead of the controller's "history only grows" estimate,
+and sees each tool message before it joins the history.
+
 Endings: ``done`` (visible text), ``budget_exhausted``, ``escalated``, or
-``aborted`` (backend, request, truncation, or cancellation). For the two
+``aborted`` (backend, request, truncation, ``context_budget_exhausted``, or cancellation). For the two
 controller endings, ``final_content`` is rendered from the journal records,
 so reading the journal back reproduces it.
 """
@@ -48,8 +55,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from toolsmith.evaluation.models import canonical_hash
-
+from .context import CONTEXT_BUDGET_EXHAUSTED, ContextSession, ModelSeam
 from .controller import (
     DEFAULT_GUARD_LIMIT,
     Budgets,
@@ -110,6 +116,7 @@ class _Episode:
     sleep: Callable[[float], None]
     history: list[dict[str, Any]]
     security: SecurityGate | None = None
+    seam: ModelSeam | None = None
 
 
 @dataclass
@@ -153,6 +160,7 @@ def run_episode(
     security: SecurityConfig | None = None,
     parent_episode_id: str | None = None,
     backend: ExecutionBackend | None = None,
+    context: ContextSession | None = None,
 ) -> EpisodeResult:
     """Run one episode against ``store``, which the episode owns and mutates.
 
@@ -174,6 +182,9 @@ def run_episode(
     ``parent_episode_id`` marks an approved retry (its grants bind to that parent).
     ``backend`` runs the calls that must never run in-process (exec, sandboxed, network, or
     filesystem tools); its tier must be one of the configuration's available tiers.
+
+    ``context`` (a Tidemark ``ContextSession``, one per episode) chooses the messages each model
+    request sends and adds ``context_render``/``backend_timings`` events. ``None`` changes nothing.
     """
     if (parent_episode_id is not None or backend is not None) and security is None:
         raise ValueError("Only a Bulkhead-secured episode can have a parent episode or a backend")
@@ -189,10 +200,12 @@ def run_episode(
         budgets,
         guard_limit=guard_limit,
         clock=clock,
-        slot_context=settings.get("slot_context"),
+        # A context session checks slot headroom on the exact rendered prompt, which may shrink.
+        slot_context=settings.get("slot_context") if context is None else None,
         max_tokens=settings.get("max_tokens"),
     )
     history = deepcopy([dict(message) for message in messages])
+    seam = ModelSeam(client, journal, context=context, initial_count=len(history))
     gate = None
     if security is not None:
         gate = SecurityGate(
@@ -218,6 +231,7 @@ def run_episode(
         sleep=sleep,
         history=history,
         security=gate,
+        seam=seam,
     )
     tools = registry.schemas()
     final_content: str | None = None
@@ -236,6 +250,7 @@ def run_episode(
         messages=history,
         recovery_policy=strategy.name,
         bulkhead=gate.summary() if gate is not None else None,
+        context=seam.summary(),
     )
     try:
         while controller.running:
@@ -252,11 +267,16 @@ def run_episode(
                 controller.abort("completion_truncated", check.slot_overflow)
                 break
 
-            # 2. One model turn. Call ids are numbered by step, so replay sees the same ids.
-            messages_sha256 = canonical_hash(history)
-            turn = _visible_or_parse_error(client.complete(history, tools).with_call_ids(controller.steps))
+            # 2. One model turn through the seam. Call ids are numbered by step, so replay sees the same ids.
+            call = seam.call(history, tools, step=controller.steps)
+            if call.exhausted:
+                assert call.rendered is not None
+                controller.abort(CONTEXT_BUDGET_EXHAUSTED, call.rendered.detail)
+                break
+            assert call.turn is not None
+            turn = _visible_or_parse_error(call.turn.with_call_ids(controller.steps))
             controller.record_usage(turn)
-            journal.model_turn(step=controller.steps, turn=turn, messages_sha256=messages_sha256)
+            seam.record(call, turn, step=controller.steps)
 
             # 3. Classify the turn: text ends the episode; a fatal error aborts it; a parse error
             #    becomes an observation the model can fix on its next step.
@@ -292,7 +312,7 @@ def run_episode(
         if status in (EpisodeStatus.BUDGET_EXHAUSTED, EpisodeStatus.ESCALATED):
             final_content = render_final_message(status, journal.records)
             if paraphrase_final and final_content is not None:
-                final_content = _paraphrase(client, history, tools, final_content, controller, journal)
+                final_content = _paraphrase(seam, history, tools, final_content, controller, journal)
     except BaseException as exc:
         # A replay mismatch is the result, not a crash to journal. Otherwise record
         # the crash, without letting a second failure hide the first.
@@ -542,7 +562,8 @@ def _finish(plan: _Plan, first: ToolResult | None, episode: _Episode) -> tuple[s
     # The guard remembers each outcome, so a block can tell the model what happened last time.
     if not plan.decision.blocked:
         controller.guard.record_outcome(plan.decision.key, result)
-    episode.history.append(observation_message(call, result))
+    message = observation_message(call, result)
+    episode.history.append(episode.seam.shape_observation(message, step=step) if episode.seam is not None else message)
     record = journal.tool_result(step=step, result=result)
     if episode.security is not None:
         # Taint lands before the next call in this message (or the next turn) is decided.
@@ -567,21 +588,28 @@ def _answerable(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _paraphrase(
-    client: ModelClient,
+    seam: ModelSeam,
     history: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     template: str,
     controller: EpisodeController,
     journal: EpisodeJournal,
 ) -> str:
-    """One tool-free sentence from the model. Falls back to the template on any failure."""
+    """One tool-free sentence from the model, through the same seam. Falls back to the template on any failure.
+
+    With a context session, a render that cannot fit records its ``context_render`` and keeps the template.
+    """
     request = {"role": "user", "content": PARAPHRASE_REQUEST + template}
     sent = [*_answerable(history), request]
-    turn = client.complete(sent, tools, tool_choice="none")
+    call = seam.call(sent, tools, step=controller.steps, tool_choice="none")
+    if call.exhausted:
+        return template
+    assert call.turn is not None
+    turn = call.turn
     controller.record_usage(turn)
     history.append(request)
     journal.observation(step=controller.steps, message=request, observation={"purpose": "final_paraphrase"})
-    journal.model_turn(step=controller.steps, turn=turn, messages_sha256=canonical_hash(sent), tool_choice="none")
+    seam.record(call, turn, step=controller.steps, tool_choice="none")
     if turn.kind is TurnKind.TEXT and has_visible_character(turn.content) and turn.assistant_message:
         history.append(turn.assistant_message)
         return turn.content or template

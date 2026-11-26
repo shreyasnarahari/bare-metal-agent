@@ -6,7 +6,7 @@ Toolsmith is a from-first-principles function-calling and constrained-decoding l
 
 ## Run and verify
 
-On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` (Toolsmith), `notebooks/02_steadyhand.ipynb` (Steadyhand), or `notebooks/03_bulkhead.ipynb` (Bulkhead) from the synced tree.
+On Colab, clone or `git pull` this repository into `/content/bare-metal-agent`, then run `notebooks/01_toolsmith.ipynb` (Toolsmith), `notebooks/02_steadyhand.ipynb` (Steadyhand), `notebooks/03_bulkhead.ipynb` (Bulkhead), or `notebooks/04_tidemark.ipynb` (Tidemark) from the synced tree.
 
 Local checks:
 
@@ -17,7 +17,7 @@ Local checks:
 git diff --check
 ```
 
-There are three notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track, `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop, and `notebooks/03_bulkhead.ipynb` for the Bulkhead sandbox and permission layer. All three provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. Cells that two notebooks share are kept identical by the notebook tests. On a fresh Colab T4 or L4, run a notebook top to bottom. Do not create per-day notebooks. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
+There are four notebooks: `notebooks/01_toolsmith.ipynb` for the Toolsmith track, `notebooks/02_steadyhand.ipynb` for the Steadyhand agent loop, `notebooks/03_bulkhead.ipynb` for the Bulkhead sandbox and permission layer, and `notebooks/04_tidemark.ipynb` for Tidemark context and memory management. The first three provision llama.cpp and the GGUFs through `toolsmith.provision`, which shares one set of Drive caches. Tidemark has its part 1 measurement baseline; parts 2–8 add the rest of the context and memory workflow. Cells that notebooks share are kept identical by the notebook tests. On a fresh Colab T4 or L4, run a notebook top to bottom. Do not create notebooks for individual plan parts. Put `HF_TOKEN` and `LOCAL_KEY` in Colab Secrets or the protected Drive secrets file, never in committed cells or result records.
 
 ### Running on a T4 or L4
 
@@ -434,6 +434,18 @@ After part 8, bubblewrap 0.9.0 was installed on the WSL2 development host. The t
   - `python -m bulkhead.eval.overhead` ignoring `--results`.
 
 Not verified: tier 2 on Colab, where bubblewrap would need installing; the notebook installs nothing.
+
+## Tidemark: context and memory management
+
+`src/tidemark/` will own deterministic five-segment prompt assembly, real-token budgets and PrefixLint, restorable observation shaping with blob handles, citation-checked compaction, and SQLite/FTS5/local-embedding long-term memory. Steadyhand will call it through an optional context adapter; Toolsmith retains prompt rendering and native model parsing, and Bulkhead retains policy, taint, and approvals for the new memory and blob tools. Existing episodes remain unchanged when Tidemark is disabled.
+
+The eight-part implementation plan is in `Tidemark/`, and the new project notebook is `notebooks/04_tidemark.ipynb`. The runtime plan supports both Colab T4 and L4: it derives context/slot and CPU/I/O worker shapes from detected resources, autotunes for completed work per minute, then freezes that shape for scored runs. Slot-leased model calls overlap with bounded CPU preparation, tools, shaping, indexing, and asynchronous Drive copies; utilization is measured only when work is ready, not manufactured with busy loops.
+
+Each completed phase follows the plan's automatic delivery protocol: a tested implementation commit, an updated canonical `Tidemark/Handoff.md`, a Handoff commit recording the implementation SHA, then a verified push to `origin/main`. The next session starts from that Handoff rather than prior chat or live Colab state.
+
+**Part 1 (baseline and context contract):** `src/tidemark/` provides the naive append/truncate baseline (`tidemark.baseline`), sanitized backend telemetry and the cache formulas (`tidemark.telemetry`), the tokenizer protocol and llama-server parity probe (`tidemark.tokenizer`), the hardware envelope and resource sampler (`tidemark.runtime`), the shared slot-leased scheduler (`tidemark.scheduler`), and the long-horizon seed set, baseline runner, T4/L4 capacity plans, and raw-record report (`tidemark.eval`). Steadyhand gained one optional seam, `run_episode(context=...)`, through which every model request (including parse-error follow-ups and the final paraphrase) is rendered. With `context=None` its episodes, journals, manifests, and ids are unchanged. A context run adds `context_render` and `backend_timings` events and a hashed `context_config` manifest block. Toolsmith gained per-attempt sanitized timings, an opt-in `buffered_stream` path that measures TTFT from the first streamed content and keeps the same parsing, validation, and single repair, a `render_prompt` method, and `id_slot` pass-through. The seed set is `evaluation/data/tidemark_long_horizon_v1.jsonl` (12 tasks: a file path, an exact error code, and a user constraint, each needed 5, 10, 20, and 40 steps after it is planted).
+
+**Status:** part 1 is implemented and verified on CPU. Its live acceptance (tokenizer parity, the cache probe, the utilization smoke, and the baseline on both a real Colab T4 and an L4) has not run, so no cache-hit, latency, utilization, or task-success result is claimed. Parts 2–8 are pending.
 
 ## Architecture
 

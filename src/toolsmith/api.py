@@ -12,6 +12,14 @@
 5. **Repair** (non-streaming only): on a model-output failure, ask once more
    with the bad output and diagnostics quoted, then validate again.
 
+``generation_path="buffered_stream"`` (opt-in) runs step 2 over llama-server's
+streaming endpoint instead: it records the first non-empty content event as
+the attempt's TTFT, buffers the whole response, and then runs the same parse,
+validate, and bounded-repair steps. No delta leaves the service, so the caller
+still gets one complete response. Every attempt's sanitized backend counts and
+timings are returned under ``toolsmith.attempts`` (and on ``APIError.attempt_metrics``
+for a failed request). See ``toolsmith.timings``.
+
 Every attempt can be written to a ``JsonlRecorder`` with the raw prompt, raw
 model output, grammar hash, and outcome. ``chat_stream`` streams the same
 pipeline as OpenAI-style chunks; it cannot repair, because deltas have already
@@ -35,7 +43,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .backends import CompletionTruncatedError, LlamaCppClient, LlamaCppError
+from .backends import CompletionTruncatedError, LlamaCppClient, LlamaCppError, LlamaCppResponseError
 from .deltas import DONE, OpenAIStreamAdapter, sse_error, sse_json
 from .grammar import (
     CompiledGrammar,
@@ -57,6 +65,7 @@ from .qwen35 import Qwen35IncrementalParser, Qwen35ToolCallParser
 from .recording import JsonlRecorder
 from .registry import Tool, ensure_unique_tool_names
 from .repair import RepairPolicy, build_repair_messages
+from .timings import GENERATION_PATHS, AttemptTiming, sanitize_backend_fields
 from .validation import (
     StrictJSONError,
     StructuredOutputValidationError,
@@ -106,6 +115,8 @@ class APIError(RuntimeError):
         # Raw model text behind a model-output failure, for in-process callers.
         # Never part of body(), so HTTP responses do not echo model output.
         self.raw_output: str | None = None
+        # Sanitized per-attempt counts and timings (toolsmith.timings), for in-process callers.
+        self.attempt_metrics: list[dict[str, Any]] = []
 
     def body(self) -> dict[str, Any]:
         error: dict[str, Any] = {
@@ -131,6 +142,15 @@ class _PreparedRequest:
     structured_validator: StructuredOutputValidator | None
 
 
+@dataclass(frozen=True)
+class _Generation:
+    """One attempt's raw llama.cpp response, its TTFT (buffered stream only), and a truncation."""
+
+    response: dict[str, Any]
+    ttft_ms: float | None
+    truncated: CompletionTruncatedError | None = None
+
+
 # Failures caused by what the model wrote; these are the ones a repair attempt may fix.
 _ModelOutputError = (
     ToolCallParseError,
@@ -144,6 +164,8 @@ class ToolsmithService:
 
     ``use_grammars=False`` turns off constrained decoding (prompt-only mode, for
     ablations). ``validator_factory`` lets evaluations swap the validator.
+    ``generation_path`` is ``non_streaming`` (default) or ``buffered_stream``
+    (TTFT measurement); either way ``chat()`` returns one complete response.
     """
 
     def __init__(
@@ -158,7 +180,10 @@ class ToolsmithService:
         repair_policy: RepairPolicy | None = None,
         use_grammars: bool = True,
         validator_factory: Callable[[tuple[Tool, ...], ToolChoice], Any] | None = None,
+        generation_path: str = "non_streaming",
     ) -> None:
+        if generation_path not in GENERATION_PATHS:
+            raise ValueError(f"generation_path must be one of {GENERATION_PATHS}, not {generation_path!r}")
         self.client = client
         self.renderer = renderer
         self.profile = profile
@@ -169,12 +194,25 @@ class ToolsmithService:
         self.use_grammars = use_grammars
         self.validator_factory = validator_factory or ToolCallValidator
         self.grammar_compiler = GBNFCompiler(protocol=profile.protocol)
+        self.generation_path = generation_path
 
-    def chat(self, request: ChatCompletionRequest) -> dict[str, Any]:
-        """A complete (non-streaming) chat completion, with up to ``max_repairs`` repair attempts."""
+    def render_prompt(self, request: ChatCompletionRequest) -> str:
+        """The exact prompt ``chat(request)`` sends on its first attempt, without generating.
+
+        Context budgeting uses this, so token counts come from the same checks,
+        history normalization, and model chat template as the real request.
+        """
+        return self._prepare(request).prompt
+
+    def chat(self, request: ChatCompletionRequest, *, id_slot: int | None = None) -> dict[str, Any]:
+        """A complete chat completion, with up to ``max_repairs`` repair attempts.
+
+        ``id_slot`` pins every attempt to one llama-server slot (a scheduler's lease).
+        """
         prepared = self._prepare(request)
         messages = prepared.messages
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        attempts: list[dict[str, Any]] = []
 
         # Attempt 0 uses the prepared prompt; each repair re-renders with the repair turn appended.
         for attempt in range(self.repair_policy.max_repairs + 1):
@@ -183,13 +221,17 @@ class ToolsmithService:
                 if attempt == 0
                 else self._render(request, prepared, messages)
             )
-            try:
-                raw_response = self.client.complete(
-                    prompt,
-                    **self._generation_settings(request, prepared.grammar),
-                )
+            started = time.perf_counter()
+            generation = self._generate(prompt, request, prepared.grammar, id_slot)
+            raw_response = generation.response
+
+            def timing(outcome: str) -> None:
+                # One record per attempt, success or not, appended in attempt order.
+                attempts.append(self._attempt_timing(attempt, outcome, started, generation))
+
             # Hitting max_tokens is never repaired: a retry would hit the same limit.
-            except CompletionTruncatedError as exc:
+            if generation.truncated is not None:
+                timing("error")
                 error = APIError(
                     "The model response was truncated before it could be parsed",
                     status_code=500,
@@ -197,11 +239,12 @@ class ToolsmithService:
                     code="completion_truncated",
                     repair_attempts=attempt,
                 )
+                error.attempt_metrics = list(attempts)
                 self._record_non_stream(
                     request,
                     prepared,
                     prompt,
-                    exc.response,
+                    generation.truncated.response,
                     None,
                     "not_run",
                     "error",
@@ -210,17 +253,20 @@ class ToolsmithService:
                     total_usage,
                     error,
                 )
-                raise error from exc
+                raise error from generation.truncated
 
             content = raw_response.get("content")
             if not isinstance(content, str):
-                raise APIError(
+                timing("error")
+                error = APIError(
                     "llama.cpp response did not contain string content",
                     status_code=502,
                     error_type="server_error",
                     code="invalid_backend_response",
                     repair_attempts=attempt,
                 )
+                error.attempt_metrics = list(attempts)
+                raise error
             usage = self._usage(raw_response)
             for key in total_usage:
                 total_usage[key] += usage[key]
@@ -241,6 +287,8 @@ class ToolsmithService:
                 error = self._model_output_error(exc, attempt)
                 error.raw_output = content
                 can_repair = attempt < self.repair_policy.max_repairs
+                timing("retry" if can_repair else "error")
+                error.attempt_metrics = list(attempts)
                 self._record_non_stream(
                     request,
                     prepared,
@@ -271,6 +319,8 @@ class ToolsmithService:
                     exc.code == "empty_model_response"
                     and attempt < self.repair_policy.max_repairs
                 )
+                timing("retry" if can_repair else "error")
+                exc.attempt_metrics = list(attempts)
                 self._record_non_stream(
                     request,
                     prepared,
@@ -294,6 +344,7 @@ class ToolsmithService:
                     continue
                 raise
 
+            timing("repaired" if attempt else "success")
             response = {
                 "id": f"chatcmpl-{uuid.uuid4().hex}",
                 "object": "chat.completion",
@@ -315,6 +366,8 @@ class ToolsmithService:
                         prepared.grammar.sha256 if prepared.grammar is not None else None
                     ),
                     "protocol": self.profile.protocol.value,
+                    "generation_path": self.generation_path,
+                    "attempts": list(attempts),
                 },
             }
             self._record_non_stream(
@@ -332,6 +385,64 @@ class ToolsmithService:
             return response
 
         raise AssertionError("Repair loop ended without a response")
+
+    def _generate(
+        self,
+        prompt: str,
+        request: ChatCompletionRequest,
+        grammar: CompiledGrammar | None,
+        id_slot: int | None,
+    ) -> _Generation:
+        """One generation attempt on the configured path; a truncation is returned, not raised."""
+        settings = self._generation_settings(request, grammar)
+        if id_slot is not None:
+            settings["id_slot"] = id_slot
+        if self.generation_path == "non_streaming":
+            try:
+                return _Generation(self.client.complete(prompt, **settings), None)
+            except CompletionTruncatedError as exc:
+                return _Generation(exc.response, None, exc)
+        # Buffered stream: time the first non-empty content event, keep every piece, and hand the
+        # assembled response to the same parser and validator as the non-streaming path.
+        started = time.perf_counter()
+        first_content: float | None = None
+        parts: list[str] = []
+        terminal: dict[str, Any] | None = None
+        upstream = self.client.stream_complete(prompt, **settings)
+        try:
+            for event in upstream:
+                piece = event.get("content")
+                if isinstance(piece, str):
+                    if piece and first_content is None:
+                        first_content = time.perf_counter()
+                    parts.append(piece)
+                if event.get("stop") is True:
+                    terminal = event
+        except CompletionTruncatedError as exc:
+            ttft = None if first_content is None else (first_content - started) * 1000.0
+            return _Generation(exc.response, ttft, exc)
+        finally:
+            close = getattr(upstream, "close", None)
+            if close is not None:
+                close()
+        if terminal is None:
+            raise LlamaCppResponseError("llama.cpp stream ended without a terminal event")
+        response = dict(terminal)
+        response["content"] = "".join(parts)
+        ttft = None if first_content is None else (first_content - started) * 1000.0
+        return _Generation(response, ttft)
+
+    def _attempt_timing(self, attempt: int, outcome: str, started: float, generation: _Generation) -> dict[str, Any]:
+        """The sanitized evidence for one attempt. TTFT stays null without a streamed content event."""
+        streamed = self.generation_path == "buffered_stream"
+        return AttemptTiming(
+            attempt=attempt,
+            outcome=outcome,
+            measurement_path="buffered_stream" if streamed and generation.ttft_ms is not None else "unavailable",
+            response_elapsed_ms=(time.perf_counter() - started) * 1000.0,
+            ttft_ms=generation.ttft_ms if streamed else None,
+            backend=sanitize_backend_fields(generation.response),
+        ).as_dict()
 
     def chat_stream(self, request: ChatCompletionRequest) -> Iterator[str]:
         """SSE lines for a streamed completion. Request errors raise here, before streaming starts."""

@@ -27,6 +27,14 @@ the recorded ``sandbox_execution`` events, after checking the replayed request
 matches; no process is spawned and no socket is opened. Resume does the same
 for the recorded prefix before handing new calls to the live backend.
 
+A Tidemark episode (its manifest carries a ``context_config``) replays only
+with a context session whose ``identity()`` equals that configuration; the
+session re-renders every request on CPU, so ``context_render`` and the
+rendered-message hash in each ``model_turn`` are re-derived and compared.
+Recorded turns come back with the metrics their ``backend_timings`` record
+holds, so counts and measurement paths reproduce exactly and only the
+declared timings are volatile.
+
 What replay verifies: the control plane (validation, guard, policy decisions,
 approvals, taint, recovery, and every observation and message) reproduces
 exactly. What it does not: kernel enforcement. Only a live run under the real
@@ -51,6 +59,7 @@ from typing import Any
 from bulkhead.replay import BackendIdentity, ExecutionBackend, ExecutionOutcome, ExecutionRequest, RecordedExecutionBackend
 from toolsmith.evaluation.models import canonical_hash
 
+from .context import ContextSession
 from .controller import DEFAULT_GUARD_LIMIT, Budgets
 from .executor import SequentialExecutor
 from .faults import FaultSchedule
@@ -76,7 +85,7 @@ from .registry import SteadyhandRegistry
 from .security import SecurityConfig
 from .store import Store, load_fixture
 from .tools import build_registry
-from .types import EpisodeResult, ModelClient, ModelTurn, ToolCall, TurnKind
+from .types import AttemptMetrics, EpisodeResult, ModelClient, ModelTurn, ToolCall, TurnKind, TurnMetrics
 
 # The marker JsonlRecorder writes in place of a secret; a journal containing it cannot replay exactly.
 REDACTED = "[redacted]"
@@ -92,8 +101,22 @@ class RecordedTurn:
     turn: ModelTurn
 
 
-def turn_from_record(record: Mapping[str, Any]) -> ModelTurn:
-    """Rebuild the ``ModelTurn`` a ``model_turn`` journal record describes."""
+def metrics_from_record(record: Mapping[str, Any]) -> TurnMetrics:
+    """Rebuild the ``TurnMetrics`` a ``backend_timings`` record describes."""
+    timings = list(record["attempt_timings"])
+    attempts = tuple(
+        AttemptMetrics.from_journal(counts, timings[index] if index < len(timings) else None)
+        for index, counts in enumerate(record["attempt_metrics"])
+    )
+    return TurnMetrics(
+        attempts=attempts,
+        response_elapsed_ms=record["response_elapsed_ms"],
+        rendered_prompt_tokens=record["rendered_prompt_tokens"],
+    )
+
+
+def turn_from_record(record: Mapping[str, Any], timings: Mapping[str, Any] | None = None) -> ModelTurn:
+    """Rebuild the ``ModelTurn`` a ``model_turn`` record (and its ``backend_timings``, if any) describes."""
     message = deepcopy(record["assistant_message"])
     calls = tuple(ToolCall.from_openai(call) for call in (message or {}).get("tool_calls") or [])
     usage = record["usage"]
@@ -110,6 +133,7 @@ def turn_from_record(record: Mapping[str, Any]) -> ModelTurn:
         repair_attempts=record["repair_attempts"],
         elapsed_s=record["elapsed_s"],
         raw_output=record["raw_output"],
+        metrics=metrics_from_record(timings) if timings is not None else None,
     )
 
 
@@ -122,16 +146,19 @@ class ReplayClient:
 
     @classmethod
     def from_records(cls, records: Sequence[Mapping[str, Any]]) -> ReplayClient:
-        turns = [
-            RecordedTurn(
+        turns = []
+        for index, record in enumerate(records):
+            if record["event"] != "model_turn":
+                continue
+            # A Tidemark journal writes backend_timings right after its model_turn.
+            following = records[index + 1] if index + 1 < len(records) else None
+            timings = following if following is not None and following["event"] == "backend_timings" else None
+            turns.append(RecordedTurn(
                 seq=record["seq"],
                 messages_sha256=record["messages_sha256"],
                 tool_choice=record["tool_choice"],
-                turn=turn_from_record(record),
-            )
-            for record in records
-            if record["event"] == "model_turn"
-        ]
+                turn=turn_from_record(record, timings),
+            ))
         return cls(turns, records[0]["settings"])
 
     @property
@@ -272,6 +299,7 @@ def replay_episode(
     executor: SequentialExecutor | None = None,
     recovery: RecoveryStrategy | None = None,
     backend: ExecutionBackend | None = None,
+    context: ContextSession | None = None,
 ) -> EpisodeResult:
     """Re-run a finished journal on CPU and check every event. Writes nothing.
 
@@ -281,7 +309,9 @@ def replay_episode(
     (a fresh fixture clone) to keep the replayed final store; it is mutated.
     Backend tools are served from the recording unless ``backend`` is given
     (only ``live_replay_report`` does that). The registry is picked by the
-    recorded schema hash unless ``registry`` is given.
+    recorded schema hash unless ``registry`` is given. A Tidemark journal needs
+    ``context``: a fresh session whose ``identity()`` equals the manifest's
+    ``context_config``.
     """
     path = Path(path)
     records = read_journal(path)
@@ -309,6 +339,7 @@ def replay_episode(
     identity = BackendIdentity.from_dict(manifest.backend) if manifest.backend is not None else None
     if backend is None and identity is not None:
         backend = RecordedExecutionBackend(records, identity)
+    _check_recorded_context(manifest.context_config, manifest.context_config_sha256, context)
     current = build_manifest(
         started["settings"],
         registry,
@@ -326,6 +357,9 @@ def replay_episode(
         security=security,
         parent_episode_id=manifest.parent_episode_id,
         backend=identity,
+        context_config=context.identity() if context is not None else None,
+        context_version=context.version if context is not None else None,
+        context_server=manifest.context_server,
     )
     require_match(manifest, current)
 
@@ -352,6 +386,7 @@ def replay_episode(
         security=security,
         parent_episode_id=manifest.parent_episode_id,
         backend=_as_recorded_identity(backend, identity),
+        context=context,
     )
     journal.verify_complete()
     return result
@@ -381,6 +416,8 @@ def run_claimed_episode(
     security: SecurityConfig | None = None,
     parent_episode_id: str | None = None,
     backend: ExecutionBackend | None = None,
+    context: ContextSession | None = None,
+    context_server: Mapping[str, Any] | None = None,
 ) -> EpisodeResult | None:
     """Claim, run (or resume), and complete one episode. ``None`` means nothing to do here.
 
@@ -388,6 +425,8 @@ def run_claimed_episode(
     ``security`` enables Bulkhead; it and ``parent_episode_id`` are part of the id.
     ``backend`` runs sandboxed calls; resume refuses a different backend identity and serves
     the recorded prefix's runs from the journal instead of re-running them.
+    ``context`` (a fresh Tidemark session) and its configuration are part of the id;
+    ``context_server`` (the serving shape) is resume-checked.
     Returns ``None`` when another worker holds the claim or the episode is
     already complete. Raises ``ReplayMismatch`` when an incomplete journal's
     manifest differs from this run, rather than resuming it.
@@ -410,6 +449,9 @@ def run_claimed_episode(
         security=security,
         parent_episode_id=parent_episode_id,
         backend=backend.identity if backend is not None else None,
+        context_config=context.identity() if context is not None else None,
+        context_version=context.version if context is not None else None,
+        context_server=context_server,
     )
     # The episode id is a hash of the manifest, so the same task, settings, and faults always map
     # to the same journal file.
@@ -462,6 +504,7 @@ def run_claimed_episode(
             security=security,
             parent_episode_id=parent_episode_id,
             backend=run_backend,
+            context=context,
         )
         mark_completed(manifest_file)
         return result
@@ -587,6 +630,24 @@ def _recorded_security(value: Mapping[str, Any] | None, expected_sha256: str | N
     return config
 
 
+def _check_recorded_context(
+    value: Mapping[str, Any] | None, expected_sha256: str | None, context: ContextSession | None,
+) -> None:
+    """A Tidemark manifest needs a session with the same configuration; a legacy one must not get one."""
+    if value is None:
+        if expected_sha256 is not None:
+            raise ReplayMismatch("The manifest hashes a context config it does not include", field="context_config")
+        if context is not None:
+            raise ReplayMismatch("This journal ran without a context session; replay it without one", field="context_config")
+        return
+    if canonical_hash(dict(value)) != expected_sha256:
+        raise ReplayMismatch("The recorded context config does not match its manifest hash", field="context_config_sha256")
+    if context is None:
+        raise ReplayMismatch("This journal ran with a context session; pass one to replay it", field="context_config")
+    if canonical_hash(context.identity()) != expected_sha256:
+        raise ReplayMismatch("The context session's configuration differs from the recording", field="context_config")
+
+
 def _check_recorded_specs(value: Mapping[str, Any] | None, expected_sha256: str | None) -> None:
     """The recorded spec content must hash to the recorded security_spec_sha256."""
     if value is None:
@@ -624,6 +685,7 @@ __all__ = [
     "ResumingClient",
     "replay_episode",
     "live_replay_report",
+    "metrics_from_record",
     "registry_for",
     "replay_many",
     "run_claimed_episode",

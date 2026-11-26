@@ -1,0 +1,12 @@
+{
+  "_note": "Synthetic llama-server /completion responses shaped like the pinned builds' fields, for CPU tests only. They are not measurements.",
+  "cold": {"content": "1", "id_slot": 0, "tokens_evaluated": 412, "tokens_cached": 412, "tokens_predicted": 1, "truncated": false,
+           "timings": {"prompt_n": 412, "prompt_ms": 91.25, "prompt_per_token_ms": 0.221, "prompt_per_second": 4515.1,
+                       "predicted_n": 1, "predicted_ms": 21.0, "predicted_per_second": 47.6}},
+  "warm": {"content": "1", "id_slot": 0, "tokens_evaluated": 412, "tokens_cached": 412, "tokens_predicted": 1, "truncated": false,
+           "timings": {"prompt_n": 1, "prompt_ms": 18.4, "prompt_per_token_ms": 18.4, "prompt_per_second": 54.3,
+                       "predicted_n": 1, "predicted_ms": 20.1, "predicted_per_second": 49.7}},
+  "hostile": {"content": "x", "id_slot": true, "tokens_evaluated": -3, "tokens_cached": "12", "authorization": "Bearer abc",
+              "timings": {"prompt_n": 12.5, "prompt_ms": "NaN", "predicted_n": 7.0, "predicted_ms": 1e999, "cache_n": 3,
+                          "headers": {"authorization": "x"}}}
+}

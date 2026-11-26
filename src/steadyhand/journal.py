@@ -23,6 +23,16 @@ bounded details, never raw arguments, command lines, URLs, or secrets.
 ``episode_started`` carries a ``bulkhead`` summary only when Bulkhead is
 enabled, so journals written without it are byte-for-byte unchanged.
 
+Tidemark's context events are added the same way, and only on episodes run
+with a context session: ``context_render`` (immediately before its
+``model_turn``) and ``backend_timings`` (immediately after it).
+``episode_started`` then carries a ``context`` block. Their values are checked
+on write and on read (hashes, non-negative counts, ordered dropped ranges). In
+``backend_timings`` the counts, the measurement path, and the slot id compare
+exactly; the milliseconds (``attempt_timings``, ``ttft_ms``, ``prompt_ms``,
+``predicted_ms``, ``response_elapsed_ms``) are volatile. Missing values stay
+null and never become zero. Journals written without a session are unchanged.
+
 Only genuinely variable fields are volatile: model and tool timings, and a
 sandbox run's or egress decision's elapsed time, resource usage, and proxy
 byte counts. Verdicts, rule ids, taint labels, request hashes, and every
@@ -60,6 +70,7 @@ from toolsmith.artifacts import copy_file_atomic, copy_snapshot
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from toolsmith.recording import JsonlRecorder
 
+from .context import RENDER_OK, RENDER_STATUSES
 from .types import EpisodeStatus, ModelTurn, ToolResult
 
 JOURNAL_VERSION = 1
@@ -112,15 +123,32 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "status", "steps", "final_content", "prompt_tokens", "completion_tokens",
         "error_code", "error_message", "store_sha256",
     }),
+    # Tidemark context events (only with a context session; see steadyhand.context).
+    "context_render": frozenset({
+        "step", "epoch", "strategy", "status", "detail", "context_config_sha256", "messages_sha256",
+        "prompt_sha256", "prompt_token_ids_sha256", "rendered_prompt_tokens", "segment_budgets",
+        "segment_tokens", "max_tokens", "slot_headroom", "epoch_start_seq", "history_end_seq",
+        "recitation_sha256", "tool_schema_sha256", "compaction_pending", "dropped_ranges",
+    }),
+    "backend_timings": frozenset({
+        "step", "attempt_metrics", "attempt_timings", "rendered_prompt_tokens", "prompt_evaluated_tokens",
+        "reused_tokens", "cache_reuse_fraction", "cache_status", "ttft_ms", "prompt_ms", "predicted_ms",
+        "response_elapsed_ms", "slot_id", "measurement_path",
+    }),
 }
+CONTEXT_EVENTS = frozenset({"context_render", "backend_timings"})
 # Fields an event carries in exactly one of its forms.
 ONE_OF_FIELDS: dict[str, frozenset[str]] = {"tool_result": frozenset({"value", "error"})}
 # Fields written only when they differ from the default a reader assumes.
-OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {"episode_started": {"recovery_policy": "typed_hint", "bulkhead": None}}
+OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {
+    "episode_started": {"recovery_policy": "typed_hint", "bulkhead": None, "context": None},
+    "context_render": {"lint": None},  # PrefixLint evidence (Tidemark part 2)
+}
 # Timing differs on every run, so it never takes part in replay equality.
 VOLATILE_FIELDS: dict[str, frozenset[str]] = {
     "model_turn": frozenset({"elapsed_s"}),
     "tool_result": frozenset({"elapsed_s"}),
+    "backend_timings": frozenset({"attempt_timings", "ttft_ms", "prompt_ms", "predicted_ms", "response_elapsed_ms"}),
     **audit.VOLATILE_SECURITY_FIELDS,
 }
 
@@ -243,6 +271,106 @@ def check_record(record: Mapping[str, Any], expected_seq: int) -> None:
             audit.validate(event, {name: record[name] for name in EVENT_FIELDS[event]})
         except audit.AuditError as exc:
             raise JournalFormatError(f"{event}: {exc}", seq=expected_seq, field=exc.field) from None
+    if event in CONTEXT_EVENTS:
+        problem = check_context_values(event, record)
+        if problem is not None:
+            raise JournalFormatError(f"{event}: {problem[1]}", seq=expected_seq, field=problem[0])
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+MEASUREMENT_PATHS = ("buffered_stream", "unavailable")
+
+
+def _count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _optional_count(value: Any) -> bool:
+    return value is None or _count(value)
+
+
+def _optional_ms(value: Any) -> bool:
+    return value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and 0 <= value < float("inf")
+    )
+
+
+def _optional_hash(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and bool(_SHA256.fullmatch(value)))
+
+
+def check_context_values(event: str, record: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The first bad value in a Tidemark context record, as ``(field, problem)``, or None."""
+    if not _count(record.get("step")):
+        return "step", "step must be a non-negative integer"
+    if event == "context_render":
+        if record["status"] not in RENDER_STATUSES:
+            return "status", f"unknown status {record['status']!r}"
+        if not isinstance(record["strategy"], str) or not record["strategy"]:
+            return "strategy", "strategy must be a non-empty string"
+        if record["detail"] is not None and not isinstance(record["detail"], str):
+            return "detail", "detail must be a string or null"
+        for name in ("epoch", "epoch_start_seq", "history_end_seq"):
+            if not _count(record[name]):
+                return name, f"{name} must be a non-negative integer"
+        for name in ("context_config_sha256", "tool_schema_sha256"):
+            if record[name] is None or not _optional_hash(record[name]):
+                return name, f"{name} must be a sha256 hex digest"
+        for name in ("messages_sha256", "prompt_sha256", "prompt_token_ids_sha256", "recitation_sha256"):
+            if not _optional_hash(record[name]):
+                return name, f"{name} must be a sha256 hex digest or null"
+        if (record["status"] == RENDER_OK) != (record["messages_sha256"] is not None):
+            return "messages_sha256", "a sent render has a messages hash; an exhausted one has none"
+        for name in ("rendered_prompt_tokens", "max_tokens"):
+            if not _optional_count(record[name]):
+                return name, f"{name} must be a non-negative integer or null"
+        headroom = record["slot_headroom"]
+        if headroom is not None and (not isinstance(headroom, int) or isinstance(headroom, bool)):
+            return "slot_headroom", "slot_headroom must be an integer or null"
+        for name in ("segment_budgets", "segment_tokens"):
+            value = record[name]
+            if not isinstance(value, dict) or not all(isinstance(k, str) and _optional_count(v) for k, v in value.items()):
+                return name, f"{name} must map names to non-negative integers or null"
+        if not isinstance(record["compaction_pending"], bool):
+            return "compaction_pending", "compaction_pending must be a boolean"
+        previous_end = -1
+        for item in record["dropped_ranges"] if isinstance(record["dropped_ranges"], list) else [None]:
+            if not (isinstance(item, list) and len(item) == 2 and all(_count(x) for x in item) and item[0] < item[1]):
+                return "dropped_ranges", "dropped_ranges holds [start, end) pairs with start < end"
+            if item[0] < previous_end:
+                return "dropped_ranges", "dropped_ranges must be sorted and must not overlap"
+            previous_end = item[1]
+        if "lint" in record and record["lint"] is not None and not isinstance(record["lint"], dict):
+            return "lint", "lint must be an object"
+        return None
+    # backend_timings
+    metrics, timings = record["attempt_metrics"], record["attempt_timings"]
+    if not isinstance(metrics, list) or not all(isinstance(item, dict) for item in metrics):
+        return "attempt_metrics", "attempt_metrics must be a list of objects"
+    if not isinstance(timings, list) or len(timings) != len(metrics) or not all(isinstance(item, dict) for item in timings):
+        return "attempt_timings", "attempt_timings must hold one object per attempt"
+    for name in ("rendered_prompt_tokens", "prompt_evaluated_tokens", "reused_tokens", "slot_id"):
+        if not _optional_count(record[name]):
+            return name, f"{name} must be a non-negative integer or null"
+    fraction = record["cache_reuse_fraction"]
+    if fraction is not None and not (
+        isinstance(fraction, (int, float)) and not isinstance(fraction, bool) and 0 <= fraction <= 1
+    ):
+        return "cache_reuse_fraction", "cache_reuse_fraction must be in [0, 1] or null"
+    if record["reused_tokens"] is not None and (
+        record["rendered_prompt_tokens"] is None or record["prompt_evaluated_tokens"] is None
+    ):
+        return "reused_tokens", "reused_tokens needs both the rendered and the evaluated count"
+    for name in ("ttft_ms", "prompt_ms", "predicted_ms", "response_elapsed_ms"):
+        if not _optional_ms(record[name]):
+            return name, f"{name} must be a non-negative number or null"
+    if record["measurement_path"] not in MEASUREMENT_PATHS:
+        return "measurement_path", f"unknown measurement path {record['measurement_path']!r}"
+    if record["measurement_path"] == "unavailable" and record["ttft_ms"] is not None:
+        return "ttft_ms", "a TTFT needs the buffered_stream measurement path"
+    if not isinstance(record["cache_status"], str) or not record["cache_status"]:
+        return "cache_status", "cache_status must be a non-empty string"
+    return None
 
 
 class EpisodeJournal:
@@ -348,10 +476,13 @@ class EpisodeJournal:
         messages: Sequence[Mapping[str, Any]],
         recovery_policy: str = "typed_hint",
         bulkhead: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         optional: dict[str, Any] = {} if recovery_policy == "typed_hint" else {"recovery_policy": recovery_policy}
         if bulkhead is not None:
             optional["bulkhead"] = dict(bulkhead)
+        if context is not None:
+            optional["context"] = dict(context)
         return self.append(
             "episode_started",
             **optional,
@@ -394,6 +525,89 @@ class EpisodeJournal:
             messages_sha256=messages_sha256,
             tool_choice=tool_choice,
         )
+
+    def context_render(
+        self,
+        *,
+        step: int,
+        epoch: int,
+        strategy: str,
+        status: str,
+        detail: str | None,
+        context_config_sha256: str | None,
+        messages_sha256: str | None,
+        prompt_sha256: str | None,
+        prompt_token_ids_sha256: str | None,
+        rendered_prompt_tokens: int | None,
+        segment_budgets: Mapping[str, int | None],
+        segment_tokens: Mapping[str, int | None],
+        max_tokens: int | None,
+        slot_headroom: int | None,
+        epoch_start_seq: int,
+        history_end_seq: int,
+        recitation_sha256: str | None,
+        tool_schema_sha256: str,
+        compaction_pending: bool,
+        dropped_ranges: Sequence[Sequence[int]],
+        lint: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """What a context session rendered for the next model turn: hashes and counts, never the prompt."""
+        fields: dict[str, Any] = {
+            "step": step, "epoch": epoch, "strategy": strategy, "status": status, "detail": detail,
+            "context_config_sha256": context_config_sha256, "messages_sha256": messages_sha256,
+            "prompt_sha256": prompt_sha256, "prompt_token_ids_sha256": prompt_token_ids_sha256,
+            "rendered_prompt_tokens": rendered_prompt_tokens, "segment_budgets": dict(segment_budgets),
+            "segment_tokens": dict(segment_tokens), "max_tokens": max_tokens, "slot_headroom": slot_headroom,
+            "epoch_start_seq": epoch_start_seq, "history_end_seq": history_end_seq,
+            "recitation_sha256": recitation_sha256, "tool_schema_sha256": tool_schema_sha256,
+            "compaction_pending": compaction_pending, "dropped_ranges": [list(item) for item in dropped_ranges],
+        }
+        if lint:
+            fields["lint"] = dict(lint)
+        return self._context("context_render", fields)
+
+    def backend_timings(
+        self,
+        *,
+        step: int,
+        attempt_metrics: Sequence[Mapping[str, Any]],
+        attempt_timings: Sequence[Mapping[str, Any]],
+        rendered_prompt_tokens: int | None,
+        prompt_evaluated_tokens: int | None,
+        reused_tokens: int | None,
+        cache_reuse_fraction: float | None,
+        cache_status: str,
+        ttft_ms: float | None,
+        prompt_ms: float | None,
+        predicted_ms: float | None,
+        response_elapsed_ms: float | None,
+        slot_id: int | None,
+        measurement_path: str,
+    ) -> dict[str, Any]:
+        """The measured cost of the preceding model turn. Counts replay exactly; milliseconds are volatile."""
+        return self._context("backend_timings", {
+            "step": step,
+            "attempt_metrics": [dict(item) for item in attempt_metrics],
+            "attempt_timings": [dict(item) for item in attempt_timings],
+            "rendered_prompt_tokens": rendered_prompt_tokens,
+            "prompt_evaluated_tokens": prompt_evaluated_tokens,
+            "reused_tokens": reused_tokens,
+            "cache_reuse_fraction": cache_reuse_fraction,
+            "cache_status": cache_status,
+            "ttft_ms": _round_ms(ttft_ms),
+            "prompt_ms": _round_ms(prompt_ms),
+            "predicted_ms": _round_ms(predicted_ms),
+            "response_elapsed_ms": _round_ms(response_elapsed_ms),
+            "slot_id": slot_id,
+            "measurement_path": measurement_path,
+        })
+
+    def _context(self, event: str, fields: dict[str, Any]) -> dict[str, Any]:
+        # Checked before writing, so an invalid context record never reaches the file.
+        problem = check_context_values(event, fields)
+        if problem is not None:
+            raise ValueError(f"{event}: {problem[1]} ({problem[0]})")
+        return self.append(event, **fields)
 
     def tool_result(self, *, step: int, result: ToolResult) -> dict[str, Any]:
         fields: dict[str, Any] = {
@@ -747,12 +961,17 @@ class JournalCopier:
                         self._sleep(self.retry_delay * (2 ** attempt))
 
 
+def _round_ms(value: float | None) -> float | None:
+    return None if value is None else round(float(value), 3)
+
+
 def dump_record(record: Mapping[str, Any]) -> str:
     """A record serialized exactly as ``JsonlRecorder`` writes it."""
     return json.dumps(dict(record), ensure_ascii=False, sort_keys=True)
 
 
 __all__ = [
+    "CONTEXT_EVENTS",
     "ENVIRONMENT_SECRETS",
     "EVENT_FIELDS",
     "EpisodeJournal",
@@ -761,6 +980,7 @@ __all__ = [
     "JournalFormatError",
     "LOCAL_JOURNAL_DIR",
     "ReplayMismatch",
+    "check_context_values",
     "check_record",
     "comparable",
     "dump_record",
