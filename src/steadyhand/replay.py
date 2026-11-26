@@ -174,8 +174,12 @@ class ReplayClient:
         tools: Sequence[Mapping[str, Any]],
         *,
         tool_choice: str | dict[str, Any] = "auto",
+        **options: Any,
     ) -> ModelTurn:
-        """The next recorded turn, if the code sent exactly the recorded messages and tool choice."""
+        """The next recorded turn, if the code sent exactly the recorded messages and tool choice.
+
+        ``options`` (a context session's ``allowed_tool_names``) are checked through ``context_render``.
+        """
         if not self._turns:
             raise ReplayMismatch("The code asked for a model turn the journal does not have", field="model_turn")
         recorded = self._turns[0]
@@ -211,9 +215,10 @@ class ResumingClient:
         tools: Sequence[Mapping[str, Any]],
         *,
         tool_choice: str | dict[str, Any] = "auto",
+        **options: Any,
     ) -> ModelTurn:
         client: ModelClient = self.replay if self.replay.remaining else self.live
-        return client.complete(messages, tools, tool_choice=tool_choice)
+        return client.complete(messages, tools, tool_choice=tool_choice, **options)
 
 
 class ReplayClock:

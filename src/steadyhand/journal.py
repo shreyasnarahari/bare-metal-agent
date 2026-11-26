@@ -26,7 +26,11 @@ enabled, so journals written without it are byte-for-byte unchanged.
 Tidemark's context events are added the same way, and only on episodes run
 with a context session: ``context_render`` (immediately before its
 ``model_turn``) and ``backend_timings`` (immediately after it).
-``episode_started`` then carries a ``context`` block. Their values are checked
+``episode_started`` then carries a ``context`` block. Part 2 adds
+``context_transition`` (written before ``context_render`` whenever the
+session's state appends, drops, or compacts history; seqs name the journal
+records involved) and optional PrefixLint and allowed-tool fields on
+``context_render``. A part 1 record without them still reads. Their values are checked
 on write and on read (hashes, non-negative counts, ordered dropped ranges). In
 ``backend_timings`` the counts, the measurement path, and the slot id compare
 exactly; the milliseconds (``attempt_timings``, ``ttft_ms``, ``prompt_ms``,
@@ -70,7 +74,7 @@ from toolsmith.artifacts import copy_file_atomic, copy_snapshot
 from toolsmith.json_utils import StrictJSONError, strict_json_loads
 from toolsmith.recording import JsonlRecorder
 
-from .context import RENDER_OK, RENDER_STATUSES
+from .context import PREFIX_FIELDS, RENDER_OK, RENDER_STATUSES
 from .types import EpisodeStatus, ModelTurn, ToolResult
 
 JOURNAL_VERSION = 1
@@ -130,19 +134,26 @@ EVENT_FIELDS: dict[str, frozenset[str]] = {
         "segment_tokens", "max_tokens", "slot_headroom", "epoch_start_seq", "history_end_seq",
         "recitation_sha256", "tool_schema_sha256", "compaction_pending", "dropped_ranges",
     }),
+    "context_transition": frozenset({
+        "step", "transition", "epoch_before", "epoch_after", "history_start_seq", "history_end_seq",
+        "appended_seqs", "dropped_seqs", "reason", "state_sha256",
+    }),
     "backend_timings": frozenset({
         "step", "attempt_metrics", "attempt_timings", "rendered_prompt_tokens", "prompt_evaluated_tokens",
         "reused_tokens", "cache_reuse_fraction", "cache_status", "ttft_ms", "prompt_ms", "predicted_ms",
         "response_elapsed_ms", "slot_id", "measurement_path",
     }),
 }
-CONTEXT_EVENTS = frozenset({"context_render", "backend_timings"})
+CONTEXT_EVENTS = frozenset({"context_render", "backend_timings", "context_transition"})
+TRANSITIONS = ("start", "append", "truncate", "epoch")
+LINT_STATUSES = ("cold_start", "expected_append", "expected_tail_only", "expected_epoch", "violation")
 # Fields an event carries in exactly one of its forms.
 ONE_OF_FIELDS: dict[str, frozenset[str]] = {"tool_result": frozenset({"value", "error"})}
 # Fields written only when they differ from the default a reader assumes.
 OPTIONAL_FIELDS: dict[str, dict[str, Any]] = {
     "episode_started": {"recovery_policy": "typed_hint", "bulkhead": None, "context": None},
-    "context_render": {"lint": None},  # PrefixLint evidence (Tidemark part 2)
+    # Optional evidence (Tidemark part 2): PrefixLint fields and a request-local tool subset.
+    "context_render": {"lint": None, "allowed_tool_names": None, **{name: None for name in PREFIX_FIELDS}},
 }
 # Timing differs on every run, so it never takes part in replay equality.
 VOLATILE_FIELDS: dict[str, frozenset[str]] = {
@@ -303,6 +314,26 @@ def check_context_values(event: str, record: Mapping[str, Any]) -> tuple[str, st
     """The first bad value in a Tidemark context record, as ``(field, problem)``, or None."""
     if not _count(record.get("step")):
         return "step", "step must be a non-negative integer"
+    if event == "context_transition":
+        if record["transition"] not in TRANSITIONS:
+            return "transition", f"unknown transition {record['transition']!r}"
+        for name in ("epoch_before", "epoch_after"):
+            if not _count(record[name]):
+                return name, f"{name} must be a non-negative integer"
+        if record["epoch_after"] < record["epoch_before"]:
+            return "epoch_after", "an epoch never goes back"
+        for name in ("history_start_seq", "history_end_seq"):
+            if not _optional_count(record[name]):
+                return name, f"{name} must be a non-negative integer or null"
+        for name in ("appended_seqs", "dropped_seqs"):
+            value = record[name]
+            if not isinstance(value, list) or not all(_count(item) for item in value) or value != sorted(set(value)):
+                return name, f"{name} must be sorted, unique, non-negative seqs"
+        if not isinstance(record["reason"], str) or not record["reason"]:
+            return "reason", "reason must be a non-empty string"
+        if record["state_sha256"] is None or not _optional_hash(record["state_sha256"]):
+            return "state_sha256", "state_sha256 must be a sha256 hex digest"
+        return None
     if event == "context_render":
         if record["status"] not in RENDER_STATUSES:
             return "status", f"unknown status {record['status']!r}"
@@ -342,6 +373,25 @@ def check_context_values(event: str, record: Mapping[str, Any]) -> tuple[str, st
             previous_end = item[1]
         if "lint" in record and record["lint"] is not None and not isinstance(record["lint"], dict):
             return "lint", "lint must be an object"
+        allowed = record.get("allowed_tool_names")
+        if allowed is not None and (
+            not isinstance(allowed, list) or not allowed or not all(isinstance(n, str) and n for n in allowed)
+            or len(set(allowed)) != len(allowed)
+        ):
+            return "allowed_tool_names", "allowed_tool_names must be a non-empty list of unique names"
+        if "lint_status" in record and record["lint_status"] not in LINT_STATUSES:
+            return "lint_status", f"unknown lint status {record['lint_status']!r}"
+        for name in ("stable_prefix_tokens", "expected_common_prefix_floor", "observed_common_prefix_tokens",
+                     "first_divergent_index"):
+            if name in record and not _optional_count(record[name]):
+                return name, f"{name} must be a non-negative integer or null"
+        for name in ("first_changed_segment", "divergence_cause"):
+            if name in record and record[name] is not None and not isinstance(record[name], str):
+                return name, f"{name} must be a string or null"
+        if "previous_prompt_sha256" in record and not _optional_hash(record["previous_prompt_sha256"]):
+            return "previous_prompt_sha256", "previous_prompt_sha256 must be a sha256 hex digest or null"
+        if record.get("lint_status") == "violation" and record.get("first_divergent_index") is None:
+            return "first_divergent_index", "a violation names the first divergent token"
         return None
     # backend_timings
     metrics, timings = record["attempt_metrics"], record["attempt_timings"]
@@ -550,8 +600,13 @@ class EpisodeJournal:
         compaction_pending: bool,
         dropped_ranges: Sequence[Sequence[int]],
         lint: Mapping[str, Any] | None = None,
+        prefix: Mapping[str, Any] | None = None,
+        allowed_tool_names: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        """What a context session rendered for the next model turn: hashes and counts, never the prompt."""
+        """What a context session rendered for the next model turn: hashes and counts, never the prompt.
+
+        ``prefix`` carries the PrefixLint fields (written only when the session lints).
+        """
         fields: dict[str, Any] = {
             "step": step, "epoch": epoch, "strategy": strategy, "status": status, "detail": detail,
             "context_config_sha256": context_config_sha256, "messages_sha256": messages_sha256,
@@ -564,7 +619,36 @@ class EpisodeJournal:
         }
         if lint:
             fields["lint"] = dict(lint)
+        if prefix is not None:
+            unknown = set(prefix) - set(PREFIX_FIELDS)
+            if unknown:
+                raise ValueError(f"context_render: unknown PrefixLint fields {sorted(unknown)}")
+            fields.update({name: prefix.get(name) for name in PREFIX_FIELDS})
+        if allowed_tool_names is not None:
+            fields["allowed_tool_names"] = list(allowed_tool_names)
         return self._context("context_render", fields)
+
+    def context_transition(
+        self,
+        *,
+        step: int,
+        transition: str,
+        epoch_before: int,
+        epoch_after: int,
+        history_start_seq: int | None,
+        history_end_seq: int | None,
+        appended_seqs: Sequence[int],
+        dropped_seqs: Sequence[int],
+        reason: str,
+        state_sha256: str,
+    ) -> dict[str, Any]:
+        """An explicit change to a session's history state; no silent history rewrite exists."""
+        return self._context("context_transition", {
+            "step": step, "transition": transition, "epoch_before": epoch_before, "epoch_after": epoch_after,
+            "history_start_seq": history_start_seq, "history_end_seq": history_end_seq,
+            "appended_seqs": list(appended_seqs), "dropped_seqs": list(dropped_seqs), "reason": reason,
+            "state_sha256": state_sha256,
+        })
 
     def backend_timings(
         self,

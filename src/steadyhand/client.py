@@ -153,10 +153,13 @@ class SteadyhandClient:
         *,
         tool_choice: str | dict[str, Any] = "auto",
         id_slot: int | None = None,
+        allowed_tool_names: Sequence[str] | None = None,
     ) -> ModelTurn:
         """One chat completion through the shim, as a ``ModelTurn`` (failures become failure turns).
 
         ``id_slot`` pins the request to a llama-server slot (a scheduler lease).
+        ``allowed_tool_names`` restricts which tools the model may call this time
+        (grammar and validation only; the prompt still shows every tool).
         """
         request = self.request(messages, tools, tool_choice=tool_choice)
         started = time.perf_counter()
@@ -169,7 +172,12 @@ class SteadyhandClient:
             )
 
         try:
-            response = self.service.chat(request) if id_slot is None else self.service.chat(request, id_slot=id_slot)
+            options: dict[str, Any] = {}
+            if id_slot is not None:
+                options["id_slot"] = id_slot
+            if allowed_tool_names is not None:
+                options["allowed_tool_names"] = list(allowed_tool_names)
+            response = self.service.chat(request, **options)
         except APIError as exc:
             message = str(exc)
             if exc.code == "completion_truncated" and self.slot_context is not None:
@@ -336,6 +344,7 @@ def worker_service(
     *,
     use_grammars: bool = True,
     generation_path: str = "non_streaming",
+    grammar_cache: Any = None,
 ) -> ToolsmithService:
     """One ``ToolsmithService`` per worker thread. The recorder stays unset: the journal is the record.
 
@@ -347,6 +356,7 @@ def worker_service(
         profile=profile,
         use_grammars=use_grammars,
         generation_path=generation_path,
+        grammar_cache=grammar_cache,
     )
 
 

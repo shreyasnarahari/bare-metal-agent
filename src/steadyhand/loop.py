@@ -205,7 +205,14 @@ def run_episode(
         max_tokens=settings.get("max_tokens"),
     )
     history = deepcopy([dict(message) for message in messages])
-    seam = ModelSeam(client, journal, context=context, initial_count=len(history))
+    seam = ModelSeam(
+        client, journal, context=context, initial_count=len(history),
+        budget_state=lambda: {
+            "steps": controller.steps, "max_steps": budgets.max_steps,
+            "prompt_tokens": controller.prompt_tokens, "max_prompt_tokens": budgets.max_prompt_tokens,
+            "completion_tokens": controller.completion_tokens, "max_completion_tokens": budgets.max_completion_tokens,
+        },
+    )
     gate = None
     if security is not None:
         gate = SecurityGate(
@@ -601,7 +608,7 @@ def _paraphrase(
     """
     request = {"role": "user", "content": PARAPHRASE_REQUEST + template}
     sent = [*_answerable(history), request]
-    call = seam.call(sent, tools, step=controller.steps, tool_choice="none")
+    call = seam.call(sent, tools, step=controller.steps, tool_choice="none", unjournaled=1)
     if call.exhausted:
         return template
     assert call.turn is not None

@@ -385,8 +385,10 @@ class EvidenceProbe:
     def identity(self) -> dict[str, Any]:
         return self.inner.identity()
 
-    def render(self, history: Any, *, step: int, tools: Any, tool_choice: Any, initial_count: int) -> RenderedContext:
-        rendered = self.inner.render(history, step=step, tools=tools, tool_choice=tool_choice, initial_count=initial_count)
+    def render(self, history: Any, *, step: int, tools: Any, tool_choice: Any, initial_count: int,
+               **options: Any) -> RenderedContext:
+        rendered = self.inner.render(history, step=step, tools=tools, tool_choice=tool_choice,
+                                     initial_count=initial_count, **options)
         if tool_choice != "none":
             found = fact_available(rendered.messages, self.task.planted_fact["text"], self.task.required_availability)
             self.by_step[step] = found["available"]
@@ -460,8 +462,8 @@ class LongHorizonScriptedModel:
         }
 
     def complete(self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]], *,
-                 tool_choice: Any = "auto", id_slot: int | None = None) -> ModelTurn:
-        """``id_slot`` (from a slot lease) is accepted and ignored: nothing is served."""
+                 tool_choice: Any = "auto", **options: Any) -> ModelTurn:
+        """``id_slot`` and ``allowed_tool_names`` are accepted and ignored: nothing is served."""
         if tool_choice == "none":
             return _text_turn("I could not finish this request.")
         step = self._step
@@ -498,12 +500,9 @@ class ForcedPrefixClient:
         return self.live.render_prompt(*args, **kwargs)
 
     def complete(self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]], *,
-                 tool_choice: Any = "auto", id_slot: int | None = None) -> ModelTurn:
-        """``id_slot`` (a scheduler's slot lease) goes to the live client with the request."""
-        if id_slot is None:
-            turn = self.live.complete(messages, tools, tool_choice=tool_choice)
-        else:
-            turn = self.live.complete(messages, tools, tool_choice=tool_choice, id_slot=id_slot)
+                 tool_choice: Any = "auto", **options: Any) -> ModelTurn:
+        """``id_slot`` (a slot lease) and ``allowed_tool_names`` go to the live client with the request."""
+        turn = self.live.complete(messages, tools, tool_choice=tool_choice, **options)
         if tool_choice == "none":
             self.sources.append("paraphrase")
             return turn
@@ -706,11 +705,14 @@ def run_baseline(
     retries: int = 2,
     context_server: Mapping[str, Any] | None = None,
     on_scored: Callable[[LongHorizonScore], None] | None = None,
+    prepare: Callable[[LongHorizonTask], Any] | None = None,
 ) -> list[LongHorizonScore]:
     """Run every task in ``spec`` not already scored (claims, resume, infrastructure reruns).
 
     ``client_factory(task, owner)`` builds the episode's model client (wrapped in a slot lease when a
     ``scheduler`` runs the episodes); ``session_factory(task, client)`` builds a fresh context session.
+    ``prepare(task)`` runs ahead on the scheduler's bounded prefetch thread (for example, rendering a task's
+    frozen and pinned segments into a shared cache); it never touches a running episode's state.
     """
     selected = [task for task in tasks if task.task_id in set(spec.task_ids)]
     if [task.task_id for task in selected] != list(spec.task_ids):
@@ -764,7 +766,12 @@ def run_baseline(
             recorder.append({"event": "run_segment", "pending": len(pending), "done": len(done),
                              "scheduler": spec.scheduler, "server": spec.server})
     if scheduler is not None:
-        fresh = scheduler.run_episodes(pending, work, key=lambda task: task.task_id)
+        warm = None
+        if prepare is not None:
+            def warm(task: LongHorizonTask) -> LongHorizonTask:
+                prepare(task)
+                return task
+        fresh = scheduler.run_episodes(pending, work, key=lambda task: task.task_id, prepare=warm)
     elif workers <= 1:
         fresh = [work(task, task.task_id) for task in pending]
     else:

@@ -87,7 +87,7 @@ class RecitationSession:
     def identity(self):
         return {"strategy": self.strategy, "tail": self.tail}
 
-    def render(self, history, *, step, tools, tool_choice, initial_count):
+    def render(self, history, *, step, tools, tool_choice, initial_count, seqs=None, budget_state=None):
         self.renders.append({"step": step, "tool_choice": tool_choice, "history": len(history), "initial": initial_count})
         messages = [dict(message) for message in history]
         messages[-1] = {**messages[-1], "content": (messages[-1].get("content") or "") + "\n" + self.tail}

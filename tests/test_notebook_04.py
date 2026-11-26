@@ -12,7 +12,7 @@ STEADYHAND_NOTEBOOK = ROOT / "notebooks" / "02_steadyhand.ipynb"
 SHARED_SETUP_CELLS = ("environment", "drive-and-secrets", "install-project", "hardware")
 LIVE_CELLS = (
     "tidemark-capacity-probe", "tidemark-tokenizer-probe", "tidemark-utilization-smoke",
-    "tidemark-baseline", "tidemark-baseline-report",
+    "tidemark-baseline", "tidemark-baseline-report", "tidemark-prefix-smoke",
 )
 
 
@@ -36,6 +36,7 @@ def test_the_cells_are_valid_ordered_and_have_no_outputs():
         "hardware",
         "tidemark-plan",
         "tidemark-cpu-gate",
+        "tidemark-prefix-gate",
         "tidemark-runtime-notes",
         "tidemark-settings",
         "steadyhand-runtime",
@@ -63,7 +64,7 @@ def test_the_introduction_names_the_other_notebooks_plan_and_evidence_boundary()
     intro = notebook_source("introduction")
     assert all(name in intro for name in ("01_toolsmith.ipynb", "02_steadyhand.ipynb", "03_bulkhead.ipynb"))
     assert "Tidemark/" in intro and "tests/test_notebook_04.py" in intro
-    assert "Part 1 checkpoint" in intro and "later parts are not implemented yet" in intro
+    assert "Parts 1–2 checkpoint" in intro and "later parts are not implemented yet" in intro
     assert "Nothing above the live cells runs a model" in intro and "both a T4 and an L4" in intro
 
 
@@ -150,7 +151,7 @@ def test_the_settings_cell_pins_qwen3_and_derives_paths(tmp_path, monkeypatch):
 
 
 def test_the_live_cells_follow_the_part_1_contract():
-    capacity, parity, smoke, baseline, report = (notebook_source(cell_id) for cell_id in LIVE_CELLS)
+    capacity, parity, smoke, baseline, report, prefix = (notebook_source(cell_id) for cell_id in LIVE_CELLS)
     # The shared cleanup cell stops the Tidemark server through this name.
     assert "def stop_steadyhand_runtime():" in capacity and "global TIDEMARK_ACTIVE" in capacity
     assert "fit_capacity(" in capacity and "plan_capacity(" in capacity and "did_not_fit" in capacity
@@ -161,7 +162,11 @@ def test_the_live_cells_follow_the_part_1_contract():
     assert "generation_path=TIDEMARK_GENERATION_PATH" in smoke and "TIDEMARK_FROZEN" in smoke
     assert "set_phase('scored')" in baseline and "summarize_utilization(" in baseline and "tidemark_mirror(" in baseline
     assert "write_report(" in report and "('t4', 'l4')" in report
-    for source in (capacity, parity, smoke, baseline, report):
+    assert "tidemark_production != tidemark_assembled.spans.text" in prefix and "planted_suite(" in prefix
+    assert "'timestamp_in_frozen'" in prefix and "'recent_append'" in prefix and "id_slot=0" in prefix
+    assert "strategy='prefix_stable'" in prefix and "'warm_reuse_target': 0.90" in prefix
+    assert "grammar_cache=TIDEMARK_GRAMMARS" in prefix and "tidemark_lint.get('violation')" in prefix
+    for source in (capacity, parity, smoke, baseline, report, prefix):
         # Secrets are passed to clients and redaction, never printed or written into a record.
         assert not [line for line in source.splitlines() if ("print(" in line or "atomic_write_json(" in line)
                     and ("LOCAL_KEY" in line or "HF_TOKEN" in line)]
@@ -171,3 +176,12 @@ def test_the_runtime_notes_and_live_plan_describe_the_evidence_rules():
     notes, plan = notebook_source("tidemark-runtime-notes"), notebook_source("tidemark-live-plan")
     assert "once on a T4 and once on an L4" in notes and "untested" in notes and "never filled with artificial work" in notes
     assert plan.startswith("## Later parts") and "Part 1's cells above" in plan
+
+
+def test_the_prefix_gate_runs_the_planted_suite_on_cpu(tmp_path):
+    namespace = {"DRIVE_RECORDS": tmp_path}
+    exec(compile(notebook_source("tidemark-prefix-gate"), str(NOTEBOOK_PATH), "exec"), namespace)
+    gate = namespace["TIDEMARK_PREFIX_GATE"]
+    assert gate["passed"] is True and set(gate) == {"qwen3", "qwen35", "passed"}
+    assert all(result["deterministic"] and len(result["cases"]) == 10 for name, result in gate.items() if name != "passed")
+    assert json.loads((tmp_path / "tidemark" / "prefix-gate.json").read_text())["passed"] is True

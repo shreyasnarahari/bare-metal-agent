@@ -18,9 +18,16 @@ native tool-call parsing, grammars, validation, and repair. The logical
 history stays intact for the journal and ``EpisodeResult.messages``; it is
 not assumed to equal the prompt. The journal then records, in order:
 
-    context_render   rendered-prompt hashes, token counts, budgets, dropped ranges
-    model_turn       messages_sha256 hashes the rendered messages actually sent
-    backend_timings  rendered/evaluated/reused tokens and the turn's timings
+    context_transition  (zero or more) what changed in the session's state: the
+                        appended, dropped, or compacted history, by journal seq
+    context_render      rendered-prompt hashes, token counts, budgets, dropped
+                        ranges, PrefixLint evidence, the allowed tool subset
+    model_turn          messages_sha256 hashes the rendered messages actually sent
+    backend_timings     rendered/evaluated/reused tokens and the turn's timings
+
+Each render receives the journal seq behind every history message (``None``
+for one not journaled yet, such as the paraphrase request) and the
+controller's budget numbers, so a session never reads the clock or the journal.
 
 A render that cannot fit the required current turn records ``context_render``
 with ``status="context_budget_exhausted"`` and the episode aborts with that
@@ -31,7 +38,7 @@ A session is per episode and is not shared between concurrent episodes.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -45,6 +52,36 @@ if TYPE_CHECKING:
 RENDER_OK = "ok"
 CONTEXT_BUDGET_EXHAUSTED = "context_budget_exhausted"
 RENDER_STATUSES = (RENDER_OK, CONTEXT_BUDGET_EXHAUSTED)
+# PrefixLint fields a session may add to context_render (Tidemark part 2); absent means not linted.
+PREFIX_FIELDS = (
+    "stable_prefix_tokens", "expected_common_prefix_floor", "observed_common_prefix_tokens",
+    "first_divergent_index", "first_changed_segment", "divergence_cause", "lint_status", "previous_prompt_sha256",
+)
+TRANSITION_FIELDS = (
+    "transition", "epoch_before", "epoch_after", "history_start_seq", "history_end_seq",
+    "appended_seqs", "dropped_seqs", "reason", "state_sha256",
+)
+
+
+def history_seqs(records: Sequence[Mapping[str, Any]]) -> list[int]:
+    """The journal seq behind each message of the episode's logical history, in history order.
+
+    The opening messages come from ``episode_started``; then every
+    ``model_turn`` with an assistant message, every ``tool_result``, and every
+    loop-authored ``observation`` adds one message, exactly as ``run_episode``
+    appends them.
+    """
+    seqs: list[int] = []
+    for record in records:
+        event = record["event"]
+        if event == "episode_started":
+            seqs.extend([record["seq"]] * len(record["messages"]))
+        elif event == "model_turn":
+            if record["kind"] in ("tool_calls", "text") and record["assistant_message"] is not None:
+                seqs.append(record["seq"])
+        elif event in ("tool_result", "observation"):
+            seqs.append(record["seq"])
+    return seqs
 
 
 def context_config_sha256(config: Mapping[str, Any]) -> str:
@@ -79,6 +116,11 @@ class RenderedContext:
     compaction_pending: bool = False
     dropped_ranges: tuple[tuple[int, int], ...] = ()
     lint: dict[str, Any] = field(default_factory=dict)
+    # Part 2: PrefixLint evidence (PREFIX_FIELDS), state transitions since the last render
+    # (TRANSITION_FIELDS each), and a request-local subset of callable tools (None means all).
+    prefix: dict[str, Any] | None = None
+    transitions: tuple[dict[str, Any], ...] = ()
+    allowed_tool_names: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.status not in RENDER_STATUSES:
@@ -118,8 +160,14 @@ class ContextSession(Protocol):
         tools: Sequence[Mapping[str, Any]],
         tool_choice: str | dict[str, Any],
         initial_count: int,
+        seqs: Sequence[int | None] | None = None,
+        budget_state: Mapping[str, Any] | None = None,
     ) -> RenderedContext:
-        """Choose and measure the request for ``history``. ``initial_count`` is the task's opening messages."""
+        """Choose and measure the request for ``history``. ``initial_count`` is the task's opening messages.
+
+        ``seqs`` gives the journal seq of each history message (None when not
+        journaled yet); ``budget_state`` holds the controller's step and token counts.
+        """
         ...
 
     def shape_observation(self, message: Mapping[str, Any], *, step: int) -> dict[str, Any]:
@@ -154,11 +202,13 @@ class ModelSeam:
         *,
         context: ContextSession | None = None,
         initial_count: int = 0,
+        budget_state: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self.client = client
         self.journal = journal
         self.context = context
         self.initial_count = initial_count
+        self.budget_state = budget_state
         self._config_sha256 = context_config_sha256(context.identity()) if context is not None else None
 
     @property
@@ -182,8 +232,12 @@ class ModelSeam:
         *,
         step: int,
         tool_choice: str | dict[str, Any] = "auto",
+        unjournaled: int = 0,
     ) -> ModelCall:
-        """Render (with a session) and call the model once."""
+        """Render (with a session) and call the model once.
+
+        ``unjournaled`` counts trailing messages not in the journal yet (the paraphrase request).
+        """
         if self.context is None:
             # The legacy path, call for call: hash the logical history, send it as is.
             messages_sha256 = canonical_hash(history)
@@ -192,15 +246,23 @@ class ModelSeam:
             else:
                 turn = self.client.complete(history, tools, tool_choice=tool_choice)
             return ModelCall(turn, messages_sha256)
+        known = history_seqs(self.journal.records)
+        journaled = len(history) - unjournaled
+        seqs = [*known[:journaled], *([None] * unjournaled)] if len(known) >= journaled else None
         rendered = self.context.render(
             history, step=step, tools=tools, tool_choice=tool_choice, initial_count=self.initial_count,
+            seqs=seqs, budget_state=dict(self.budget_state()) if self.budget_state is not None else None,
         )
         if rendered.exhausted:
+            self._transitions(step, rendered)
             self._context_render(step, rendered, None)
             return ModelCall(None, None, rendered)
         messages = rendered.message_list()
         messages_sha256 = canonical_hash(messages)
-        turn = self.client.complete(messages, rendered.tool_list(), tool_choice=tool_choice)
+        options: dict[str, Any] = {"tool_choice": tool_choice}
+        if rendered.allowed_tool_names is not None:
+            options["allowed_tool_names"] = list(rendered.allowed_tool_names)
+        turn = self.client.complete(messages, rendered.tool_list(), **options)
         return ModelCall(turn, messages_sha256, rendered)
 
     def record(
@@ -214,6 +276,7 @@ class ModelSeam:
         """Journal the turn: ``context_render``, ``model_turn``, ``backend_timings`` (the first and last with a session)."""
         assert call.messages_sha256 is not None
         if call.rendered is not None:
+            self._transitions(step, call.rendered)
             self._context_render(step, call.rendered, call.messages_sha256)
         self.journal.model_turn(step=step, turn=turn, messages_sha256=call.messages_sha256, tool_choice=tool_choice)
         if call.rendered is not None:
@@ -225,6 +288,10 @@ class ModelSeam:
         if self.context is None:
             return message
         return dict(self.context.shape_observation(message, step=step))
+
+    def _transitions(self, step: int, rendered: RenderedContext) -> None:
+        for transition in rendered.transitions:
+            self.journal.context_transition(step=step, **{name: transition[name] for name in TRANSITION_FIELDS})
 
     def _context_render(self, step: int, rendered: RenderedContext, messages_sha256: str | None) -> None:
         last_seq = self.journal.records[-1]["seq"] if self.journal.records else 0
@@ -252,6 +319,8 @@ class ModelSeam:
             compaction_pending=rendered.compaction_pending,
             dropped_ranges=[[start, end] for start, end in rendered.dropped_ranges],
             lint=dict(rendered.lint) or None,
+            prefix=dict(rendered.prefix) if rendered.prefix is not None else None,
+            allowed_tool_names=list(rendered.allowed_tool_names) if rendered.allowed_tool_names is not None else None,
         )
 
 
@@ -260,8 +329,11 @@ __all__ = [
     "ContextSession",
     "ModelCall",
     "ModelSeam",
+    "PREFIX_FIELDS",
     "RENDER_OK",
     "RENDER_STATUSES",
     "RenderedContext",
+    "TRANSITION_FIELDS",
     "context_config_sha256",
+    "history_seqs",
 ]

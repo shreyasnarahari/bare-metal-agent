@@ -71,11 +71,13 @@ class FakeService:
         self.responses = list(responses)
         self.requests = []
         self.slots = []
+        self.allowed = []
         self.generation_path = generation_path
 
-    def chat(self, request, *, id_slot=None):
+    def chat(self, request, *, id_slot=None, allowed_tool_names=None):
         self.requests.append(request)
         self.slots.append(id_slot)
+        self.allowed.append(allowed_tool_names)
         response = self.responses.pop(0)
         if isinstance(response, BaseException):
             raise response

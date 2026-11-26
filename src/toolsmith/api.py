@@ -20,6 +20,12 @@ still gets one complete response. Every attempt's sanitized backend counts and
 timings are returned under ``toolsmith.attempts`` (and on ``APIError.attempt_metrics``
 for a failed request). See ``toolsmith.timings``.
 
+``chat(request, allowed_tool_names=[...])`` is a server-internal restriction:
+the prompt still renders every tool in the request, but the grammar and the
+validator accept only the named subset, so a call outside it fails validation.
+``None`` (the default) keeps every request byte-for-byte as before. An optional
+``grammar_cache`` reuses compiled tool grammars keyed by their exact inputs.
+
 Every attempt can be written to a ``JsonlRecorder`` with the raw prompt, raw
 model output, grammar hash, and outcome. ``chat_stream`` streams the same
 pipeline as OpenAI-style chunks; it cannot repair, because deltas have already
@@ -31,10 +37,12 @@ result worth counting); 502 means the backend failed (infrastructure).
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -74,6 +82,10 @@ from .validation import (
     ToolCallValidator,
     strict_json_loads,
 )
+
+
+# Bump when the GBNF compiler's output for the same inputs changes, so cached grammars are not reused.
+GRAMMAR_CACHE_VERSION = 1
 
 
 class ChatCompletionRequest(BaseModel):
@@ -181,6 +193,7 @@ class ToolsmithService:
         use_grammars: bool = True,
         validator_factory: Callable[[tuple[Tool, ...], ToolChoice], Any] | None = None,
         generation_path: str = "non_streaming",
+        grammar_cache: Any = None,
     ) -> None:
         if generation_path not in GENERATION_PATHS:
             raise ValueError(f"generation_path must be one of {GENERATION_PATHS}, not {generation_path!r}")
@@ -195,6 +208,8 @@ class ToolsmithService:
         self.validator_factory = validator_factory or ToolCallValidator
         self.grammar_compiler = GBNFCompiler(protocol=profile.protocol)
         self.generation_path = generation_path
+        # Anything with get(key) and put(key, value), shared and thread-safe (tidemark.cache.ContentCache).
+        self.grammar_cache = grammar_cache
 
     def render_prompt(self, request: ChatCompletionRequest) -> str:
         """The exact prompt ``chat(request)`` sends on its first attempt, without generating.
@@ -204,12 +219,20 @@ class ToolsmithService:
         """
         return self._prepare(request).prompt
 
-    def chat(self, request: ChatCompletionRequest, *, id_slot: int | None = None) -> dict[str, Any]:
+    def chat(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        id_slot: int | None = None,
+        allowed_tool_names: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         """A complete chat completion, with up to ``max_repairs`` repair attempts.
 
         ``id_slot`` pins every attempt to one llama-server slot (a scheduler's lease).
+        ``allowed_tool_names`` restricts the grammar and validation to a subset of
+        the request's tools without changing the rendered prompt.
         """
-        prepared = self._prepare(request)
+        prepared = self._prepare(request, allowed_tool_names=allowed_tool_names)
         messages = prepared.messages
         total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         attempts: list[dict[str, Any]] = []
@@ -368,6 +391,7 @@ class ToolsmithService:
                     "protocol": self.profile.protocol.value,
                     "generation_path": self.generation_path,
                     "attempts": list(attempts),
+                    **({"allowed_tool_names": sorted(allowed_tool_names)} if allowed_tool_names is not None else {}),
                 },
             }
             self._record_non_stream(
@@ -575,7 +599,12 @@ class ToolsmithService:
                     }
                 )
 
-    def _prepare(self, request: ChatCompletionRequest) -> _PreparedRequest:
+    def _prepare(
+        self,
+        request: ChatCompletionRequest,
+        *,
+        allowed_tool_names: Sequence[str] | None = None,
+    ) -> _PreparedRequest:
         """Validate the request and build the prompt, grammar, and validators (no model call)."""
         self._validate_options(request)
         if request.model != self.profile.model:
@@ -590,8 +619,10 @@ class ToolsmithService:
             raise APIError(f"Invalid tool definition: {exc}") from exc
 
         self._validate_messages(request.messages)
+        # The prompt shows every tool; grammar and validation see only the allowed subset.
+        callable_tools = self._allowed_tools(tools, allowed_tool_names)
         try:
-            choice = resolve_tool_choice(tools, request.tool_choice)
+            choice = resolve_tool_choice(callable_tools, request.tool_choice)
         except GrammarConfigurationError as exc:
             raise APIError(str(exc), code="invalid_tool_choice") from exc
 
@@ -617,7 +648,7 @@ class ToolsmithService:
             elif structured_schema is not None:
                 compiled = self.grammar_compiler.compile_schema(structured_schema)
             else:
-                compiled = self.grammar_compiler.compile_tools(tools, choice)
+                compiled = self._tool_grammar(callable_tools, choice)
         except SchemaNotSupportedError as exc:
             raise APIError(
                 f"Unsupported tool or response schema: {exc}",
@@ -649,9 +680,40 @@ class ToolsmithService:
             prompt,
             choice,
             grammar,
-            self.validator_factory(tools, choice),
+            self.validator_factory(callable_tools, choice),
             structured_validator,
         )
+
+    @staticmethod
+    def _allowed_tools(tools: tuple[Tool, ...], allowed: Sequence[str] | None) -> tuple[Tool, ...]:
+        """The request's tools restricted to ``allowed`` (all of them for ``None``), in request order."""
+        if allowed is None:
+            return tools
+        names = list(allowed)
+        if not names or len(set(names)) != len(names) or not all(isinstance(name, str) for name in names):
+            raise APIError("allowed_tool_names must be a non-empty list of unique names", code="invalid_allowed_tools")
+        unknown = sorted(set(names) - {tool.name for tool in tools})
+        if unknown:
+            raise APIError(f"allowed_tool_names names tools the request does not have: {unknown}",
+                           code="invalid_allowed_tools")
+        return tuple(tool for tool in tools if tool.name in set(names))
+
+    def _tool_grammar(self, tools: tuple[Tool, ...], choice: ToolChoice) -> CompiledGrammar | None:
+        """Compile (or reuse) the tool grammar; the cache key holds every input of the compiler."""
+        if self.grammar_cache is None:
+            return self.grammar_compiler.compile_tools(tools, choice)
+        key = "grammar:" + hashlib.sha256(json.dumps({
+            "version": GRAMMAR_CACHE_VERSION,
+            "protocol": self.profile.protocol.value,
+            "tools": [tool.to_openai() for tool in tools],
+            "choice": choice.as_dict(),
+        }, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+        cached = self.grammar_cache.get(key)
+        if cached is not None:
+            return cached
+        compiled = self.grammar_compiler.compile_tools(tools, choice)
+        self.grammar_cache.put(key, compiled)
+        return compiled
 
     # Re-render the prompt for a repair attempt, with the extra repair message.
     def _render(

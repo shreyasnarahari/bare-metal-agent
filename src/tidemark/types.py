@@ -15,7 +15,13 @@ from steadyhand.context import context_config_sha256
 from steadyhand.types import AttemptMetrics, TurnMetrics
 
 CONFIG_VERSION = 1
-STRATEGIES = ("naive_append_truncate",)
+STRATEGIES = ("naive_append_truncate", "prefix_stable")
+SEGMENT_NAMES = ("frozen", "pinned", "summary", "recent", "tail")
+# What a strategy does when the exact prompt would pass the hard limit: part 2 has no compactor,
+# so the prefix-stable strategy stops with context_budget_exhausted (part 4 adds "compact").
+OVERFLOW_POLICIES = ("exhaust",)
+DEFAULT_TAIL_CAP = 512
+DEFAULT_RECITATION = {"max_items": 5, "max_item_chars": 120, "max_handles": 4}
 GENERATION_PATHS = ("non_streaming", "buffered_stream")
 # Cache metrics need the meaning of llama.cpp's counters confirmed on the pinned build first
 # (tidemark.telemetry.probe_cache_semantics). Until then they stay null.
@@ -58,6 +64,12 @@ class ContextConfig:
     generation_path: str = "non_streaming"
     cache_semantics: Mapping[str, Any] = field(default_factory=lambda: dict(UNCONFIRMED_CACHE))
     version: int = CONFIG_VERSION
+    # Part 2 (prefix_stable): pinned memory text, a request-local callable-tool subset (None means all),
+    # recitation bounds, and the overflow policy. The naive strategy ignores them.
+    pinned_memory: tuple[str, ...] = ()
+    allowed_tool_names: tuple[str, ...] | None = None
+    recitation: Mapping[str, int] = field(default_factory=lambda: dict(DEFAULT_RECITATION))
+    overflow: str = "exhaust"
 
     def __post_init__(self) -> None:
         if self.strategy not in STRATEGIES:
@@ -74,11 +86,38 @@ class ContextConfig:
             raise ValueError("slot_context must leave room for a prompt after max_tokens and the safety margin")
         if self.soft_limit is not None and not 0 < self.soft_limit <= self.prompt_limit:
             raise ValueError("soft_limit must be positive and no larger than the prompt limit")
+        unknown = set(self.segment_caps) - set(SEGMENT_NAMES)
+        if unknown:
+            raise ValueError(f"Unknown segment caps {sorted(unknown)}; segments are {SEGMENT_NAMES}")
+        if any(isinstance(cap, bool) or not isinstance(cap, int) or cap < 1 for cap in self.segment_caps.values()):
+            raise ValueError("segment caps must be positive integers")
+        if self.overflow not in OVERFLOW_POLICIES:
+            raise ValueError(f"overflow must be one of {OVERFLOW_POLICIES}")
+        if self.allowed_tool_names is not None and (
+            not self.allowed_tool_names or len(set(self.allowed_tool_names)) != len(self.allowed_tool_names)
+        ):
+            raise ValueError("allowed_tool_names must be None or a non-empty tuple of unique names")
+        if set(self.recitation) - set(DEFAULT_RECITATION):
+            raise ValueError(f"recitation settings are {sorted(DEFAULT_RECITATION)}")
 
     @property
     def prompt_limit(self) -> int:
         """The largest rendered prompt that fits: the slot minus the completion reserve and margin."""
         return self.slot_context - self.max_tokens - self.safety_margin
+
+    @property
+    def effective_soft_limit(self) -> int:
+        """``soft_limit``, or 70% of the prompt limit when unset (where compaction becomes pending)."""
+        return self.soft_limit if self.soft_limit is not None else int(0.70 * self.prompt_limit)
+
+    def cap(self, segment: str) -> int | None:
+        """The token cap for one segment (the tail defaults to ``DEFAULT_TAIL_CAP``; others uncapped)."""
+        if segment == "tail":
+            return self.segment_caps.get("tail", DEFAULT_TAIL_CAP)
+        return self.segment_caps.get(segment)
+
+    def recitation_setting(self, name: str) -> int:
+        return int(self.recitation.get(name, DEFAULT_RECITATION[name]))
 
     def as_dict(self) -> dict[str, Any]:
         """The canonical configuration (sorted mappings, plain JSON values)."""
@@ -94,6 +133,10 @@ class ContextConfig:
             "template_sha256": self.template_sha256,
             "generation_path": self.generation_path,
             "cache_semantics": dict(sorted(self.cache_semantics.items())),
+            "pinned_memory": list(self.pinned_memory),
+            "allowed_tool_names": list(self.allowed_tool_names) if self.allowed_tool_names is not None else None,
+            "recitation": dict(sorted(self.recitation.items())),
+            "overflow": self.overflow,
         }
 
     def sha256(self) -> str:
@@ -103,19 +146,27 @@ class ContextConfig:
     def from_dict(cls, value: Mapping[str, Any]) -> ContextConfig:
         known = {
             "version", "strategy", "slot_context", "max_tokens", "safety_margin", "soft_limit", "segment_caps",
-            "tokenizer", "template_sha256", "generation_path", "cache_semantics",
+            "tokenizer", "template_sha256", "generation_path", "cache_semantics", "pinned_memory",
+            "allowed_tool_names", "recitation", "overflow",
         }
         unexpected = set(value) - known
         if unexpected:
             raise ValueError(f"Unknown context config fields {sorted(unexpected)}")
-        return cls(**dict(value))
+        data = dict(value)
+        data["pinned_memory"] = tuple(data.get("pinned_memory", ()))
+        if data.get("allowed_tool_names") is not None:
+            data["allowed_tool_names"] = tuple(data["allowed_tool_names"])
+        return cls(**data)
 
 
 __all__ = [
     "AttemptMetrics",
     "CONFIG_VERSION",
     "ContextConfig",
+    "DEFAULT_TAIL_CAP",
     "GENERATION_PATHS",
+    "OVERFLOW_POLICIES",
+    "SEGMENT_NAMES",
     "STRATEGIES",
     "SegmentBudget",
     "TurnMetrics",

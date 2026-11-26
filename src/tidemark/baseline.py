@@ -18,8 +18,9 @@ model request it:
    cannot fit. It never deletes the current request or lowers ``max_tokens``.
 
 Every dropped ``[start, end)`` range of the logical history and the resulting
-token count go into ``context_render``. The render is a pure function of the
-history, so replay re-derives it exactly. Messages are sent with their keys in
+token count go into ``context_render``. Each newly appended or newly dropped
+range is also a ``context_transition`` naming the journal seqs involved. The
+drop decision is a pure function of the history, so replay re-derives it exactly. Messages are sent with their keys in
 sorted order: a journaled message comes back with sorted keys, so a live run
 and its replay render the same structure even if a template were sensitive to
 key order. Templates read message fields by name, so the model's prompt is
@@ -31,11 +32,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from steadyhand.context import CONTEXT_BUDGET_EXHAUSTED, RenderedContext
 from steadyhand.types import ModelTurn
+from toolsmith.evaluation.models import canonical_hash
 
 from . import __version__
 from .telemetry import backend_timing_fields
@@ -91,6 +93,46 @@ def canonical_message(message: Mapping[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(dict(message), ensure_ascii=False, sort_keys=True, allow_nan=False))
 
 
+def history_transitions(
+    strategy: str,
+    *,
+    seen: int,
+    history_length: int,
+    seqs: Sequence[int | None] | None,
+    dropped_before: frozenset[int],
+    dropped_now: frozenset[int],
+    epoch: int = 0,
+) -> tuple[dict[str, Any], ...]:
+    """``start``/``append`` for new history messages and ``truncate`` for newly dropped ones, by journal seq."""
+
+    def seq_list(indexes: Any) -> list[int]:
+        if seqs is None:
+            return []
+        return sorted({seqs[i] for i in indexes if i < len(seqs) and seqs[i] is not None})
+
+    known = [seq for seq in (seqs or ()) if seq is not None]
+    state = canonical_hash({"strategy": strategy, "history_length": history_length, "dropped": sorted(dropped_now),
+                            "epoch": epoch})
+    base = {
+        "epoch_before": epoch, "epoch_after": epoch, "history_start_seq": min(known) if known else None,
+        "history_end_seq": max(known) if known else None, "state_sha256": state,
+    }
+    transitions = []
+    if history_length > seen:
+        new = range(seen, history_length)
+        transitions.append({
+            **base, "transition": "start" if seen == 0 else "append", "appended_seqs": seq_list(new),
+            "dropped_seqs": [], "reason": f"{len(new)} history message(s) {'opened' if seen == 0 else 'appended'}",
+        })
+    newly_dropped = sorted(dropped_now - dropped_before)
+    if newly_dropped:
+        transitions.append({
+            **base, "transition": "truncate", "appended_seqs": [], "dropped_seqs": seq_list(newly_dropped),
+            "reason": f"dropped {len(newly_dropped)} oldest message(s) to fit the slot",
+        })
+    return tuple(transitions)
+
+
 def _ranges(indexes: Sequence[int]) -> tuple[tuple[int, int], ...]:
     """Contiguous ``[start, end)`` ranges covering sorted ``indexes``."""
     ranges: list[list[int]] = []
@@ -115,6 +157,8 @@ class NaiveAppendTruncate:
         self._render = render
         self._tokenizer = tokenizer
         self.renders = 0  # prompt renders, for the cost of the drop search
+        self._seen = 0  # history messages already reported in a transition
+        self._dropped: frozenset[int] = frozenset()
 
     def identity(self) -> dict[str, Any]:
         return self.config.as_dict()
@@ -139,6 +183,25 @@ class NaiveAppendTruncate:
         tools: Sequence[Mapping[str, Any]],
         tool_choice: str | dict[str, Any] = "auto",
         initial_count: int = 0,
+        seqs: Sequence[int | None] | None = None,
+        budget_state: Mapping[str, Any] | None = None,
+    ) -> RenderedContext:
+        rendered = self._choose(history, tools=tools, tool_choice=tool_choice, initial_count=initial_count)
+        dropped_now = frozenset(i for start, end in rendered.dropped_ranges for i in range(start, end))
+        transitions = history_transitions(
+            self.strategy, seen=self._seen, history_length=len(history), seqs=seqs,
+            dropped_before=self._dropped, dropped_now=dropped_now,
+        )
+        self._seen, self._dropped = max(self._seen, len(history)), dropped_now
+        return replace(rendered, transitions=transitions)
+
+    def _choose(
+        self,
+        history: Sequence[Mapping[str, Any]],
+        *,
+        tools: Sequence[Mapping[str, Any]],
+        tool_choice: str | dict[str, Any],
+        initial_count: int,
     ) -> RenderedContext:
         config = self.config
         groups = complete_turn_groups(history, initial_count)
@@ -215,4 +278,6 @@ class NaiveAppendTruncate:
         )
 
 
-__all__ = ["NaiveAppendTruncate", "PromptRender", "TurnGroup", "canonical_message", "complete_turn_groups"]
+__all__ = [
+    "NaiveAppendTruncate", "PromptRender", "TurnGroup", "canonical_message", "complete_turn_groups", "history_transitions",
+]

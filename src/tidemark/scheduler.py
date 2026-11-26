@@ -369,12 +369,13 @@ class SlotLeasedClient:
     def render_prompt(self, *args: Any, **kwargs: Any) -> str:
         return self.inner.render_prompt(*args, **kwargs)
 
-    def complete(self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]], *, tool_choice: Any = "auto") -> Any:
+    def complete(self, messages: Sequence[Mapping[str, Any]], tools: Sequence[Mapping[str, Any]], *,
+                 tool_choice: Any = "auto", **options: Any) -> Any:
         with self.slots.lease(self.owner, self.kind) as lease:
             self.leases.append(lease)
             if self.pass_slot:
-                return self.inner.complete(messages, tools, tool_choice=tool_choice, id_slot=lease.slot_id)
-            return self.inner.complete(messages, tools, tool_choice=tool_choice)
+                options["id_slot"] = lease.slot_id
+            return self.inner.complete(messages, tools, tool_choice=tool_choice, **options)
 
 
 def _process_pool(workers: int) -> Callable[[], Executor]:
